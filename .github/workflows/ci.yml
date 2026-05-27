@@ -32,8 +32,5 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Generate Code Coverage Report
-        run: cargo llvm-cov --all-targets --lcov --output-path lcov.info
-
-      - name: Run Standard Test Suite
-        run: cargo test
+      - name: Run Tests with Coverage
+        run: cargo llvm-cov --all-targets --fail-under-lines 100 --lcov --output-path lcov.info
