@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::io::Write;
 
 use crate::bc_math::BCNum;
-use crate::parser::{Expr, ExprOrArray, FunctionDef, Stmt};
+use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Stmt};
 
 /// Wrapper to write output characters with POSIX-style 70-character line wrapping.
 pub struct WrappedStdout {
@@ -65,6 +65,40 @@ pub struct Evaluator {
     pub return_flag: bool,
     pub return_value: BCNum,
     pub quit_flag: bool,
+}
+
+struct ScopeGuard<'a> {
+    evaluator: &'a mut Evaluator,
+    autos: &'a [Param],
+    params: &'a [Param],
+    prev_return_flag: bool,
+    prev_return_value: BCNum,
+}
+
+impl<'a> Drop for ScopeGuard<'a> {
+    fn drop(&mut self) {
+        self.evaluator.return_flag = self.prev_return_flag;
+        self.evaluator.return_value = self.prev_return_value.clone();
+
+        for auto in self.autos.iter().rev() {
+            if auto.is_array {
+                if let Some(stack) = self.evaluator.arrays.get_mut(&auto.name) {
+                    stack.pop();
+                }
+            } else if let Some(stack) = self.evaluator.variables.get_mut(&auto.name) {
+                stack.pop();
+            }
+        }
+        for param in self.params.iter().rev() {
+            if param.is_array {
+                if let Some(stack) = self.evaluator.arrays.get_mut(&param.name) {
+                    stack.pop();
+                }
+            } else if let Some(stack) = self.evaluator.variables.get_mut(&param.name) {
+                stack.pop();
+            }
+        }
+    }
 }
 
 impl Evaluator {
@@ -425,37 +459,23 @@ impl Evaluator {
                     self.return_flag = false;
                     self.return_value = BCNum::zero();
 
+                    let guard = ScopeGuard {
+                        evaluator: self,
+                        autos: &func.autos,
+                        params: &func.params,
+                        prev_return_flag,
+                        prev_return_value,
+                    };
+
                     for stmt in &func.body {
-                        self.execute(stmt);
-                        if self.return_flag || self.quit_flag {
+                        guard.evaluator.execute(stmt);
+                        if guard.evaluator.return_flag || guard.evaluator.quit_flag {
                             break;
                         }
                     }
 
-                    let ret_val = self.return_value.clone();
-
-                    self.return_flag = prev_return_flag;
-                    self.return_value = prev_return_value;
-
-                    for auto in func.autos.iter().rev() {
-                        if auto.is_array {
-                            if let Some(stack) = self.arrays.get_mut(&auto.name) {
-                                stack.pop();
-                            }
-                        } else if let Some(stack) = self.variables.get_mut(&auto.name) {
-                            stack.pop();
-                        }
-                    }
-
-                    for param in func.params.iter().rev() {
-                        if param.is_array {
-                            if let Some(stack) = self.arrays.get_mut(&param.name) {
-                                stack.pop();
-                            }
-                        } else if let Some(stack) = self.variables.get_mut(&param.name) {
-                            stack.pop();
-                        }
-                    }
+                    let ret_val = guard.evaluator.return_value.clone();
+                    drop(guard);
 
                     return ret_val;
                 }
@@ -966,5 +986,34 @@ mod tests {
             "f_uninit_arr_arg".to_string(),
             vec![ExprOrArray::ArrayArg("uninit_arr_arg".to_string())],
         ));
+
+        // 19. ScopeGuard unwinding test
+        evaluator.quit_flag = false;
+        evaluator.variables.insert(
+            "shadowed_var".to_string(),
+            vec![BCNum::new(BigInt::from(99), 0)],
+        );
+        evaluator.functions.insert(
+            "f_panic".to_string(),
+            FunctionDef {
+                name: "f_panic".to_string(),
+                params: vec![],
+                autos: vec![Param {
+                    name: "shadowed_var".to_string(),
+                    is_array: false,
+                }],
+                body: vec![Stmt::Expr(Expr::BinaryOp(
+                    "/".to_string(),
+                    Box::new(Expr::Number("1".to_string())),
+                    Box::new(Expr::Number("0".to_string())),
+                ))],
+            },
+        );
+        let panic_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            evaluator.evaluate(&Expr::Call("f_panic".to_string(), vec![]));
+        }));
+        assert!(panic_res.is_err());
+        let restored_val = evaluator.evaluate(&Expr::Variable("shadowed_var".to_string()));
+        assert_eq!(restored_val.coeff, BigInt::from(99));
     }
 }
