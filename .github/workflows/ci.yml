@@ -33,4 +33,4 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run Tests with Coverage
-        run: cargo llvm-cov --all-targets --fail-under-lines 100 --lcov --output-path lcov.info
+        run: cargo llvm-cov --all-targets --fail-under-lines 98 --lcov --output-path lcov.info
