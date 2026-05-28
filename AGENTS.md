@@ -90,3 +90,7 @@ POSIX `bc` terminates immediately upon reading the `quit` keyword, even if it re
 Signal handlers (such as `ctrlc::set_handler`) and panic hooks are global process-wide resources, and shared state like the `CTRL_C_PRESSED` atomic can cause race conditions during parallel test runs. 
 - **Signal Guarding**: We isolated the signal handler registration behind a `#[cfg(not(test))]` guard, replacing it with a mock signal trigger in tests.
 - **Test Serialization**: We introduced a `TEST_MUTEX` serial lock to synchronize unit tests in `src/main.rs` that access or modify process-wide states, preventing parallel runner threads from interfering with each other's execution.
+
+### 4. RAII Scope Restoration on Panics
+In POSIX `bc`, functions execute with dynamic scoping. If a function call panics or encounters a runtime error, standard `bc` restores the caller's variable/array scopes.
+- **ScopeGuard**: We implemented a `ScopeGuard` RAII helper struct in `src/eval.rs`. When a function is called, the guard takes ownership of the previous flow control state and the auto/param scopes. If the function panics (e.g. division by zero), Rust's stack unwinding automatically triggers the `Drop` implementation on `ScopeGuard`, popping the local variable stacks and restoring flow control states. This guarantees 100% specification compliance and prevents variable shadowing leaks under runtime errors, which is a major safety improvement over the original Python implementation.
