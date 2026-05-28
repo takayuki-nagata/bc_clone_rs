@@ -84,6 +84,9 @@ To prevent the calculator from crashing on syntax errors or invalid runtime math
 
 ### 2. Immediate Exit on `quit`
 POSIX `bc` terminates immediately upon reading the `quit` keyword, even if it resides on a line with other statements. By raising a targeted `"quit"` panic inside the parser, we bubble up the termination signal immediately. This avoids executing any prior statements on the same line and permits unit testing of the REPL exit logic without killing the test runner.
+- **Silent Quit Hook**: To prevent Rust's default panic handler from printing an unsightly panic message/backtrace to `stderr` during `quit`, we registered a custom panic hook in `fn main()`. This hook intercepts `"quit"` panic payloads and exits silently, while letting other unexpected panics format tracebacks normally.
 
 ### 3. Preventing Parallel Test Conflicts
-Signal handlers (such as `ctrlc::set_handler`) are global process-wide resources. Registering a handler in parallel unit tests causes execution conflicts and test failures. We isolated the signal handler registration behind a `#[cfg(not(test))]` guard, replacing it with a mock signal trigger in tests to ensure clean and isolated test runs.
+Signal handlers (such as `ctrlc::set_handler`) and panic hooks are global process-wide resources, and shared state like the `CTRL_C_PRESSED` atomic can cause race conditions during parallel test runs. 
+- **Signal Guarding**: We isolated the signal handler registration behind a `#[cfg(not(test))]` guard, replacing it with a mock signal trigger in tests.
+- **Test Serialization**: We introduced a `TEST_MUTEX` serial lock to synchronize unit tests in `src/main.rs` that access or modify process-wide states, preventing parallel runner threads from interfering with each other's execution.
