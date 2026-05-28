@@ -81,7 +81,7 @@ Pass scripts/files to evaluate sequentially:
 1. **Basic Arithmetic**:
    ```
    1 + 2 * 3^2
-   7
+   19
    ```
 
 2. **Bases and Scales**:
