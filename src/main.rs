@@ -399,6 +399,19 @@ where
 }
 
 fn main() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()));
+        if msg == Some("quit") {
+            return;
+        }
+        default_hook(info);
+    }));
+
     let args: Vec<String> = std::env::args().collect();
     use std::io::IsTerminal;
     let is_interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
@@ -414,6 +427,8 @@ fn main() {
 mod tests {
     use super::*;
     use std::io::Read;
+
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[derive(Clone)]
     struct TestWriter {
@@ -442,6 +457,7 @@ mod tests {
 
     #[test]
     fn test_run_repl_interactive() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let input = "1 + 2\nif (1) {\n  3\n}\n";
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -464,6 +480,7 @@ mod tests {
 
     #[test]
     fn test_run_repl_errors() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let input = "1/0\n@\nsqrt(-1)\n";
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -487,6 +504,7 @@ mod tests {
 
     #[test]
     fn test_non_interactive_block_errors() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let content = "1/0";
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -509,6 +527,7 @@ mod tests {
 
     #[test]
     fn test_non_interactive_block_quit() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stdout = TestWriter {
@@ -569,6 +588,7 @@ mod tests {
 
     #[test]
     fn test_run_repl_ctrlc() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stdout = TestWriter { buf: stdout_buf };
@@ -617,6 +637,7 @@ mod tests {
 
     #[test]
     fn test_run_repl_ctrlc_read_line() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stdout = TestWriter { buf: stdout_buf };
@@ -675,6 +696,7 @@ mod tests {
 
     #[test]
     fn test_run_repl_err_reader() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stdout = TestWriter { buf: stdout_buf };
@@ -703,6 +725,7 @@ mod tests {
 
     #[test]
     fn test_run_repl_interactive_backslash_newline_and_quit() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stdout = TestWriter {
@@ -724,6 +747,7 @@ mod tests {
 
     #[test]
     fn test_run_app() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -818,6 +842,7 @@ mod tests {
 
     #[test]
     fn test_non_interactive_block_quit_flag_ok_path() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         // Covers line 234: quit_flag check in Ok(_) branch of run_non_interactive_block.
         // Pre-set quit_flag so the evaluator executes normally but the
         // outer loop detects the flag and returns Err(0).
@@ -837,6 +862,7 @@ mod tests {
 
     #[test]
     fn test_interactive_loop_quit_flag_ok_path() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         // Covers line 317: quit_flag check in Ok(_) branch of run_interactive_loop.
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
