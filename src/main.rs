@@ -20,7 +20,9 @@ pub static CTRL_C_PRESSED: AtomicBool = AtomicBool::new(false);
 pub fn handle_ctrlc_signal() {
     CTRL_C_PRESSED.store(true, Ordering::SeqCst);
     let mut stderr = std::io::stderr();
-    let _ = writeln!(stderr);
+    let _ = writeln!(stderr, "(interrupt) Exiting bc.");
+    #[cfg(not(test))]
+    std::process::exit(0);
 }
 
 /// Sets up the cross-platform SIGINT / Ctrl+C handler.

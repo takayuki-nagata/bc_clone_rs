@@ -584,7 +584,7 @@ impl WriteHelper for std::path::PathBuf {
 #[test]
 fn test_real_ctrlc_signal() {
     let bin_path = env!("CARGO_BIN_EXE_bc_clone");
-    let mut child = Command::new(bin_path)
+    let child = Command::new(bin_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -602,15 +602,8 @@ fn test_real_ctrlc_signal() {
         .expect("failed to send SIGINT");
     assert!(status.success());
 
-    // Wait a brief moment to process signal
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    // Send quit to terminate interactive loop cleanly
-    {
-        let mut stdin = child.stdin.take().expect("failed to get stdin");
-        let _ = stdin.write_all(b"quit\n");
-    }
-
     let output = child.wait_with_output().expect("failed to wait");
     assert!(output.status.success());
+    let stderr_str = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr_str.contains("(interrupt) Exiting bc."));
 }
