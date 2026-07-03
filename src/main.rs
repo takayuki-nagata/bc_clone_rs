@@ -56,9 +56,14 @@ pub fn count_open_braces(text: &str) -> i32 {
         } else if in_string {
             if c == '"' {
                 in_string = false;
-            } else if c == '\\' && i + 1 < chars.len() && chars[i + 1] == '\n' {
-                i += 2;
-                continue;
+            } else if c == '\\' && i + 1 < chars.len() {
+                if chars[i + 1] == '\n' {
+                    i += 2;
+                    continue;
+                } else if chars[i + 1] == '\r' && i + 2 < chars.len() && chars[i + 2] == '\n' {
+                    i += 3;
+                    continue;
+                }
             }
             i += 1;
         } else {
@@ -102,9 +107,14 @@ pub fn is_block_incomplete(text: &str) -> bool {
         } else if in_string {
             if c == '"' {
                 in_string = false;
-            } else if c == '\\' && i + 1 < chars.len() && chars[i + 1] == '\n' {
-                i += 2;
-                continue;
+            } else if c == '\\' && i + 1 < chars.len() {
+                if chars[i + 1] == '\n' {
+                    i += 2;
+                    continue;
+                } else if chars[i + 1] == '\r' && i + 2 < chars.len() && chars[i + 2] == '\n' {
+                    i += 3;
+                    continue;
+                }
             }
             i += 1;
         } else {
@@ -203,7 +213,7 @@ pub fn run_non_interactive_block(
         accumulator.push_str(line);
 
         let accumulated_text = &accumulator;
-        if accumulated_text.ends_with("\\\n") {
+        if accumulated_text.ends_with("\\\n") || accumulated_text.ends_with("\\\r\n") {
             continue;
         }
 
@@ -286,7 +296,7 @@ pub fn run_interactive_loop<R: BufRead>(
         }
 
         let accumulated_text = &accumulator;
-        if accumulated_text.ends_with("\\\n") {
+        if accumulated_text.ends_with("\\\n") || accumulated_text.ends_with("\\\r\n") {
             continue;
         }
 
@@ -454,7 +464,9 @@ mod tests {
         assert_eq!(count_open_braces("/* { */"), 0);
         assert_eq!(count_open_braces("\"{\""), 0);
         assert_eq!(count_open_braces("a = 5 \\\n {"), 1);
+        assert_eq!(count_open_braces("a = 5 \\\r\n {"), 1);
         assert_eq!(count_open_braces("a = \"hello \\\nworld\""), 0);
+        assert_eq!(count_open_braces("a = \"hello \\\r\nworld\""), 0);
     }
 
     #[test]
@@ -723,6 +735,7 @@ mod tests {
         assert!(is_block_incomplete("/* comment"));
         assert!(is_block_incomplete("\"string"));
         assert!(!is_block_incomplete("a = \"hello \\\nworld\""));
+        assert!(!is_block_incomplete("a = \"hello \\\r\nworld\""));
     }
 
     #[test]
@@ -879,5 +892,26 @@ mod tests {
         let input = "1\n";
         let res = run_interactive_loop(input.as_bytes(), &mut evaluator);
         assert_eq!(res, Err(0));
+    }
+
+    #[test]
+    fn test_run_repl_crlf_backslash_newline() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter {
+            buf: stdout_buf.clone(),
+        };
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+
+        let input = "a = 5 \\\r\n+ 10\r\na\r\nquit\r\n";
+        let _ = run_interactive_loop(input.as_bytes(), &mut evaluator);
+
+        let out_bytes = stdout_buf.lock().unwrap().clone();
+        let out_str = String::from_utf8(out_bytes).unwrap();
+        assert!(out_str.contains("15"));
     }
 }

@@ -105,10 +105,12 @@ impl Lexer {
     fn skip_whitespace_and_comments(&mut self) {
         loop {
             let c = self.peek_char(0);
-            if c == ' ' || c == '\t' {
+            if c == ' ' || c == '\t' || c == '\r' {
                 self.advance_char(1);
             } else if c == '\\' && self.peek_char(1) == '\n' {
                 self.advance_char(2);
+            } else if c == '\\' && self.peek_char(1) == '\r' && self.peek_char(2) == '\n' {
+                self.advance_char(3);
             } else if c == '/' && self.peek_char(1) == '*' {
                 self.advance_char(2);
                 loop {
@@ -411,6 +413,11 @@ impl Lexer {
                     val_chars.push('\\');
                     val_chars.push('\n');
                     self.advance_char(2);
+                } else if cc == '\\' && self.peek_char(1) == '\r' && self.peek_char(2) == '\n' {
+                    val_chars.push('\\');
+                    val_chars.push('\r');
+                    val_chars.push('\n');
+                    self.advance_char(3);
                 } else {
                     val_chars.push(cc);
                     self.advance_char(1);
@@ -439,6 +446,8 @@ impl Lexer {
                     self.advance_char(1);
                 } else if cc == '\\' && self.peek_char(1) == '\n' {
                     self.advance_char(2);
+                } else if cc == '\\' && self.peek_char(1) == '\r' && self.peek_char(2) == '\n' {
+                    self.advance_char(3);
                 } else {
                     break;
                 }
@@ -1095,6 +1104,41 @@ mod tests {
         let tok3 = lexer.get_next_token();
         assert_eq!(tok3.token_type, TokenType::Number);
         assert_eq!(tok3.value, "5.0");
+    }
+
+    #[test]
+    fn test_lexer_crlf_and_carriage_return() {
+        let mut lexer = Lexer::new("a = 10\r\n + \r20");
+        let tok1 = lexer.get_next_token();
+        assert_eq!(tok1.token_type, TokenType::Letter);
+        assert_eq!(tok1.value, "a");
+
+        let tok2 = lexer.get_next_token();
+        assert_eq!(tok2.token_type, TokenType::AssignOp);
+
+        let tok3 = lexer.get_next_token();
+        assert_eq!(tok3.token_type, TokenType::Number);
+        assert_eq!(tok3.value, "10");
+
+        let tok4 = lexer.get_next_token();
+        assert_eq!(tok4.token_type, TokenType::Newline);
+
+        let tok5 = lexer.get_next_token();
+        assert_eq!(tok5.token_type, TokenType::Plus);
+
+        let tok6 = lexer.get_next_token();
+        assert_eq!(tok6.token_type, TokenType::Number);
+        assert_eq!(tok6.value, "20");
+
+        let mut lexer2 = Lexer::new("1.2\\\r\n34");
+        let tok_num = lexer2.get_next_token();
+        assert_eq!(tok_num.token_type, TokenType::Number);
+        assert_eq!(tok_num.value, "1.234");
+
+        let mut lexer3 = Lexer::new("\"hello \\\r\nworld\"");
+        let tok_str = lexer3.get_next_token();
+        assert_eq!(tok_str.token_type, TokenType::String);
+        assert_eq!(tok_str.value, "hello \\\r\nworld");
     }
 
     #[test]
