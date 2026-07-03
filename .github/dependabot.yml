@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Rustのクレート（Cargo）の依存関係アップデートと脆弱性チェック
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # GitHub Actionsワークフロー自体のアップデート（v3からv4など）
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
