@@ -1244,4 +1244,38 @@ mod tests {
         let mut parser = Parser::new(Lexer::new("define f() { auto a 123; }"));
         let _ = parser.parse_program();
     }
+
+    #[test]
+    fn test_lexer_and_parser_mutant_edge_cases() {
+        // 1. CRLF line tracking across comments and multi-line strings
+        let mut lexer = Lexer::new("/* line 1\r\n line 2 */\r\n123");
+        let tok1 = lexer.get_next_token();
+        assert_eq!(tok1.token_type, TokenType::Newline);
+        let tok2 = lexer.get_next_token();
+        assert_eq!(tok2.token_type, TokenType::Number);
+        assert_eq!(tok2.line, 3);
+
+        // 2. Semicolons and empty statement list parsing
+        let mut parser = Parser::new(Lexer::new("; ; a = 1; ; b = 2; ;"));
+        let prog = parser.parse_program();
+        assert!(!prog.is_empty());
+
+        // 3. Complex argument list with expressions and array parameters
+        let mut parser2 = Parser::new(Lexer::new("f(1 + 2, a[])"));
+        let prog2 = parser2.parse_program();
+        assert_eq!(prog2.len(), 1);
+
+        // 4. Tokenizer operator coverage
+        let ops = "+= -= *= /= %= ^= == != <= >= ++ --";
+        let mut lexer_ops = Lexer::new(ops);
+        let mut tok_count = 0;
+        loop {
+            let tok = lexer_ops.get_next_token();
+            if tok.token_type == TokenType::Eof {
+                break;
+            }
+            tok_count += 1;
+        }
+        assert_eq!(tok_count, 12);
+    }
 }
