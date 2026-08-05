@@ -1016,4 +1016,298 @@ mod tests {
         let restored_val = evaluator.evaluate(&Expr::Variable("shadowed_var".to_string()));
         assert_eq!(restored_val.coeff, BigInt::from(99));
     }
+
+    #[test]
+    fn test_evaluator_operator_and_assignment_mutants() {
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter {
+            buf: stdout_buf.clone(),
+        };
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+
+        // Test all relational operations cleanly
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    "==".to_string(),
+                    Box::new(Expr::Number("1".to_string())),
+                    Box::new(Expr::Number("1".to_string()))
+                ))
+                .coeff,
+            BigInt::from(1)
+        );
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    "==".to_string(),
+                    Box::new(Expr::Number("1".to_string())),
+                    Box::new(Expr::Number("2".to_string()))
+                ))
+                .coeff,
+            BigInt::from(0)
+        );
+
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    "!=".to_string(),
+                    Box::new(Expr::Number("1".to_string())),
+                    Box::new(Expr::Number("2".to_string()))
+                ))
+                .coeff,
+            BigInt::from(1)
+        );
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    "!=".to_string(),
+                    Box::new(Expr::Number("1".to_string())),
+                    Box::new(Expr::Number("1".to_string()))
+                ))
+                .coeff,
+            BigInt::from(0)
+        );
+
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    "<".to_string(),
+                    Box::new(Expr::Number("1".to_string())),
+                    Box::new(Expr::Number("2".to_string()))
+                ))
+                .coeff,
+            BigInt::from(1)
+        );
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    "<".to_string(),
+                    Box::new(Expr::Number("2".to_string())),
+                    Box::new(Expr::Number("2".to_string()))
+                ))
+                .coeff,
+            BigInt::from(0)
+        );
+
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    "<=".to_string(),
+                    Box::new(Expr::Number("2".to_string())),
+                    Box::new(Expr::Number("2".to_string()))
+                ))
+                .coeff,
+            BigInt::from(1)
+        );
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    "<=".to_string(),
+                    Box::new(Expr::Number("3".to_string())),
+                    Box::new(Expr::Number("2".to_string()))
+                ))
+                .coeff,
+            BigInt::from(0)
+        );
+
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    ">".to_string(),
+                    Box::new(Expr::Number("3".to_string())),
+                    Box::new(Expr::Number("2".to_string()))
+                ))
+                .coeff,
+            BigInt::from(1)
+        );
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    ">".to_string(),
+                    Box::new(Expr::Number("2".to_string())),
+                    Box::new(Expr::Number("2".to_string()))
+                ))
+                .coeff,
+            BigInt::from(0)
+        );
+
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    ">=".to_string(),
+                    Box::new(Expr::Number("2".to_string())),
+                    Box::new(Expr::Number("2".to_string()))
+                ))
+                .coeff,
+            BigInt::from(1)
+        );
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::RelationalOp(
+                    ">=".to_string(),
+                    Box::new(Expr::Number("1".to_string())),
+                    Box::new(Expr::Number("2".to_string()))
+                ))
+                .coeff,
+            BigInt::from(0)
+        );
+
+
+        // Test compound assignments +=, -=, *=, /=, %=, ^=
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::Variable("x".to_string())),
+            Box::new(Expr::Number("10".to_string())),
+        )));
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "+=".to_string(),
+            Box::new(Expr::Variable("x".to_string())),
+            Box::new(Expr::Number("5".to_string())),
+        )));
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::Variable("x".to_string()))
+                .coeff,
+            BigInt::from(15)
+        );
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "-=".to_string(),
+            Box::new(Expr::Variable("x".to_string())),
+            Box::new(Expr::Number("3".to_string())),
+        )));
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::Variable("x".to_string()))
+                .coeff,
+            BigInt::from(12)
+        );
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "*=".to_string(),
+            Box::new(Expr::Variable("x".to_string())),
+            Box::new(Expr::Number("2".to_string())),
+        )));
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::Variable("x".to_string()))
+                .coeff,
+            BigInt::from(24)
+        );
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "/=".to_string(),
+            Box::new(Expr::Variable("x".to_string())),
+            Box::new(Expr::Number("4".to_string())),
+        )));
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::Variable("x".to_string()))
+                .coeff,
+            BigInt::from(6)
+        );
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "%=".to_string(),
+            Box::new(Expr::Variable("x".to_string())),
+            Box::new(Expr::Number("4".to_string())),
+        )));
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::Variable("x".to_string()))
+                .coeff,
+            BigInt::from(2)
+        );
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "^=".to_string(),
+            Box::new(Expr::Variable("x".to_string())),
+            Box::new(Expr::Number("3".to_string())),
+        )));
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::Variable("x".to_string()))
+                .coeff,
+            BigInt::from(8)
+        );
+
+        // Test pre/post increment and decrement
+        let pre_inc = evaluator.evaluate(&Expr::UpdateOp(
+            "++".to_string(),
+            true,
+            Box::new(Expr::Variable("x".to_string())),
+        ));
+        assert_eq!(pre_inc.coeff, BigInt::from(9));
+
+        let post_inc = evaluator.evaluate(&Expr::UpdateOp(
+            "++".to_string(),
+            false,
+            Box::new(Expr::Variable("x".to_string())),
+        ));
+        assert_eq!(post_inc.coeff, BigInt::from(9));
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::Variable("x".to_string()))
+                .coeff,
+            BigInt::from(10)
+        );
+
+        let pre_dec = evaluator.evaluate(&Expr::UpdateOp(
+            "--".to_string(),
+            true,
+            Box::new(Expr::Variable("x".to_string())),
+        ));
+        assert_eq!(pre_dec.coeff, BigInt::from(9));
+
+        let post_dec = evaluator.evaluate(&Expr::UpdateOp(
+            "--".to_string(),
+            false,
+            Box::new(Expr::Variable("x".to_string())),
+        ));
+        assert_eq!(post_dec.coeff, BigInt::from(9));
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::Variable("x".to_string()))
+                .coeff,
+            BigInt::from(8)
+        );
+
+        // Test Stmt::For and Stmt::If control flow branches
+        evaluator.execute(&Stmt::For(
+            Expr::AssignOp(
+                "=".to_string(),
+                Box::new(Expr::Variable("var_i".to_string())),
+                Box::new(Expr::Number("0".to_string())),
+            ),
+            Expr::RelationalOp(
+                "<".to_string(),
+                Box::new(Expr::Variable("var_i".to_string())),
+                Box::new(Expr::Number("3".to_string())),
+            ),
+            Expr::UpdateOp(
+                "++".to_string(),
+                true,
+                Box::new(Expr::Variable("var_i".to_string())),
+            ),
+            Box::new(Stmt::Block(vec![])),
+        ));
+        assert_eq!(
+            evaluator
+                .evaluate(&Expr::Variable("var_i".to_string()))
+                .coeff,
+            BigInt::from(3)
+        );
+
+
+        // Test Stmt::StringLiteral
+        evaluator.execute(&Stmt::StringLiteral("out: hello".to_string()));
+        let out_str = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
+        assert!(out_str.contains("out: hello"));
+    }
 }
+
+
