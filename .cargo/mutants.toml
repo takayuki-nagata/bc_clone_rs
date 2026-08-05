@@ -1,0 +1,8 @@
+# Configuration for cargo-mutants
+# https://mutants.rs/config.html
+
+# Multiplier for command timeouts (helps prevent false positive timeouts in transcendental math loops)
+timeout_multiplier = 3.0
+
+# Command used to run tests
+test_tool = "cargo"
