@@ -1342,6 +1342,57 @@ mod tests {
         )));
         assert_eq!(evaluator.ibase, 16);
     }
+
+    #[test]
+    fn test_control_flow_truth_tables() {
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter {
+            buf: stdout_buf.clone(),
+        };
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+
+        // Test if conditions for truth values of relational operators
+        for (lhs, rhs, op, expected) in [
+            ("5", "5", "==", true),
+            ("5", "3", "==", false),
+            ("5", "3", "!=", true),
+            ("5", "5", "!=", false),
+            ("3", "5", "<", true),
+            ("5", "5", "<", false),
+            ("3", "5", "<=", true),
+            ("5", "5", "<=", true),
+            ("6", "5", "<=", false),
+            ("5", "3", ">", true),
+            ("5", "5", ">", false),
+            ("5", "3", ">=", true),
+            ("5", "5", ">=", true),
+            ("3", "5", ">=", false),
+        ] {
+            evaluator.variables.clear();
+            evaluator.execute(&Stmt::If(
+                Expr::RelationalOp(
+                    op.to_string(),
+                    Box::new(Expr::Number(lhs.to_string())),
+                    Box::new(Expr::Number(rhs.to_string())),
+                ),
+                Box::new(Stmt::Expr(Expr::AssignOp(
+                    "=".to_string(),
+                    Box::new(Expr::Variable("hit".to_string())),
+                    Box::new(Expr::Number("1".to_string())),
+                ))),
+            ));
+            let hit = evaluator
+                .evaluate(&Expr::Variable("hit".to_string()))
+                .coeff;
+            assert_eq!(hit == BigInt::from(1), expected);
+        }
+    }
 }
+
+
 
 
