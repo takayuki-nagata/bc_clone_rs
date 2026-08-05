@@ -1290,4 +1290,58 @@ mod tests {
         let out_str = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
         assert!(out_str.contains("out: hello"));
     }
+
+    #[test]
+    fn test_fractional_indices_and_register_truncation() {
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter {
+            buf: stdout_buf.clone(),
+        };
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+
+        // 1. Assign to array using fractional index a[3.8] = 99
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::ArrayAccess(
+                "arr".to_string(),
+                Box::new(Expr::Number("3.8".to_string())),
+            )),
+            Box::new(Expr::Number("99".to_string())),
+        )));
+
+        // Read from array using fractional index a[3.1]
+        let val_arr = evaluator.evaluate(&Expr::ArrayAccess(
+            "arr".to_string(),
+            Box::new(Expr::Number("3.1".to_string())),
+        ));
+        assert_eq!(val_arr.coeff, BigInt::from(99));
+
+        // 2. Assign fractional values to scale, obase, ibase registers
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("scale".to_string())),
+            Box::new(Expr::Number("5.9".to_string())),
+        )));
+        assert_eq!(evaluator.scale, 5);
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::Number("10.4".to_string())),
+        )));
+        assert_eq!(evaluator.obase, 10);
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::Number("16.7".to_string())),
+        )));
+        assert_eq!(evaluator.ibase, 16);
+    }
 }
+
+
