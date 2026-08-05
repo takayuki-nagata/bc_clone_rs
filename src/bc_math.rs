@@ -1076,4 +1076,57 @@ mod tests {
             5,
         );
     }
+
+    #[test]
+    fn test_math_mutant_boundary_cases() {
+        // Bessel function negative odd and even orders: J_{-n}(x) = (-1)^n J_n(x)
+        let j1 = bc_bessel(
+            &BCNum::new(BigInt::from(1), 0),
+            &BCNum::new(BigInt::from(2), 0),
+            5,
+        );
+        let j_neg1 = bc_bessel(
+            &BCNum::new(BigInt::from(-1), 0),
+            &BCNum::new(BigInt::from(2), 0),
+            5,
+        );
+        assert_eq!(j_neg1.coeff, -j1.coeff);
+
+        let j2 = bc_bessel(
+            &BCNum::new(BigInt::from(2), 0),
+            &BCNum::new(BigInt::from(2), 0),
+            5,
+        );
+        let j_neg2 = bc_bessel(
+            &BCNum::new(BigInt::from(-2), 0),
+            &BCNum::new(BigInt::from(2), 0),
+            5,
+        );
+        assert_eq!(j_neg2.coeff, j2.coeff);
+
+        // Power boundary operations
+        let x = BCNum::from_string("5", 10);
+        let zero = BCNum::from_string("0", 10);
+        let pow_zero = x.pow(&zero, 4);
+        assert_eq!(pow_zero.coeff, BigInt::from(1));
+
+
+        let zero_pow_x = zero.pow(&x, 4);
+        assert_eq!(zero_pow_x.coeff, BigInt::zero());
+
+        // Hex base parsing
+        let hex_val = BCNum::from_string("1A", 16);
+        assert_eq!(hex_val.coeff, BigInt::from(26));
+        let hex_val_lower = BCNum::from_string("1a", 16);
+        assert_eq!(hex_val_lower.coeff, BigInt::from(26));
+
+        // Arctangent boundary: atan(1) and atan(-1)
+        let one = BCNum::from_string("1", 10);
+        let neg_one = BCNum::new(BigInt::from(-1), 0);
+        let atan_pos = bc_atan(&one, 5);
+        let atan_neg = bc_atan(&neg_one, 5);
+        assert_eq!(atan_neg.coeff, -atan_pos.coeff);
+    }
 }
+
+
