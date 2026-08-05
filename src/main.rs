@@ -470,6 +470,25 @@ mod tests {
     }
 
     #[test]
+    fn test_count_open_braces_and_block_incomplete_boundary_cases() {
+        assert_eq!(count_open_braces("/* { */ { }"), 0);
+        assert_eq!(count_open_braces("if (1) { a = 1; }"), 0);
+        assert_eq!(count_open_braces("if (1) {\n  if (2) {\n    a = 1;\n"), 2);
+        assert_eq!(count_open_braces("a = \"{\"\n"), 0);
+        assert_eq!(count_open_braces("/* comment * { */ { }"), 0);
+
+        assert!(is_block_incomplete("if (1) {"));
+        assert!(is_block_incomplete("/* comment"));
+        assert!(is_block_incomplete("\"string"));
+        assert!(!is_block_incomplete("a = 1 + 2\n"));
+        assert!(!is_block_incomplete("/* comment */ a = 1\n"));
+    }
+
+
+
+
+
+    #[test]
     fn test_run_repl_interactive() {
         let _guard = TEST_MUTEX.lock().unwrap();
         let input = "1 + 2\nif (1) {\n  3\n}\n";
