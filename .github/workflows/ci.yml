@@ -60,6 +60,7 @@ jobs:
         if: github.event_name == 'push'
         run: |
           git diff HEAD~1..HEAD > push.diff
-          cargo mutants --in-diff push.diff || true
+          cargo mutants --in-diff push.diff
+
 
 
