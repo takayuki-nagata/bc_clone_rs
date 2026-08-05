@@ -1126,4 +1126,27 @@ mod tests {
         let atan_neg = bc_atan(&neg_one, 5);
         assert_eq!(atan_neg.coeff, -atan_pos.coeff);
     }
+
+    #[test]
+    fn test_bessel_fractional_orders_and_edge_cases() {
+        let zero = BCNum::from_string("0", 10);
+        let x = BCNum::from_string("3.5", 10);
+
+        // J_0(0) = 1
+        let j0_zero = bc_bessel(&zero, &zero, 5);
+        assert_eq!(j0_zero.coeff, BigInt::from(100000));
+
+        // J_1(0) = 0
+        let one = BCNum::from_string("1", 10);
+        let j1_zero = bc_bessel(&one, &zero, 5);
+        assert_eq!(j1_zero.coeff, BigInt::zero());
+
+        // Fractional order truncates n: j(2.8, x) == j(2, x)
+        let order_frac = BCNum::from_string("2.8", 10);
+        let order_int = BCNum::from_string("2", 10);
+        let j_frac = bc_bessel(&order_frac, &x, 5);
+        let j_int = bc_bessel(&order_int, &x, 5);
+        assert_eq!(j_frac.coeff, j_int.coeff);
+    }
 }
+
