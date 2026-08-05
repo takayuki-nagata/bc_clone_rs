@@ -52,9 +52,14 @@ jobs:
 
       - name: Run Diff-based Mutation Testing (Pull Request)
         if: github.event_name == 'pull_request'
-        run: cargo mutants --in-diff origin/${{ github.base_ref }}
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD > pr.diff
+          cargo mutants --in-diff pr.diff
 
       - name: Run Diff-based Mutation Testing (Push)
         if: github.event_name == 'push'
-        run: cargo mutants --in-diff HEAD~1 || true
+        run: |
+          git diff HEAD~1..HEAD > push.diff
+          cargo mutants --in-diff push.diff || true
+
 

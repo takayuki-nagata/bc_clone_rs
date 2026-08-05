@@ -154,8 +154,9 @@ cargo install cargo-mutants
 To run mutation testing on modified code (diff-based):
 
 ```bash
-cargo mutants --in-diff
+git diff > diff.patch && cargo mutants --in-diff diff.patch
 ```
+
 
 To run full mutation testing across the entire codebase:
 
