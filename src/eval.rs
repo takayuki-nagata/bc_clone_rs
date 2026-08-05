@@ -1156,7 +1156,6 @@ mod tests {
             BigInt::from(0)
         );
 
-
         // Test compound assignments +=, -=, *=, /=, %=, ^=
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
@@ -1169,9 +1168,7 @@ mod tests {
             Box::new(Expr::Number("5".to_string())),
         )));
         assert_eq!(
-            evaluator
-                .evaluate(&Expr::Variable("x".to_string()))
-                .coeff,
+            evaluator.evaluate(&Expr::Variable("x".to_string())).coeff,
             BigInt::from(15)
         );
 
@@ -1181,9 +1178,7 @@ mod tests {
             Box::new(Expr::Number("3".to_string())),
         )));
         assert_eq!(
-            evaluator
-                .evaluate(&Expr::Variable("x".to_string()))
-                .coeff,
+            evaluator.evaluate(&Expr::Variable("x".to_string())).coeff,
             BigInt::from(12)
         );
 
@@ -1193,9 +1188,7 @@ mod tests {
             Box::new(Expr::Number("2".to_string())),
         )));
         assert_eq!(
-            evaluator
-                .evaluate(&Expr::Variable("x".to_string()))
-                .coeff,
+            evaluator.evaluate(&Expr::Variable("x".to_string())).coeff,
             BigInt::from(24)
         );
 
@@ -1205,9 +1198,7 @@ mod tests {
             Box::new(Expr::Number("4".to_string())),
         )));
         assert_eq!(
-            evaluator
-                .evaluate(&Expr::Variable("x".to_string()))
-                .coeff,
+            evaluator.evaluate(&Expr::Variable("x".to_string())).coeff,
             BigInt::from(6)
         );
 
@@ -1217,9 +1208,7 @@ mod tests {
             Box::new(Expr::Number("4".to_string())),
         )));
         assert_eq!(
-            evaluator
-                .evaluate(&Expr::Variable("x".to_string()))
-                .coeff,
+            evaluator.evaluate(&Expr::Variable("x".to_string())).coeff,
             BigInt::from(2)
         );
 
@@ -1229,9 +1218,7 @@ mod tests {
             Box::new(Expr::Number("3".to_string())),
         )));
         assert_eq!(
-            evaluator
-                .evaluate(&Expr::Variable("x".to_string()))
-                .coeff,
+            evaluator.evaluate(&Expr::Variable("x".to_string())).coeff,
             BigInt::from(8)
         );
 
@@ -1250,9 +1237,7 @@ mod tests {
         ));
         assert_eq!(post_inc.coeff, BigInt::from(9));
         assert_eq!(
-            evaluator
-                .evaluate(&Expr::Variable("x".to_string()))
-                .coeff,
+            evaluator.evaluate(&Expr::Variable("x".to_string())).coeff,
             BigInt::from(10)
         );
 
@@ -1270,9 +1255,7 @@ mod tests {
         ));
         assert_eq!(post_dec.coeff, BigInt::from(9));
         assert_eq!(
-            evaluator
-                .evaluate(&Expr::Variable("x".to_string()))
-                .coeff,
+            evaluator.evaluate(&Expr::Variable("x".to_string())).coeff,
             BigInt::from(8)
         );
 
@@ -1302,12 +1285,9 @@ mod tests {
             BigInt::from(3)
         );
 
-
         // Test Stmt::StringLiteral
         evaluator.execute(&Stmt::StringLiteral("out: hello".to_string()));
         let out_str = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
         assert!(out_str.contains("out: hello"));
     }
 }
-
-

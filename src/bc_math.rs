@@ -1110,7 +1110,6 @@ mod tests {
         let pow_zero = x.pow(&zero, 4);
         assert_eq!(pow_zero.coeff, BigInt::from(1));
 
-
         let zero_pow_x = zero.pow(&x, 4);
         assert_eq!(zero_pow_x.coeff, BigInt::zero());
 
@@ -1128,5 +1127,3 @@ mod tests {
         assert_eq!(atan_neg.coeff, -atan_pos.coeff);
     }
 }
-
-

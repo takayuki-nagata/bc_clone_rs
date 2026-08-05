@@ -484,10 +484,6 @@ mod tests {
         assert!(!is_block_incomplete("/* comment */ a = 1\n"));
     }
 
-
-
-
-
     #[test]
     fn test_run_repl_interactive() {
         let _guard = TEST_MUTEX.lock().unwrap();
