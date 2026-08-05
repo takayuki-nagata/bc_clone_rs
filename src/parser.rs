@@ -1278,4 +1278,27 @@ mod tests {
         }
         assert_eq!(tok_count, 12);
     }
+
+    #[test]
+    fn test_string_backslash_newline_continuation_variations() {
+        // String literal with backslash-LF and backslash-CRLF
+        let mut lexer_lf = Lexer::new("\"hello \\\nworld\"");
+        let tok_lf = lexer_lf.get_next_token();
+        assert_eq!(tok_lf.token_type, TokenType::String);
+
+        let mut lexer_crlf = Lexer::new("\"hello \\\r\nworld\"");
+        let tok_crlf = lexer_crlf.get_next_token();
+        assert_eq!(tok_crlf.token_type, TokenType::String);
+
+        // Number token with backslash-newline continuation inside digits
+        let mut lexer_num = Lexer::new("123\\\n456");
+        let tok_num = lexer_num.get_next_token();
+        assert_eq!(tok_num.token_type, TokenType::Number);
+        assert_eq!(tok_num.value, "123456");
+
+        let mut lexer_num_crlf = Lexer::new("123\\\r\n456");
+        let tok_num_crlf = lexer_num_crlf.get_next_token();
+        assert_eq!(tok_num_crlf.token_type, TokenType::Number);
+        assert_eq!(tok_num_crlf.value, "123456");
+    }
 }
