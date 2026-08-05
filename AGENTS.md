@@ -94,3 +94,8 @@ Signal handlers (such as `ctrlc::set_handler`) and panic hooks are global proces
 ### 4. RAII Scope Restoration on Panics
 In POSIX `bc`, functions execute with dynamic scoping. If a function call panics or encounters a runtime error, standard `bc` restores the caller's variable/array scopes.
 - **ScopeGuard**: We implemented a `ScopeGuard` RAII helper struct in `src/eval.rs`. When a function is called, the guard takes ownership of the previous flow control state and the auto/param scopes. If the function panics (e.g. division by zero), Rust's stack unwinding automatically triggers the `Drop` implementation on `ScopeGuard`, popping the local variable stacks and restoring flow control states. This guarantees 100% specification compliance and prevents variable shadowing leaks under runtime errors, which is a major safety improvement over the original Python implementation.
+
+### 5. Diff-Based Mutation Testing in CI
+To guarantee high test quality and ensure all code paths have meaningful assertions, `bc_clone` incorporates mutation testing using `cargo-mutants`.
+- **Configured Timeout Multiplier**: `.cargo/mutants.toml` defines a timeout multiplier of 3.0 to accommodate deep mathematical calculations during mutation test runs.
+- **CI Integration**: In `.github/workflows/ci.yml`, `cargo mutants --in-diff` executes on PR diffs to ensure newly added or modified lines are covered by tests that catch artificial mutations.

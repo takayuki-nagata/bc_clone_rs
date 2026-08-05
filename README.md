@@ -141,10 +141,32 @@ To view the report line-by-line in your browser:
 cargo llvm-cov --html --open
 ```
 
+### Mutation Testing
+
+We use `cargo-mutants` to verify test suite robustness by injecting faults into source code and confirming that existing tests fail (killing mutants).
+
+To install `cargo-mutants` locally:
+
+```bash
+cargo install cargo-mutants
+```
+
+To run mutation testing on modified code (diff-based):
+
+```bash
+cargo mutants --in-diff
+```
+
+To run full mutation testing across the entire codebase:
+
+```bash
+cargo mutants
+```
+
 ## CI/CD Pipeline
 
 The project includes two GitHub Actions workflows:
-- **CI Workflow (`.github/workflows/ci.yml`)**: Automatically checks formatting, lints with clippy, runs all unit/integration tests, and collects coverage reports on every push and pull request.
+- **CI Workflow (`.github/workflows/ci.yml`)**: Automatically checks formatting, lints with clippy, runs all unit/integration tests, measures code coverage, executes diff-based mutation testing (`cargo mutants --in-diff`), and runs audit checks on every push and pull request.
 - **Release Workflow (`.github/workflows/release.yml`)**: Cross-compiles optimized binaries for Linux, macOS, and Windows and attaches them to a new GitHub Release automatically whenever a version tag (e.g. `v1.0.0`) is pushed.
 
 ## License
