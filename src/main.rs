@@ -972,4 +972,24 @@ mod tests {
         assert!(is_block_incomplete("if (1) {"));
         assert!(!is_block_incomplete("a = 5\n"));
     }
+
+    #[test]
+    fn test_count_open_braces_and_block_incomplete_string_escapes() {
+        // 1. Backslash-LF and CRLF continuation inside strings in count_open_braces
+        assert_eq!(count_open_braces("\"str \\\n {\""), 0);
+        assert_eq!(count_open_braces("\"str \\\r\n {\""), 0);
+        assert_eq!(count_open_braces("\"str \\\r {\""), 0);
+        assert_eq!(count_open_braces("/* comment \\\n { */"), 0);
+        assert_eq!(count_open_braces("/* *** { ***/"), 0);
+        assert_eq!(count_open_braces("/* * / { */"), 0);
+
+        // 2. is_block_incomplete string backslash continuation
+        assert!(is_block_incomplete("\"str \\\n"));
+        assert!(is_block_incomplete("\"str \\\r\n"));
+        assert!(is_block_incomplete("\"str \\\r"));
+        assert!(is_block_incomplete("/* ***"));
+        assert!(!is_block_incomplete("/* *** */ a = 1\n"));
+        assert!(!is_block_incomplete("\"str \\\n\" a = 1\n"));
+        assert!(!is_block_incomplete("\"str \\\r\n\" a = 1\n"));
+    }
 }

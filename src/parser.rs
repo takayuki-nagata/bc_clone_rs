@@ -1392,4 +1392,26 @@ mod tests {
             panic!("Expected Call statement with array parameters");
         }
     }
+
+    #[test]
+    fn test_lexer_crlf_continuation_and_newline_token_line() {
+        // 1. Newline token line calculation
+        let mut lexer_nl = Lexer::new("a\n");
+        let _ = lexer_nl.get_next_token(); // a
+        let tok_nl = lexer_nl.get_next_token(); // \n
+        assert_eq!(tok_nl.token_type, TokenType::Newline);
+        assert_eq!(tok_nl.line, 1);
+
+        // 2. String token with CRLF backslash continuation
+        let mut lexer_str = Lexer::new("\"hello \\\r\n world\"");
+        let tok_str = lexer_str.get_next_token();
+        assert_eq!(tok_str.token_type, TokenType::String);
+        assert_eq!(tok_str.value, "hello \\\r\n world");
+
+        // 3. Number token with CRLF backslash continuation
+        let mut lexer_num = Lexer::new("123\\\r\n456");
+        let tok_num = lexer_num.get_next_token();
+        assert_eq!(tok_num.token_type, TokenType::Number);
+        assert_eq!(tok_num.value, "123456");
+    }
 }
