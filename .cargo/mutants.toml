@@ -1,8 +1,10 @@
 # Configuration for cargo-mutants
 # https://mutants.rs/config.html
 
-# Multiplier for command timeouts (helps prevent false positive timeouts in transcendental math loops)
-timeout_multiplier = 3.0
+# Cap minimum test timeout to 2 seconds for fast detection of infinite loop mutants
+minimum_test_timeout = 2
+timeout_multiplier = 1.5
 
 # Command used to run tests
 test_tool = "cargo"
+
