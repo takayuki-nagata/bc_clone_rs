@@ -954,4 +954,22 @@ mod tests {
         let err_str = String::from_utf8(err_bytes).unwrap();
         assert!(err_str.contains("ibase too large"));
     }
+
+    #[test]
+    fn test_repl_accumulator_comment_and_string_edge_cases() {
+        // Comment boundary conditions
+        assert!(is_block_incomplete("/*"));
+        assert!(is_block_incomplete("a = 10 /* comment"));
+        assert!(!is_block_incomplete("/* comment */ a = 5"));
+        assert_eq!(count_open_braces("/* { */"), 0);
+
+        // String boundary conditions
+        assert!(is_block_incomplete("\"hello"));
+        assert!(!is_block_incomplete("\"hello world\""));
+        assert_eq!(count_open_braces("\"{\""), 0);
+
+        // Block incomplete conditions
+        assert!(is_block_incomplete("if (1) {"));
+        assert!(!is_block_incomplete("a = 5\n"));
+    }
 }
