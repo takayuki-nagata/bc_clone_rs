@@ -1385,14 +1385,8 @@ mod tests {
                     Box::new(Expr::Number("1".to_string())),
                 ))),
             ));
-            let hit = evaluator
-                .evaluate(&Expr::Variable("hit".to_string()))
-                .coeff;
+            let hit = evaluator.evaluate(&Expr::Variable("hit".to_string())).coeff;
             assert_eq!(hit == BigInt::from(1), expected);
         }
     }
 }
-
-
-
-

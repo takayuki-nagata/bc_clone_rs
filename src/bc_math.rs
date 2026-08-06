@@ -1149,4 +1149,3 @@ mod tests {
         assert_eq!(j_frac.coeff, j_int.coeff);
     }
 }
-
