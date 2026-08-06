@@ -929,4 +929,29 @@ mod tests {
         let out_str = String::from_utf8(out_bytes).unwrap();
         assert!(out_str.contains("15"));
     }
+
+    #[test]
+    fn test_line_wrapping_70_chars_and_ibase_warnings() {
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter {
+            buf: stdout_buf.clone(),
+        };
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+
+        // Evaluate 10^80 to test 70-character POSIX line wrapping and ibase > 16 warning
+        let input = "scale = 0\n10^80\nibase = 17\n";
+        let _ = run_interactive_loop(input.as_bytes(), &mut evaluator);
+
+        let out_bytes = stdout_buf.lock().unwrap().clone();
+        let out_str = String::from_utf8(out_bytes).unwrap();
+        assert!(out_str.contains("\\\n"));
+
+        let err_bytes = stderr_buf.lock().unwrap().clone();
+        let err_str = String::from_utf8(err_bytes).unwrap();
+        assert!(err_str.contains("ibase too large"));
+    }
 }
