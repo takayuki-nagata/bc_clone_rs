@@ -1691,4 +1691,19 @@ mod tests {
         let mut stdout = WrappedStdout::new(Box::new(FailingFlushWriter));
         assert!(stdout.flush().is_err());
     }
+
+    #[test]
+    fn test_function_early_return_short_circuits_body_loop() {
+        let mut evaluator = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let mut parser = Parser::new(Lexer::new(
+            "define f() { return (10); x = 99; return (20); }; f()",
+        ));
+        for stmt in parser.parse_program() {
+            evaluator.execute(&stmt);
+        }
+        let res = evaluator.evaluate(&Expr::Call("f".to_string(), vec![]));
+        assert_eq!(res.coeff, BigInt::from(10));
+        let x_var = evaluator.evaluate(&Expr::Variable("x".to_string()));
+        assert_eq!(x_var.coeff, BigInt::from(0));
+    }
 }
