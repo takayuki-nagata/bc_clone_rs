@@ -1414,4 +1414,20 @@ mod tests {
         assert_eq!(tok_num.token_type, TokenType::Number);
         assert_eq!(tok_num.value, "123456");
     }
+
+    #[test]
+    fn test_argument_list_invalid_syntax_error_message() {
+        let panic_res =
+            std::panic::catch_unwind(|| Parser::new(Lexer::new("f(a + ])")).parse_program());
+        assert!(panic_res.is_err());
+        let payload = panic_res.unwrap_err();
+        let msg = if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = payload.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            String::new()
+        };
+        assert!(!msg.contains("Lbracket"));
+    }
 }

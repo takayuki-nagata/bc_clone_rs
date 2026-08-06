@@ -1672,4 +1672,23 @@ mod tests {
         let res_for = evaluator_for.evaluate(&Expr::Variable("i".to_string()));
         assert_eq!(res_for.coeff, BigInt::from(0));
     }
+
+    struct FailingFlushWriter;
+    impl Write for FailingFlushWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "flush error",
+            ))
+        }
+    }
+
+    #[test]
+    fn test_wrapped_stdout_flush_error_propagation() {
+        let mut stdout = WrappedStdout::new(Box::new(FailingFlushWriter));
+        assert!(stdout.flush().is_err());
+    }
 }
