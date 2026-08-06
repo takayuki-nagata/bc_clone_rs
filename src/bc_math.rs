@@ -1291,4 +1291,20 @@ mod tests {
         let ln_one_tiny = bc_ln(&one_tiny, scale);
         assert_eq!(ln_one_tiny.coeff, BigInt::from(999)); // ln(1.001) = 0.000999
     }
+
+    #[test]
+    fn test_transcendental_zero_scale_guard_precision() {
+        let zero = BCNum::from_string("0", 10);
+        let one = BCNum::from_string("1", 10);
+        let two = BCNum::from_string("2", 10);
+        let three = BCNum::from_string("3", 10);
+
+        // Under global_scale = 0 and x.scale = 0, guard precision (+15) ensures accurate scale 0 integer results
+        assert_eq!(bc_sin(&one, 0).coeff, BigInt::from(0)); // sin(1) ~ 0.8414 -> 0
+        assert_eq!(bc_cos(&one, 0).coeff, BigInt::from(0)); // cos(1) ~ 0.5403 -> 0
+        assert_eq!(bc_atan(&two, 0).coeff, BigInt::from(1)); // atan(2) ~ 1.1071 -> 1
+        assert_eq!(bc_ln(&three, 0).coeff, BigInt::from(1)); // ln(3) ~ 1.0986 -> 1
+        assert_eq!(bc_exp(&one, 0).coeff, BigInt::from(2)); // exp(1) ~ 2.7182 -> 2
+        assert_eq!(bc_bessel(&zero, &one, 0).coeff, BigInt::from(0)); // J_0(1) ~ 0.7651 -> 0
+    }
 }
