@@ -1372,4 +1372,24 @@ mod tests {
         let stmts_args = parser_args.parse_program();
         assert_eq!(stmts_args.len(), 1);
     }
+
+    #[test]
+    fn test_multi_array_parameter_call_parsing() {
+        let mut parser_arrays = Parser::new(Lexer::new("f(x[], y[], z[])"));
+        let stmts = parser_arrays.parse_program();
+        assert_eq!(stmts.len(), 1);
+        let call_stmt = match &stmts[0] {
+            Stmt::Block(inner) => &inner[0],
+            other => other,
+        };
+        if let Stmt::Expr(Expr::Call(name, args)) = call_stmt {
+            assert_eq!(name, "f");
+            assert_eq!(args.len(), 3);
+            assert_eq!(args[0], ExprOrArray::ArrayArg("x".to_string()));
+            assert_eq!(args[1], ExprOrArray::ArrayArg("y".to_string()));
+            assert_eq!(args[2], ExprOrArray::ArrayArg("z".to_string()));
+        } else {
+            panic!("Expected Call statement with array parameters");
+        }
+    }
 }
