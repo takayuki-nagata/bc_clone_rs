@@ -741,12 +741,20 @@ mod tests {
         let res_unary = evaluator.evaluate(&node_unary);
         assert_eq!(res_unary.coeff, BigInt::from(5));
 
-        // 6. Assign single non-hex char to ibase (line 201)
+        // 6. Assign single non-hex char to ibase and obase
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
             Box::new(Expr::RegisterAccess("ibase".to_string())),
             Box::new(Expr::Number("Z".to_string())),
         )));
+        assert_eq!(evaluator.ibase, 2);
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::Number("Z".to_string())),
+        )));
+        assert_eq!(evaluator.obase, 2);
 
         // 7. Unreachable AssignOp fallback (line 223)
         let node_assign = Expr::AssignOp(
