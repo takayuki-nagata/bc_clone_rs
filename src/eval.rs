@@ -1565,4 +1565,71 @@ mod tests {
         let scale_res = evaluator.evaluate(&Expr::RegisterAccess("scale".to_string()));
         assert_eq!(scale_res.coeff, BigInt::from(4));
     }
+
+    #[test]
+    fn test_hex_base_assignment_obase_clamping_and_fractional_index() {
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter {
+            buf: stdout_buf.clone(),
+        };
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+
+        // 1. Single character hex base assignment (ibase = A -> 10, ibase = F -> 15)
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::Number("A".to_string())),
+        )));
+        assert_eq!(evaluator.ibase, 10);
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::Number("F".to_string())),
+        )));
+        assert_eq!(evaluator.ibase, 15);
+
+        // Reset ibase back to 10
+        evaluator.ibase = 10;
+
+        // 2. obase min clamping (obase < 2 -> 2)
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::Number("0".to_string())),
+        )));
+        assert_eq!(evaluator.obase, 2);
+
+        // 3. Fractional array index truncation (a[2.7] = 42 -> a[2] == 42)
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::ArrayAccess(
+                "a".to_string(),
+                Box::new(Expr::Number("2.7".to_string())),
+            )),
+            Box::new(Expr::Number("42".to_string())),
+        )));
+
+        let arr_val = evaluator.evaluate(&Expr::ArrayAccess(
+            "a".to_string(),
+            Box::new(Expr::Number("2".to_string())),
+        ));
+        assert_eq!(arr_val.coeff, BigInt::from(42));
+
+        // 4. Block execution break on quit_flag
+        evaluator.execute(&Stmt::Block(vec![
+            Stmt::Quit,
+            Stmt::Expr(Expr::AssignOp(
+                "=".to_string(),
+                Box::new(Expr::Variable("stopped".to_string())),
+                Box::new(Expr::Number("1".to_string())),
+            )),
+        ]));
+        let stopped_var = evaluator.evaluate(&Expr::Variable("stopped".to_string()));
+        assert_eq!(stopped_var.coeff, BigInt::from(0));
+    }
 }
