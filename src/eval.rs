@@ -1511,4 +1511,58 @@ mod tests {
         }));
         assert!(wrapped.flush().is_ok());
     }
+
+    #[test]
+    fn test_relational_op_scale_normalization_and_register_scopes() {
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter {
+            buf: stdout_buf.clone(),
+        };
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+
+        // 1. Relational Ops with scale_left < scale_right (diff < 0)
+        let expr_eq_lt = Expr::RelationalOp(
+            "==".to_string(),
+            Box::new(Expr::Number("1.5".to_string())), // scale 1
+            Box::new(Expr::Number("1.500".to_string())), // scale 3
+        );
+        assert_eq!(evaluator.evaluate(&expr_eq_lt).coeff, BigInt::from(1));
+
+        let expr_lt = Expr::RelationalOp(
+            "<".to_string(),
+            Box::new(Expr::Number("1.5".to_string())), // scale 1
+            Box::new(Expr::Number("1.501".to_string())), // scale 3
+        );
+        assert_eq!(evaluator.evaluate(&expr_lt).coeff, BigInt::from(1));
+
+        let expr_gt = Expr::RelationalOp(
+            ">".to_string(),
+            Box::new(Expr::Number("1.5".to_string())), // scale 1
+            Box::new(Expr::Number("1.499".to_string())), // scale 3
+        );
+        assert_eq!(evaluator.evaluate(&expr_gt).coeff, BigInt::from(1));
+
+        // 2. Relational Ops with scale_left > scale_right (diff > 0)
+        let expr_eq_gt = Expr::RelationalOp(
+            "==".to_string(),
+            Box::new(Expr::Number("1.500".to_string())), // scale 3
+            Box::new(Expr::Number("1.5".to_string())),   // scale 1
+        );
+        assert_eq!(evaluator.evaluate(&expr_eq_gt).coeff, BigInt::from(1));
+
+        // 3. Register access for scale
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("scale".to_string())),
+            Box::new(Expr::Number("4".to_string())),
+        )));
+        assert_eq!(evaluator.scale, 4);
+
+        let scale_res = evaluator.evaluate(&Expr::RegisterAccess("scale".to_string()));
+        assert_eq!(scale_res.coeff, BigInt::from(4));
+    }
 }

@@ -1227,4 +1227,43 @@ mod tests {
         let leading_zeros = BCNum::from_string("007", 10);
         assert_eq!(leading_zeros.coeff, BigInt::from(7));
     }
+
+    #[test]
+    fn test_trig_modulo_ranges_atan_inversion_and_fractional_ln() {
+        let scale = 6;
+
+        // 1. Trig in range (pi, 2pi): x = 4.5 and x = -4.5
+        let x_pi_2pi = BCNum::from_string("4.5", 10);
+        let x_neg_pi_2pi = BCNum::new(BigInt::from(-45), 1);
+        let s_45 = bc_sin(&x_pi_2pi, scale);
+        let c_45 = bc_cos(&x_pi_2pi, scale);
+        let s_neg45 = bc_sin(&x_neg_pi_2pi, scale);
+        let c_neg45 = bc_cos(&x_neg_pi_2pi, scale);
+        assert_eq!(s_neg45.coeff, -s_45.coeff);
+        assert_eq!(c_neg45.coeff, c_45.coeff);
+
+        // 2. atan(x) for x > 1 (3.5), x = 0, and x < -1 (-3.5)
+        let zero = BCNum::from_string("0", 10);
+        let atan_zero = bc_atan(&zero, scale);
+        assert_eq!(atan_zero.coeff, BigInt::from(0));
+
+        let x_gt1 = BCNum::from_string("3.5", 10);
+        let x_lt_neg1 = BCNum::new(BigInt::from(-35), 1);
+
+        let atan_gt1 = bc_atan(&x_gt1, scale);
+        let atan_lt_neg1 = bc_atan(&x_lt_neg1, scale);
+        assert_eq!(atan_lt_neg1.coeff, -atan_gt1.coeff);
+
+        // 3. ln(x) for fractional x < 1 (0.5, 0.1, 0.01)
+        let p5 = BCNum::from_string("0.5", 10);
+        let p1 = BCNum::from_string("0.1", 10);
+        let ln_p5 = bc_ln(&p5, scale);
+        let ln_p1 = bc_ln(&p1, scale);
+        assert_eq!(ln_p5.coeff, BigInt::from(-693_147)); // ln(0.5) = -0.693147
+        assert_eq!(ln_p1.coeff, BigInt::from(-2_302_585)); // ln(0.1) = -2.302585
+
+        // exp(ln(0.5)) == 0.5
+        let exp_ln_p5 = bc_exp(&ln_p5, scale);
+        assert_eq!(exp_ln_p5.coeff, BigInt::from(500_000));
+    }
 }
