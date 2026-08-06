@@ -59,8 +59,15 @@ jobs:
       - name: Run Diff-based Mutation Testing (Push)
         if: github.event_name == 'push'
         run: |
-          git diff HEAD~1..HEAD > push.diff
+          BEFORE="${{ github.event.before }}"
+          IF_NULL="0000000000000000000000000000000000000000"
+          if [ "$BEFORE" = "$IF_NULL" ] || [ -z "$BEFORE" ]; then
+            git diff HEAD~1..HEAD > push.diff
+          else
+            git diff $BEFORE..HEAD > push.diff
+          fi
           cargo mutants --in-diff push.diff
+
 
 
 
