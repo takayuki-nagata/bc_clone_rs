@@ -1389,4 +1389,82 @@ mod tests {
             assert_eq!(hit == BigInt::from(1), expected);
         }
     }
+
+    #[test]
+    fn test_evaluator_compound_assignment_scale_and_scoping() {
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter {
+            buf: stdout_buf.clone(),
+        };
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+
+        // 1. Compound assignment scale propagation
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("scale".to_string())),
+            Box::new(Expr::Number("4".to_string())),
+        )));
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::Variable("x".to_string())),
+            Box::new(Expr::Number("5.5".to_string())),
+        )));
+
+        // x += 1.25 -> 6.75 (max scale = 2)
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "+=".to_string(),
+            Box::new(Expr::Variable("x".to_string())),
+            Box::new(Expr::Number("1.25".to_string())),
+        )));
+        let x_add = evaluator.evaluate(&Expr::Variable("x".to_string()));
+        assert_eq!(x_add.coeff, BigInt::from(675));
+        assert_eq!(x_add.scale, 2);
+
+        // x /= 2 -> 3.3750
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "/=".to_string(),
+            Box::new(Expr::Variable("x".to_string())),
+            Box::new(Expr::Number("2".to_string())),
+        )));
+        let x_div = evaluator.evaluate(&Expr::Variable("x".to_string()));
+        assert_eq!(x_div.coeff, BigInt::from(33750));
+        assert_eq!(x_div.scale, 4);
+
+        // 2. Dynamic Scope & Auto Variable Stack
+        let f_def = FunctionDef {
+            name: "test_fn".to_string(),
+            params: vec![Param {
+                name: "param1".to_string(),
+                is_array: false,
+            }],
+            autos: vec![Param {
+                name: "auto1".to_string(),
+                is_array: false,
+            }],
+            body: vec![
+                Stmt::Expr(Expr::AssignOp(
+                    "=".to_string(),
+                    Box::new(Expr::Variable("auto1".to_string())),
+                    Box::new(Expr::Number("99".to_string())),
+                )),
+                Stmt::Return(Some(Expr::Variable("auto1".to_string()))),
+            ],
+        };
+        evaluator.functions.insert("test_fn".to_string(), f_def);
+
+        let call_res = evaluator.evaluate(&Expr::Call(
+            "test_fn".to_string(),
+            vec![ExprOrArray::Expr(Expr::Number("10".to_string()))],
+        ));
+        assert_eq!(call_res.coeff, BigInt::from(99));
+
+        // After call, auto1 is restored to 0
+        let auto1_after = evaluator.evaluate(&Expr::Variable("auto1".to_string()));
+        assert_eq!(auto1_after.coeff, BigInt::from(0));
+    }
 }
