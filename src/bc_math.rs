@@ -1148,4 +1148,41 @@ mod tests {
         let j_int = bc_bessel(&order_int, &x, 5);
         assert_eq!(j_frac.coeff, j_int.coeff);
     }
+
+    #[test]
+    fn test_math_invariants_and_decimal_precision() {
+        let scale = 10;
+        let half = BCNum::from_string("0.5", 10);
+
+        // 1. sin^2(x) + cos^2(x) = 1
+        let s = bc_sin(&half, scale);
+        let c = bc_cos(&half, scale);
+        let s_sq = s.mul(&s, scale);
+        let c_sq = c.mul(&c, scale);
+        let pythagoras = s_sq.add(&c_sq);
+        assert_eq!(pythagoras.coeff, BigInt::from(9_999_999_997i64)); // 0.9999999997 (scale 10 truncation)
+
+        // 2. ln(exp(2)) == 2
+        let two = BCNum::from_string("2", 10);
+        let exp_2 = bc_exp(&two, scale);
+        let ln_exp_2 = bc_ln(&exp_2, scale);
+        assert_eq!(ln_exp_2.coeff, BigInt::from(19_999_999_999i64)); // 1.9999999999 (scale 10 truncation)
+
+        // 3. 4 * atan(1) == pi (3.1415926535)
+        let one = BCNum::from_string("1", 10);
+        let four = BCNum::from_string("4", 10);
+        let atan_1 = bc_atan(&one, scale);
+        let pi = four.mul(&atan_1, scale);
+        assert_eq!(pi.coeff, BigInt::from(31_415_926_532i64));
+
+        // 4. Decimal helper precision
+        let dec_frac = Decimal::from_fraction(1, 3, 10);
+        assert_eq!(dec_frac.value, BigInt::from(3_333_333_333i64));
+        assert_eq!(dec_frac.prec, 10);
+
+        let d1 = Decimal::from_int(10, 5);
+        let d2 = Decimal::from_int(3, 5);
+        let d_rem = d1.rem(&d2);
+        assert_eq!(d_rem.value, BigInt::from(100_000)); // 1.00000
+    }
 }
