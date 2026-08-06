@@ -1352,4 +1352,24 @@ mod tests {
             panic!("Expected Call statement");
         }
     }
+
+    #[test]
+    fn test_lexer_token_boundaries_and_comment_transitions() {
+        // 1. Comment-to-token transition scanning
+        let mut lexer_comment = Lexer::new("/* comment */ x = 5");
+        let tok1 = lexer_comment.get_next_token();
+        assert_eq!(tok1.token_type, TokenType::Letter);
+        assert_eq!(tok1.value, "x");
+
+        // 2. Minus operator vs negative numbers
+        let mut lexer_minus = Lexer::new("x - 5");
+        let _ = lexer_minus.get_next_token(); // x
+        let tok_op = lexer_minus.get_next_token(); // -
+        assert_eq!(tok_op.token_type, TokenType::Minus);
+
+        // 3. Argument list parsing with multiple expressions
+        let mut parser_args = Parser::new(Lexer::new("f(1 + 2, 3 * 4)"));
+        let stmts_args = parser_args.parse_program();
+        assert_eq!(stmts_args.len(), 1);
+    }
 }
