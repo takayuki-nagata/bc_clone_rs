@@ -1467,4 +1467,48 @@ mod tests {
         let auto1_after = evaluator.evaluate(&Expr::Variable("auto1".to_string()));
         assert_eq!(auto1_after.coeff, BigInt::from(0));
     }
+
+    #[test]
+    fn test_unary_op_scale_preservation_and_assign_registers() {
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter {
+            buf: stdout_buf.clone(),
+        };
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+
+        // 1. Unary plus and unary minus scale preservation
+        let num_expr = Box::new(Expr::Number("5.25".to_string()));
+        let uplus = evaluator.evaluate(&Expr::UnaryOp('+', num_expr.clone()));
+        assert_eq!(uplus.coeff, BigInt::from(525));
+        assert_eq!(uplus.scale, 2);
+
+        let uminus = evaluator.evaluate(&Expr::UnaryOp('-', num_expr));
+        assert_eq!(uminus.coeff, BigInt::from(-525));
+        assert_eq!(uminus.scale, 2);
+
+        // 2. Register assignments to ibase and obase
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::Number("10".to_string())),
+        )));
+        assert_eq!(evaluator.obase, 10);
+
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::Number("16".to_string())),
+        )));
+        assert_eq!(evaluator.ibase, 16);
+
+        // 3. WrappedStdout flush
+        let mut wrapped = WrappedStdout::new(Box::new(TestWriter {
+            buf: stdout_buf.clone(),
+        }));
+        assert!(wrapped.flush().is_ok());
+    }
 }
