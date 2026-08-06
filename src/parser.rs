@@ -1301,4 +1301,55 @@ mod tests {
         assert_eq!(tok_num_crlf.token_type, TokenType::Number);
         assert_eq!(tok_num_crlf.value, "123456");
     }
+
+    #[test]
+    fn test_parser_precedence_associativity_and_bare_return() {
+        // 1. Right-associativity of exponentiation operator '^'
+        let mut parser_pow = Parser::new(Lexer::new("2^3^2"));
+        let stmts_pow = parser_pow.parse_program();
+        assert_eq!(stmts_pow.len(), 1);
+        let target_stmt = match &stmts_pow[0] {
+            Stmt::Block(inner) => &inner[0],
+            other => other,
+        };
+        if let Stmt::Expr(Expr::BinaryOp(op1, left1, right1)) = target_stmt {
+            assert_eq!(op1, "^");
+            assert_eq!(**left1, Expr::Number("2".to_string()));
+            if let Expr::BinaryOp(op2, left2, right2) = &**right1 {
+                assert_eq!(op2, "^");
+                assert_eq!(**left2, Expr::Number("3".to_string()));
+                assert_eq!(**right2, Expr::Number("2".to_string()));
+            } else {
+                panic!("Expected right-associative nested exponentiation");
+            }
+        } else {
+            panic!("Expected BinaryOp statement");
+        }
+
+        // 2. Bare GNU return statement parsing
+        let mut parser_ret = Parser::new(Lexer::new("define f() { return }"));
+        let stmts_ret = parser_ret.parse_program();
+        assert_eq!(stmts_ret.len(), 1);
+        if let Stmt::FunctionDef(fdef) = &stmts_ret[0] {
+            assert_eq!(fdef.body.len(), 1);
+            assert_eq!(fdef.body[0], Stmt::Return(None));
+        } else {
+            panic!("Expected FunctionDef statement");
+        }
+
+        // 3. Multi-argument call with array and expression arguments
+        let mut parser_call = Parser::new(Lexer::new("f(1, a[], 3)"));
+        let stmts_call = parser_call.parse_program();
+        assert_eq!(stmts_call.len(), 1);
+        let call_stmt = match &stmts_call[0] {
+            Stmt::Block(inner) => &inner[0],
+            other => other,
+        };
+        if let Stmt::Expr(Expr::Call(name, args)) = call_stmt {
+            assert_eq!(name, "f");
+            assert_eq!(args.len(), 3);
+        } else {
+            panic!("Expected Call statement");
+        }
+    }
 }
