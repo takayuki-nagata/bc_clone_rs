@@ -1,10 +1,11 @@
 # Configuration for cargo-mutants
 # https://mutants.rs/config.html
 
-# Cap minimum test timeout to 2 seconds for fast detection of infinite loop mutants
-minimum_test_timeout = 2
-timeout_multiplier = 1.5
+# Balanced timeout configuration: allow transcendental math loops to finish while capping infinite loops
+minimum_test_timeout = 5
+timeout_multiplier = 2.0
 
 # Command used to run tests
 test_tool = "cargo"
+
 
