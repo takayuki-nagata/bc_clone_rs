@@ -1649,4 +1649,27 @@ mod tests {
         let stopped_var = evaluator.evaluate(&Expr::Variable("stopped".to_string()));
         assert_eq!(stopped_var.coeff, BigInt::from(0));
     }
+
+    #[test]
+    fn test_return_inside_while_and_for_loops() {
+        let mut evaluator = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let mut parser_while = Parser::new(Lexer::new(
+            "define f_while() { i = 0; while (i < 10) { i = i + 1; return (i); }; return (999); }; f_while()",
+        ));
+        for stmt in parser_while.parse_program() {
+            evaluator.execute(&stmt);
+        }
+        let res_while = evaluator.evaluate(&Expr::Variable("i".to_string()));
+        assert_eq!(res_while.coeff, BigInt::from(1));
+
+        let mut evaluator_for = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let mut parser_for = Parser::new(Lexer::new(
+            "define f_for() { for (i = 0; i < 10; i = i + 1) { return (i + 1); }; return (999); }; f_for()",
+        ));
+        for stmt in parser_for.parse_program() {
+            evaluator_for.execute(&stmt);
+        }
+        let res_for = evaluator_for.evaluate(&Expr::Variable("i".to_string()));
+        assert_eq!(res_for.coeff, BigInt::from(0));
+    }
 }

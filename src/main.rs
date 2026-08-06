@@ -992,4 +992,16 @@ mod tests {
         assert!(!is_block_incomplete("\"str \\\n\" a = 1\n"));
         assert!(!is_block_incomplete("\"str \\\r\n\" a = 1\n"));
     }
+
+    #[test]
+    fn test_offset_comment_and_string_brace_counting() {
+        // Non-zero index offsets for comment and string skips (kills += vs *= mutants)
+        assert_eq!(count_open_braces("abc/* */{"), 1);
+        assert_eq!(count_open_braces("\"0123\\\n{\""), 0);
+        assert_eq!(count_open_braces("\"0123\\\r\n{\""), 0);
+
+        assert!(is_block_incomplete("abc/* */{"));
+        assert!(is_block_incomplete("\"0123\\\n"));
+        assert!(is_block_incomplete("\"0123\\\r\n"));
+    }
 }
