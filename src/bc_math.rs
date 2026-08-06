@@ -1185,4 +1185,46 @@ mod tests {
         let d_rem = d1.rem(&d2);
         assert_eq!(d_rem.value, BigInt::from(100_000)); // 1.00000
     }
+
+    #[test]
+    fn test_large_angle_trig_reduction_and_obase_formatting() {
+        let scale = 6;
+        let x_large = BCNum::from_string("100", 10);
+        let x_neg_large = BCNum::new(BigInt::from(-15), 0);
+
+        // 1. Large angle reduction sin(100) and cos(100)
+        let s100 = bc_sin(&x_large, scale);
+        let c100 = bc_cos(&x_large, scale);
+        let s100_sq = s100.mul(&s100, scale);
+        let c100_sq = c100.mul(&c100, scale);
+        let pyth100 = s100_sq.add(&c100_sq);
+        assert_eq!(pyth100.coeff, BigInt::from(999_997)); // ~0.999997 (scale 6 truncation)
+
+        // Negative angle reduction sin(-15) == -sin(15)
+        let x15 = BCNum::from_string("15", 10);
+        let s_pos15 = bc_sin(&x15, scale);
+        let s_neg15 = bc_sin(&x_neg_large, scale);
+        assert_eq!(s_neg15.coeff, -s_pos15.coeff);
+
+        // 2. Format obase variations (base 2, 8, 16, 100)
+        let ten = BCNum::from_string("10", 10);
+        assert_eq!(ten.format_obase(2), "1010");
+
+        let sixty_four = BCNum::from_string("64", 10);
+        assert_eq!(sixty_four.format_obase(8), "100");
+
+        let ff = BCNum::from_string("255", 10);
+        assert_eq!(ff.format_obase(16), "FF");
+
+        let hundred = BCNum::from_string("250", 10);
+        assert_eq!(hundred.format_obase(100), " 02 50");
+
+        // 3. String parsing edge cases (.5, 007)
+        let dot_five = BCNum::from_string(".5", 10);
+        assert_eq!(dot_five.coeff, BigInt::from(5));
+        assert_eq!(dot_five.scale, 1);
+
+        let leading_zeros = BCNum::from_string("007", 10);
+        assert_eq!(leading_zeros.coeff, BigInt::from(7));
+    }
 }
