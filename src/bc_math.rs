@@ -1266,4 +1266,29 @@ mod tests {
         let exp_ln_p5 = bc_exp(&ln_p5, scale);
         assert_eq!(exp_ln_p5.coeff, BigInt::from(500_000));
     }
+
+    #[test]
+    fn test_small_argument_bessel_and_exponential_series_boundaries() {
+        let scale = 6;
+        let zero = BCNum::from_string("0", 10);
+        let p1 = BCNum::from_string("0.1", 10);
+
+        // 1. Bessel J_0(0.1) and J_1(0.1)
+        let j0 = bc_bessel(&zero, &p1, scale);
+        let one = BCNum::from_string("1", 10);
+        let j1 = bc_bessel(&one, &p1, scale);
+        assert_eq!(j0.coeff, BigInt::from(997_501)); // J_0(0.1) = 0.997501
+
+        assert_eq!(j1.coeff, BigInt::from(49_937)); // J_1(0.1) = 0.049937
+
+        // 2. Exponential near zero e(0.001)
+        let tiny = BCNum::from_string("0.001", 10);
+        let exp_tiny = bc_exp(&tiny, scale);
+        assert_eq!(exp_tiny.coeff, BigInt::from(1_001_000)); // e(0.001) = 1.001000
+
+        // 3. Natural log near 1 l(1.001)
+        let one_tiny = BCNum::from_string("1.001", 10);
+        let ln_one_tiny = bc_ln(&one_tiny, scale);
+        assert_eq!(ln_one_tiny.coeff, BigInt::from(999)); // ln(1.001) = 0.000999
+    }
 }
