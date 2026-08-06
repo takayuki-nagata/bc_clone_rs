@@ -756,6 +756,15 @@ mod tests {
         )));
         assert_eq!(evaluator.obase, 2);
 
+        // Assign single non-hex char to variable (distinguishes is_base_reg && op == "=" from ||)
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::Variable("var_g".to_string())),
+            Box::new(Expr::Number("G".to_string())),
+        )));
+        let var_g = evaluator.evaluate(&Expr::Variable("var_g".to_string()));
+        assert_eq!(var_g.coeff, BigInt::from(16));
+
         // 7. Unreachable AssignOp fallback (line 223)
         let node_assign = Expr::AssignOp(
             "dummy=".to_string(),
