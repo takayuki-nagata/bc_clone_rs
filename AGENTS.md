@@ -99,3 +99,11 @@ In POSIX `bc`, functions execute with dynamic scoping. If a function call panics
 To guarantee high test quality and ensure all code paths have meaningful assertions, `bc_clone` incorporates mutation testing using `cargo-mutants`.
 - **Configured Timeout Multiplier**: `.cargo/mutants.toml` defines a timeout multiplier of 3.0 to accommodate deep mathematical calculations during mutation test runs.
 - **CI Integration**: In `.github/workflows/ci.yml`, `cargo mutants --in-diff` executes on PR diffs to ensure newly added or modified lines are covered by tests that catch artificial mutations.
+
+### 6. Strict Pre-Commit Verification Workflow
+To prevent CI breakage (such as formatting mismatches or clippy warnings), AI agents MUST run full local verification before creating git commits:
+```bash
+cargo fmt --check && cargo clippy -- -D warnings && cargo test
+```
+No changes should be committed until formatting, lints, and test suites pass with 100% success locally.
+
