@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Differential E2E integration tests comparing the bc_clone binary to the system bc utility.
 
 use std::io::Write;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! CLI entry point, POSIX option parsing, and REPL runner for the bc clone.
 //!
 //! Handles manual option checking, standard TTY/non-TTY execution paths,

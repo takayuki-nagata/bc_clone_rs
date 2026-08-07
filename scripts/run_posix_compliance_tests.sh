@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 set -e
 
 # Script to perform differential POSIX IEEE Std 1003.1 compliance testing against bc_clone.

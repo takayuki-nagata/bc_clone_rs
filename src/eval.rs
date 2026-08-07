@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Tree-walking AST evaluator and dynamic scope manager for the bc clone.
 //!
 //! Complies with POSIX bc specifications for registers, arrays, function definitions,

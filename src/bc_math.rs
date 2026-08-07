@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Arbitrary-precision decimal math library for bc.
 //!
 //! Provides the core `BCNum` type representing decimal numbers as integer

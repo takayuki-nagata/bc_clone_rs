@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
 set -e
 
 # Script to fetch official GNU bc reference test suite (latest release 1.08.2) and perform differential E2E testing against bc_clone.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Lexer, Parser, and Abstract Syntax Tree (AST) definitions for the bc clone.
 //!
 //! Conforms to standard POSIX bc lexical and syntax grammar rules, supporting
