@@ -37,7 +37,11 @@ jobs:
       - name: Run Tests with Coverage
         run: cargo llvm-cov --all-targets --fail-under-lines 98 --lcov --output-path lcov.info
 
+      - name: Run Official GNU bc Reference Test Suite
+        run: bash scripts/run_gnu_reference_tests.sh
+
       - name: Install cargo-audit
+
         uses: taiki-e/install-action@cargo-audit
 
       - name: Run cargo-audit
