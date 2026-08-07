@@ -40,6 +40,10 @@ jobs:
       - name: Run Official GNU bc Reference Test Suite
         run: bash scripts/run_gnu_reference_tests.sh
 
+      - name: Run POSIX IEEE Std 1003.1 Compliance Test Suite
+        run: bash scripts/run_posix_compliance_tests.sh
+
+
       - name: Install cargo-audit
 
         uses: taiki-e/install-action@cargo-audit
