@@ -1307,4 +1307,11 @@ mod tests {
         assert_eq!(bc_exp(&one, 0).coeff, BigInt::from(2)); // exp(1) ~ 2.7182 -> 2
         assert_eq!(bc_bessel(&zero, &one, 0).coeff, BigInt::from(0)); // J_0(1) ~ 0.7651 -> 0
     }
+
+    #[test]
+    fn test_obase_power_of_ten_digit_padding_width() {
+        let num = BCNum::from_string("0.05", 10);
+        let str_100 = num.format_obase(100);
+        assert_eq!(str_100, ".05");
+    }
 }
