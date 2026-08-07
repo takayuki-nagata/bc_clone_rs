@@ -1,5 +1,10 @@
 # bc_clone
 
+[![CI](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/ci.yml/badge.svg)](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/ci.yml)
+[![Release](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/release.yml/badge.svg)](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/release.yml)
+[![Version](https://img.shields.io/badge/version-v0.2.0-blue.svg)](https://github.com/takayuki-nagata/bc_clone_rs/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A production-grade, POSIX-compliant arbitrary-precision calculator implemented in pure, idiomatic Rust. This project is a complete rewrite/reimplementation of the original Python-based `bc_clone_py`.
 
 > [!NOTE]
