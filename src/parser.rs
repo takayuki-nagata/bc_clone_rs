@@ -1460,5 +1460,11 @@ mod tests {
         let tok_str = lexer_str.get_next_token();
         assert_eq!(tok_str.token_type, TokenType::String);
         assert_eq!(tok_str.value, "abc+\n");
+
+        // String token with unescaped CRLF (kills == vs != mutants on line 416)
+        let mut lexer_raw_crlf = Lexer::new("\"a\r\nb\"");
+        let tok_raw_crlf = lexer_raw_crlf.get_next_token();
+        assert_eq!(tok_raw_crlf.token_type, TokenType::String);
+        assert_eq!(tok_raw_crlf.value, "a\r\nb");
     }
 }
