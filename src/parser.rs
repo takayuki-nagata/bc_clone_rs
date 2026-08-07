@@ -1446,4 +1446,19 @@ mod tests {
         });
         assert!(panic_dot.is_err());
     }
+
+    #[test]
+    fn test_number_and_string_scan_token_crlf_short_circuit_precedence() {
+        // Number token ending before newline: 123+\n
+        let mut lexer_num = Lexer::new("123+\n");
+        let tok_num = lexer_num.get_next_token();
+        assert_eq!(tok_num.token_type, TokenType::Number);
+        assert_eq!(tok_num.value, "123");
+
+        // String token with plus newline: "abc+\n"
+        let mut lexer_str = Lexer::new("\"abc+\n\"");
+        let tok_str = lexer_str.get_next_token();
+        assert_eq!(tok_str.token_type, TokenType::String);
+        assert_eq!(tok_str.value, "abc+\n");
+    }
 }
