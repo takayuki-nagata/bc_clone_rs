@@ -113,5 +113,10 @@ No changes should be committed until formatting, lints, and test suites pass wit
 - **GNU bc 1.08.2 Reference Test Runner**: `scripts/run_gnu_reference_tests.sh` dynamically fetches the official GNU `bc 1.08.2` reference tests (`BUG.bc`, `array.b`, `atan.b`, `div.b`, `exp.b`, `fact.b`, `jn.b`, `ln.b`, `mul.b`, `raise.b`, `sine.b`, `sqrt.b`, `sqrt1.b`, `sqrt2.b`, `testfn.b`, `signum`) and validates 100% output parity.
 - **Excluded Non-Standard Extensions**: Non-standard GNU pointer extension tests (`arrayp.b` and `aryprm.b` using `*a[]` syntax) and scale-60 micro-rounding checks (`checklib.b`) are excluded as they test non-standard parser extensions or intermediate limb rounding artifacts.
 
+### 8. POSIX IEEE Std 1003.1 Compliance Test Suite
+- **Automated POSIX Conformance Verification**: `scripts/run_posix_compliance_tests.sh` evaluates `bc_clone` against standard `bc` across 20 strict POSIX IEEE Std 1003.1 specification test cases.
+- **CI Integration**: Executed automatically on every push and pull request in `.github/workflows/ci.yml` to guarantee zero regressions in POSIX standard compliance.
+
+
 
 

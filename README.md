@@ -118,11 +118,26 @@ cargo clippy -- -D warnings
 
 ### Running Tests
 
-We implement both unit tests (78 tests embedded in modules) and E2E differential integration tests (26 tests in `tests/integration_tests.rs`). E2E integration tests execute the compiled `bc_clone` binary and perform differential testing against the system `bc` utility (GNU `bc`) in standard mode, verifying identical outputs across complex arithmetic, control flow, functions, and the math library (`-l`):
+We implement unit tests (78 tests embedded in modules), E2E differential integration tests (26 tests in `tests/integration_tests.rs`), official GNU `bc` 1.08.2 reference test suite validation (`scripts/run_gnu_reference_tests.sh`), and POSIX IEEE Std 1003.1 compliance test suite validation (`scripts/run_posix_compliance_tests.sh`).
+
+To run standard unit and integration tests:
 
 ```bash
 cargo test
 ```
+
+To run the official GNU `bc 1.08.2` reference test suite:
+
+```bash
+bash scripts/run_gnu_reference_tests.sh
+```
+
+To run the POSIX IEEE Std 1003.1 compliance test suite:
+
+```bash
+bash scripts/run_posix_compliance_tests.sh
+```
+
 
 
 ### Coverage Measurement
