@@ -1466,5 +1466,17 @@ mod tests {
         let tok_raw_crlf = lexer_raw_crlf.get_next_token();
         assert_eq!(tok_raw_crlf.token_type, TokenType::String);
         assert_eq!(tok_raw_crlf.value, "a\r\nb");
+
+        // Non-dot identifier followed by digit: x5 (kills == vs != on line 435)
+        let mut lexer_x5 = Lexer::new("x5");
+        let tok_x5 = lexer_x5.get_next_token();
+        assert_eq!(tok_x5.token_type, TokenType::Letter);
+        assert_eq!(tok_x5.value, "x5");
+
+        // Number token followed by space plus newline: 123 + \n (kills && vs || on line 449)
+        let mut lexer_num_space = Lexer::new("123 + \n");
+        let tok_num_space = lexer_num_space.get_next_token();
+        assert_eq!(tok_num_space.token_type, TokenType::Number);
+        assert_eq!(tok_num_space.value, "123");
     }
 }
