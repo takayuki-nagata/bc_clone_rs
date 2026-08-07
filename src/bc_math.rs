@@ -831,8 +831,9 @@ pub fn bc_exp(x: &BCNum, global_scale: usize) -> BCNum {
     };
     // e^x has approx (0.44 * x) integer digits. Add extra guard precision
     // so large exponents retain all integer digits and fractional precision.
-    let extra_prec = int_approx * 44 / 100;
+    let extra_prec = (int_approx * 11) / 25;
     let prec = std::cmp::max(x.scale, global_scale) + extra_prec + 15;
+
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_exp(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
