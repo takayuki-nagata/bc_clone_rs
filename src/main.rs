@@ -616,6 +616,27 @@ mod tests {
     }
 
     #[test]
+    fn test_handle_panic_payload_extracted_line_parsing() {
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter { buf: stdout_buf };
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        handle_panic_payload(
+            Box::new("Parser error on line 42: unexpected token".to_string()),
+            "test.bc",
+            1,
+            &mut evaluator,
+            false,
+        );
+        let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
+        assert!(err.contains("syntax error on line 42"));
+        assert!(!err.contains("line 1"));
+    }
+
+    #[test]
     fn test_run_repl_ctrlc() {
         let _guard = TEST_MUTEX.lock().unwrap();
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
