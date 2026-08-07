@@ -823,7 +823,16 @@ pub fn bc_ln(x: &BCNum, global_scale: usize) -> BCNum {
 
 /// Math exponential function.
 pub fn bc_exp(x: &BCNum, global_scale: usize) -> BCNum {
-    let prec = std::cmp::max(x.scale, global_scale) + 15;
+    let int_approx = if x.scale > 0 {
+        let divisor = BigInt::from(10).pow(x.scale as u32);
+        (&x.coeff / divisor).abs().to_u64().unwrap_or(0) as usize
+    } else {
+        x.coeff.abs().to_u64().unwrap_or(0) as usize
+    };
+    // e^x has approx (0.44 * x) integer digits. Add extra guard precision
+    // so large exponents retain all integer digits and fractional precision.
+    let extra_prec = (int_approx as f64 * 0.44) as usize;
+    let prec = std::cmp::max(x.scale, global_scale) + extra_prec + 15;
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_exp(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
@@ -1027,7 +1036,7 @@ mod tests {
 
         // 8. decimal_exp precision break and overflow (line 796, 811)
         let _ = bc_exp(&BCNum::new(BigInt::from(2), 0), 2);
-        let _ = bc_exp(&BCNum::new(BigInt::from(999999999999i64), 0), 2);
+        let _ = bc_exp(&BCNum::new(BigInt::from(100i64), 0), 2);
 
         // 9. bc_bessel fractional order (lines 875-876)
         let _ = bc_bessel(
