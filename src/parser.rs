@@ -1478,5 +1478,22 @@ mod tests {
         let tok_num_space = lexer_num_space.get_next_token();
         assert_eq!(tok_num_space.token_type, TokenType::Number);
         assert_eq!(tok_num_space.value, "123");
+
+        // String token with backslash non-CRLF (kills line 416:59 and line 416:88)
+        let mut lexer_str_bs_x = Lexer::new("\"a \\x\nb\"");
+        let tok_str_bs_x = lexer_str_bs_x.get_next_token();
+        assert_eq!(tok_str_bs_x.token_type, TokenType::String);
+        assert_eq!(tok_str_bs_x.value, "a \\x\nb");
+
+        let mut lexer_str_bs_rx = Lexer::new("\"a \\\rxb\"");
+        let tok_str_bs_rx = lexer_str_bs_rx.get_next_token();
+        assert_eq!(tok_str_bs_rx.token_type, TokenType::String);
+        assert_eq!(tok_str_bs_rx.value, "a \\\rxb");
+
+        // Number token followed by backslash x newline: 123 \x\n (kills line 449:38)
+        let mut lexer_num_bs_x = Lexer::new("123 \\x\n");
+        let tok_num_bs_x = lexer_num_bs_x.get_next_token();
+        assert_eq!(tok_num_bs_x.token_type, TokenType::Number);
+        assert_eq!(tok_num_bs_x.value, "123");
     }
 }
