@@ -1637,6 +1637,21 @@ mod tests {
         ));
         assert_eq!(arr_val.coeff, BigInt::from(42));
 
+        // Fractional array index truncation in UpdateOp (++b[2.7] -> b[2] == 1)
+        evaluator.evaluate(&Expr::UpdateOp(
+            "++".to_string(),
+            true,
+            Box::new(Expr::ArrayAccess(
+                "b".to_string(),
+                Box::new(Expr::Number("2.7".to_string())),
+            )),
+        ));
+        let arr_val_b = evaluator.evaluate(&Expr::ArrayAccess(
+            "b".to_string(),
+            Box::new(Expr::Number("2".to_string())),
+        ));
+        assert_eq!(arr_val_b.coeff, BigInt::from(1));
+
         // 4. Block execution break on quit_flag
         evaluator.execute(&Stmt::Block(vec![
             Stmt::Quit,
