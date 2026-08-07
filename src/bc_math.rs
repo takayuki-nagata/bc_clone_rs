@@ -1299,12 +1299,16 @@ mod tests {
         let two = BCNum::from_string("2", 10);
         let three = BCNum::from_string("3", 10);
 
+        let ten = BCNum::from_string("10", 10);
+
         // Under global_scale = 0 and x.scale = 0, guard precision (+15) ensures accurate scale 0 integer results
         assert_eq!(bc_sin(&one, 0).coeff, BigInt::from(0)); // sin(1) ~ 0.8414 -> 0
         assert_eq!(bc_cos(&one, 0).coeff, BigInt::from(0)); // cos(1) ~ 0.5403 -> 0
         assert_eq!(bc_atan(&two, 0).coeff, BigInt::from(1)); // atan(2) ~ 1.1071 -> 1
         assert_eq!(bc_ln(&three, 0).coeff, BigInt::from(1)); // ln(3) ~ 1.0986 -> 1
         assert_eq!(bc_exp(&one, 0).coeff, BigInt::from(2)); // exp(1) ~ 2.7182 -> 2
+        assert_eq!(bc_exp(&two, 0).coeff, BigInt::from(7)); // exp(2) ~ 7.3891 -> 7 (kills +15 vs *15 in bc_exp)
+        assert_eq!(bc_ln(&ten, 0).coeff, BigInt::from(2)); // ln(10) ~ 2.3025 -> 2 (kills +15 vs *15 in bc_ln)
         assert_eq!(bc_bessel(&zero, &one, 0).coeff, BigInt::from(0)); // J_0(1) ~ 0.7651 -> 0
     }
 
