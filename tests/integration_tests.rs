@@ -592,7 +592,7 @@ fn test_real_ctrlc_signal() {
         .expect("failed to spawn");
 
     // Wait a brief moment to ensure setup_ctrlc_handler has run
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    std::thread::sleep(std::time::Duration::from_millis(800));
 
     // Send SIGINT (2) using kill command
     let pid = child.id();
