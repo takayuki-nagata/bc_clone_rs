@@ -1025,4 +1025,19 @@ mod tests {
         assert!(is_block_incomplete("\"0123\\\n"));
         assert!(is_block_incomplete("\"0123\\\r\n"));
     }
+
+    #[test]
+    fn test_string_backslash_non_crlf_and_comment_slash_boundaries() {
+        // String with backslash followed by ordinary non-CRLF character (e.g. \x)
+        assert_eq!(count_open_braces("\"a \\x\" {"), 1);
+        assert!(is_block_incomplete("\"a \\x\" {"));
+
+        // Comment ending with extra asterisks: /***/ {
+        assert_eq!(count_open_braces("/***/{"), 1);
+        assert!(is_block_incomplete("/***/{"));
+
+        // Comment with slash inside: /* / */ {
+        assert_eq!(count_open_braces("/* / */{"), 1);
+        assert!(is_block_incomplete("/* / */{"));
+    }
 }
