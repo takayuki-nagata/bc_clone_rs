@@ -1743,5 +1743,30 @@ mod tests {
         )));
         let val2 = evaluator.evaluate(&Expr::Variable("mut_var2".to_string()));
         assert_eq!(val2.coeff, BigInt::from(0));
+
+        // Block loop short-circuit when statement inside block sets return_flag or break_flag (kills line 530 mutants)
+        let mut evaluator2 = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let stmt_ret = Stmt::Return(Some(Expr::Number("10".to_string())));
+        let stmt_assign1 = Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::Variable("block_var1".to_string())),
+            Box::new(Expr::Number("99".to_string())),
+        ));
+        let block_ret = Stmt::Block(vec![stmt_ret, stmt_assign1]);
+        evaluator2.execute(&block_ret);
+        let val3 = evaluator2.evaluate(&Expr::Variable("block_var1".to_string()));
+        assert_eq!(val3.coeff, BigInt::from(0));
+
+        let mut evaluator3 = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let stmt_break = Stmt::Break;
+        let stmt_assign2 = Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::Variable("block_var2".to_string())),
+            Box::new(Expr::Number("99".to_string())),
+        ));
+        let block_break = Stmt::Block(vec![stmt_break, stmt_assign2]);
+        evaluator3.execute(&block_break);
+        let val4 = evaluator3.evaluate(&Expr::Variable("block_var2".to_string()));
+        assert_eq!(val4.coeff, BigInt::from(0));
     }
 }
