@@ -1430,4 +1430,20 @@ mod tests {
         };
         assert!(!msg.contains("Lbracket"));
     }
+
+    #[test]
+    fn test_comment_slash_in_body_and_standalone_dot_token() {
+        // 1. Comment with slash inside comment body: /* a / b */ 42
+        let mut lexer_comment = Lexer::new("/* a / b */ 42");
+        let tok_comment = lexer_comment.get_next_token();
+        assert_eq!(tok_comment.token_type, TokenType::Number);
+        assert_eq!(tok_comment.value, "42");
+
+        // 2. Standalone dot without trailing digit panics with unexpected character
+        let panic_dot = std::panic::catch_unwind(|| {
+            let mut lexer_dot = Lexer::new(". + 1");
+            let _ = lexer_dot.get_next_token();
+        });
+        assert!(panic_dot.is_err());
+    }
 }
