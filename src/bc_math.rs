@@ -831,7 +831,7 @@ pub fn bc_exp(x: &BCNum, global_scale: usize) -> BCNum {
     };
     // e^x has approx (0.44 * x) integer digits. Add extra guard precision
     // so large exponents retain all integer digits and fractional precision.
-    let extra_prec = (int_approx as f64 * 0.44) as usize;
+    let extra_prec = int_approx * 44 / 100;
     let prec = std::cmp::max(x.scale, global_scale) + extra_prec + 15;
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_exp(&dec_x, prec);
@@ -1309,6 +1309,7 @@ mod tests {
         let three = BCNum::from_string("3", 10);
 
         let ten = BCNum::from_string("10", 10);
+        let hundred = BCNum::from_string("100", 10);
 
         // Under global_scale = 0 and x.scale = 0, guard precision (+15) ensures accurate scale 0 integer results
         assert_eq!(bc_sin(&one, 0).coeff, BigInt::from(0)); // sin(1) ~ 0.8414 -> 0
@@ -1317,6 +1318,11 @@ mod tests {
         assert_eq!(bc_ln(&three, 0).coeff, BigInt::from(1)); // ln(3) ~ 1.0986 -> 1
         assert_eq!(bc_exp(&one, 0).coeff, BigInt::from(2)); // exp(1) ~ 2.7182 -> 2
         assert_eq!(bc_exp(&two, 0).coeff, BigInt::from(7)); // exp(2) ~ 7.3891 -> 7 (kills +15 vs *15 in bc_exp)
+        assert_eq!(
+            bc_exp(&hundred, 0).coeff,
+            BigInt::parse_bytes(b"26881171418161354484126255515800135873611118", 10).unwrap()
+        ); // exp(100) ~ 2.688e43 (kills int_approx * 44 / 100 mutants)
+
         assert_eq!(bc_ln(&ten, 0).coeff, BigInt::from(2)); // ln(10) ~ 2.3025 -> 2 (kills +15 vs *15 in bc_ln)
         assert_eq!(bc_bessel(&zero, &one, 0).coeff, BigInt::from(0)); // J_0(1) ~ 0.7651 -> 0
     }
