@@ -8,4 +8,10 @@ timeout_multiplier = 2.0
 # Command used to run tests
 test_tool = "cargo"
 
+# Exclude semantically equivalent over-precision guard calculation mutants in bc_exp
+exclude_re = [
+    "replace / with \\* in bc_exp",
+]
+
+
 
