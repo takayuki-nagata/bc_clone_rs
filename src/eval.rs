@@ -1721,4 +1721,27 @@ mod tests {
         let x_var = evaluator.evaluate(&Expr::Variable("x".to_string()));
         assert_eq!(x_var.coeff, BigInt::from(0));
     }
+
+    #[test]
+    fn test_execute_entry_and_block_guard_when_flags_set() {
+        let mut evaluator = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        evaluator.break_flag = true;
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::Variable("mut_var".to_string())),
+            Box::new(Expr::Number("99".to_string())),
+        )));
+        let val1 = evaluator.evaluate(&Expr::Variable("mut_var".to_string()));
+        assert_eq!(val1.coeff, BigInt::from(0));
+
+        evaluator.break_flag = false;
+        evaluator.return_flag = true;
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::Variable("mut_var2".to_string())),
+            Box::new(Expr::Number("99".to_string())),
+        )));
+        let val2 = evaluator.evaluate(&Expr::Variable("mut_var2".to_string()));
+        assert_eq!(val2.coeff, BigInt::from(0));
+    }
 }
