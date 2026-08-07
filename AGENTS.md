@@ -107,3 +107,8 @@ cargo fmt --check && cargo clippy -- -D warnings && cargo test
 ```
 No changes should be committed until formatting, lints, and test suites pass with 100% success locally.
 
+### 7. Differential E2E Integration Testing
+- **Binary-Level Differential Validation**: `tests/integration_tests.rs` compiles the `bc_clone` binary and spawns both standard `bc` (GNU `bc`) and `bc_clone` using `std::process::Command`, feeding identical inputs and verifying exact `stdout` / `stderr` / exit code parity across 26 test suites.
+- **Standard Mode Execution**: GNU `bc` is invoked without `-s` (POSIX strict warning flag), allowing the E2E suite to validate both POSIX standard arithmetic/functions and popular GNU extensions (e.g. bare `return`, assignment operators `+=`, `-=`, etc., and array parameter passing `f(a[])`).
+
+
