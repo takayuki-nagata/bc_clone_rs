@@ -6,6 +6,9 @@
 //! coefficients paired with a scale factor. Also implements transcendental
 //! functions using series expansions.
 
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive, Zero};
 
@@ -84,7 +87,7 @@ impl BCNum {
 
     /// Adds two BCNum values.
     pub fn add(&self, other: &Self) -> Self {
-        let sr = std::cmp::max(self.scale, other.scale);
+        let sr = core::cmp::max(self.scale, other.scale);
         let coeff_a = &self.coeff * BigInt::from(10).pow((sr - self.scale) as u32);
         let coeff_b = &other.coeff * BigInt::from(10).pow((sr - other.scale) as u32);
         Self::new(coeff_a + coeff_b, sr)
@@ -92,7 +95,7 @@ impl BCNum {
 
     /// Subtracts other from self.
     pub fn sub(&self, other: &Self) -> Self {
-        let sr = std::cmp::max(self.scale, other.scale);
+        let sr = core::cmp::max(self.scale, other.scale);
         let coeff_a = &self.coeff * BigInt::from(10).pow((sr - self.scale) as u32);
         let coeff_b = &other.coeff * BigInt::from(10).pow((sr - other.scale) as u32);
         Self::new(coeff_a - coeff_b, sr)
@@ -100,9 +103,9 @@ impl BCNum {
 
     /// Multiplies two BCNum values under scale.
     pub fn mul(&self, other: &Self, global_scale: usize) -> Self {
-        let sr = std::cmp::min(
+        let sr = core::cmp::min(
             self.scale + other.scale,
-            std::cmp::max(global_scale, std::cmp::max(self.scale, other.scale)),
+            core::cmp::max(global_scale, core::cmp::max(self.scale, other.scale)),
         );
         let exact_coeff = &self.coeff * &other.coeff;
         let exact_scale = self.scale + other.scale;
@@ -156,7 +159,7 @@ impl BCNum {
         if b_val > BigInt::zero() {
             let b_val_usize = b_val.to_usize().unwrap_or(usize::MAX);
             let self_scale_b = self.scale.saturating_mul(b_val_usize);
-            let sr = std::cmp::min(self_scale_b, std::cmp::max(global_scale, self.scale));
+            let sr = core::cmp::min(self_scale_b, core::cmp::max(global_scale, self.scale));
 
             let mut res_coeff = BigInt::from(1);
             let mut res_scale = 0usize;
@@ -205,7 +208,7 @@ impl BCNum {
         if self.coeff < BigInt::zero() {
             panic!("square root of negative number");
         }
-        let sr = std::cmp::max(self.scale, global_scale);
+        let sr = core::cmp::max(self.scale, global_scale);
         let shift = 2 * sr - self.scale;
         let num = &self.coeff * BigInt::from(10).pow(shift as u32);
         let coeff = num.sqrt();
@@ -217,7 +220,7 @@ impl BCNum {
         let divisor = BigInt::from(10).pow(self.scale as u32);
         let int_part = self.coeff.abs() / divisor;
         let val = if int_part.is_zero() {
-            std::cmp::max(1, self.scale)
+            core::cmp::max(1, self.scale)
         } else {
             int_part.to_string().len() + self.scale
         };
@@ -280,7 +283,15 @@ impl BCNum {
         let mut frac_str = String::new();
         if self.scale > 0 {
             let num_digits = if obase != 10 {
-                ((self.scale as f64) * (10f64.ln() / (obase as f64).ln())).ceil() as usize
+                let target = BigInt::from(10).pow(self.scale as u32);
+                let mut k = 0usize;
+                let mut current = BigInt::from(1);
+                let ob = BigInt::from(obase);
+                while current < target {
+                    current *= &ob;
+                    k += 1;
+                }
+                k
             } else {
                 self.scale
             };
@@ -788,7 +799,7 @@ fn decimal_exp(x: &Decimal, prec: usize) -> Decimal {
 
 /// Math sine function.
 pub fn bc_sin(x: &BCNum, global_scale: usize) -> BCNum {
-    let prec = std::cmp::max(x.scale, global_scale) + 15;
+    let prec = core::cmp::max(x.scale, global_scale) + 15;
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_sin(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
@@ -796,7 +807,7 @@ pub fn bc_sin(x: &BCNum, global_scale: usize) -> BCNum {
 
 /// Math cosine function.
 pub fn bc_cos(x: &BCNum, global_scale: usize) -> BCNum {
-    let prec = std::cmp::max(x.scale, global_scale) + 15;
+    let prec = core::cmp::max(x.scale, global_scale) + 15;
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_cos(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
@@ -804,7 +815,7 @@ pub fn bc_cos(x: &BCNum, global_scale: usize) -> BCNum {
 
 /// Math arctangent function.
 pub fn bc_atan(x: &BCNum, global_scale: usize) -> BCNum {
-    let prec = std::cmp::max(x.scale, global_scale) + 15;
+    let prec = core::cmp::max(x.scale, global_scale) + 15;
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_atan(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
@@ -817,7 +828,7 @@ pub fn bc_ln(x: &BCNum, global_scale: usize) -> BCNum {
             * BigInt::from(10).pow(global_scale as u32);
         return BCNum::new(coeff, global_scale);
     }
-    let prec = std::cmp::max(x.scale, global_scale) + 15;
+    let prec = core::cmp::max(x.scale, global_scale) + 15;
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_ln(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
@@ -834,7 +845,7 @@ pub fn bc_exp(x: &BCNum, global_scale: usize) -> BCNum {
     // e^x has approx (0.4343 * x) integer digits. Add int_approx / 2 extra guard precision
     // so large exponents retain all integer digits and fractional precision.
     let extra_prec = int_approx / 2;
-    let prec = std::cmp::max(x.scale, global_scale) + extra_prec + 15;
+    let prec = core::cmp::max(x.scale, global_scale) + extra_prec + 15;
 
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_exp(&dec_x, prec);
@@ -850,7 +861,7 @@ pub fn bc_bessel(n_num: &BCNum, x: &BCNum, global_scale: usize) -> BCNum {
         n_num.coeff.clone()
     };
     let n_i64 = n.to_i64().unwrap_or(0);
-    let prec = std::cmp::max(x.scale, global_scale) + 15;
+    let prec = core::cmp::max(x.scale, global_scale) + 15;
     let dec_x = Decimal::from_bc_num(x, prec);
 
     if dec_x.is_zero() {

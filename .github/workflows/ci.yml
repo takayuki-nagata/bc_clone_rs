@@ -21,6 +21,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy, llvm-tools-preview
+          targets: riscv32imac-unknown-none-elf, riscv32imc-unknown-none-elf, wasm32-unknown-unknown
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
@@ -29,13 +30,19 @@ jobs:
         run: cargo fmt --check
 
       - name: Run Clippy Linter
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Verify no_std Compilation on RISC-V 32 and Wasm32
+        run: |
+          cargo check --package bc_core --target riscv32imac-unknown-none-elf --no-default-features
+          cargo check --package bc_core --target riscv32imc-unknown-none-elf --no-default-features
+          cargo check --package bc_core --target wasm32-unknown-unknown --no-default-features
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run Tests with Coverage
-        run: cargo llvm-cov --all-targets --fail-under-lines 98 --lcov --output-path lcov.info
+        run: cargo llvm-cov --workspace --all-targets --fail-under-lines 98 --lcov --output-path lcov.info
 
       - name: Run Official GNU bc Reference Test Suite
         run: bash scripts/run_gnu_reference_tests.sh

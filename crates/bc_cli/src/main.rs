@@ -5,15 +5,50 @@
 //! Handles manual option checking, standard TTY/non-TTY execution paths,
 //! Ctrl+C handlers, and mockable I/O streams for 100% automated test coverage.
 
-mod bc_math;
-mod eval;
-mod parser;
-
+use core::fmt::Write as FmtWrite;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::eval::Evaluator;
-use crate::parser::{Lexer, Parser};
+use bc_core::{BcWriter, Evaluator, Lexer, Parser};
+
+/// Adapter converting any `std::io::Write + Send` into a `bc_core::BcWriter`.
+pub struct IoWriter<W: Write + Send> {
+    inner: W,
+}
+
+impl<W: Write + Send> IoWriter<W> {
+    /// Creates a new IoWriter wrapping the given Write stream.
+    pub fn new(inner: W) -> Self {
+        Self { inner }
+    }
+}
+
+impl<W: Write + Send> FmtWrite for IoWriter<W> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.inner
+            .write_all(s.as_bytes())
+            .map_err(|_| core::fmt::Error)
+    }
+}
+
+impl<W: Write + Send> BcWriter for IoWriter<W> {
+    fn flush(&mut self) -> core::fmt::Result {
+        self.inner.flush().map_err(|_| core::fmt::Error)
+    }
+}
+
+/// Helper to construct an Evaluator with std::io::Write streams.
+pub fn create_evaluator<O: Write + Send + 'static, E: Write + Send + 'static>(
+    math_enabled: bool,
+    stdout: O,
+    stderr: E,
+) -> Evaluator {
+    Evaluator::new(
+        math_enabled,
+        Box::new(IoWriter::new(stdout)),
+        Box::new(IoWriter::new(stderr)),
+    )
+}
 
 /// Global atomic flag indicating if Ctrl+C was pressed.
 pub static CTRL_C_PRESSED: AtomicBool = AtomicBool::new(false);
@@ -378,11 +413,7 @@ where
         }
     }
 
-    let mut evaluator = Evaluator::new(
-        math_enabled,
-        Box::new(stdout_writer),
-        Box::new(stderr_writer),
-    );
+    let mut evaluator = create_evaluator(math_enabled, stdout_writer, stderr_writer);
     if math_enabled {
         evaluator.scale = 20;
     }
@@ -500,7 +531,7 @@ mod tests {
             buf: stderr_buf.clone(),
         };
 
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
 
         let res = run_interactive_loop(input.as_bytes(), &mut evaluator);
         assert!(res.is_ok());
@@ -523,7 +554,7 @@ mod tests {
             buf: stderr_buf.clone(),
         };
 
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
 
         let _ = run_interactive_loop(input.as_bytes(), &mut evaluator);
 
@@ -547,7 +578,7 @@ mod tests {
             buf: stderr_buf.clone(),
         };
 
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
 
         let res = run_non_interactive_block(content, "test.bc", &mut evaluator);
         assert_eq!(res, Err(1));
@@ -567,7 +598,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
         let res = run_non_interactive_block("1 + 2\nquit\n3\n", "test.bc", &mut evaluator);
         assert_eq!(res, Err(0));
     }
@@ -580,7 +611,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
         handle_panic_payload(Box::new(42), "test.bc", 1, &mut evaluator, false);
         let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
         assert!(err.contains("unknown error"));
@@ -605,7 +636,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
         handle_panic_payload(
             Box::new("some runtime error".to_string()),
             "test.bc",
@@ -625,7 +656,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
         handle_panic_payload(
             Box::new("Parser error on line 42: unexpected token".to_string()),
             "test.bc",
@@ -647,7 +678,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
         CTRL_C_PRESSED.store(true, Ordering::SeqCst);
         let input = "1 + 2\n";
         let _ = run_interactive_loop(input.as_bytes(), &mut evaluator);
@@ -696,7 +727,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
 
         let mut reader = CtrlCReader {
             lines: vec!["1 + 2\n".to_string()],
@@ -736,12 +767,12 @@ mod tests {
     struct ErrReader;
     impl std::io::Read for ErrReader {
         fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-            Err(std::io::Error::new(std::io::ErrorKind::Other, "mock error"))
+            Err(std::io::Error::other("mock error"))
         }
     }
     impl std::io::BufRead for ErrReader {
         fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
-            Err(std::io::Error::new(std::io::ErrorKind::Other, "mock error"))
+            Err(std::io::Error::other("mock error"))
         }
         fn consume(&mut self, _amt: usize) {}
     }
@@ -755,7 +786,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
 
         let mut reader = ErrReader;
         let mut buf = [0; 10];
@@ -787,7 +818,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
 
         // Pass lines that end in backslash-newline and quit (covers lines 288 and 317)
         let input = "a = 5 \\\n+ 10\na\nquit\n";
@@ -907,7 +938,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
         evaluator.quit_flag = true;
         let res = run_non_interactive_block("1\n", "test.bc", &mut evaluator);
         assert_eq!(res, Err(0));
@@ -925,7 +956,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
         evaluator.quit_flag = true;
         let input = "1\n";
         let res = run_interactive_loop(input.as_bytes(), &mut evaluator);
@@ -943,7 +974,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
 
         let input = "a = 5 \\\r\n+ 10\r\na\r\nquit\r\n";
         let _ = run_interactive_loop(input.as_bytes(), &mut evaluator);
@@ -963,7 +994,7 @@ mod tests {
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        let mut evaluator = create_evaluator(false, stdout, stderr);
 
         // Evaluate 10^80 to test 70-character POSIX line wrapping and ibase > 16 warning
         let input = "scale = 0\n10^80\nibase = 17\n";

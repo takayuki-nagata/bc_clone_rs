@@ -1,11 +1,11 @@
-[package]
-name = "bc_clone"
+[workspace]
+resolver = "2"
+members = [
+    "crates/bc_core",
+    "crates/bc_cli",
+]
+
+[workspace.package]
 version = "0.2.0"
 edition = "2024"
 license = "MIT"
-
-[dependencies]
-num-bigint = "0.5"
-num-traits = "0.2"
-num-integer = "0.1"
-ctrlc = "3.4"

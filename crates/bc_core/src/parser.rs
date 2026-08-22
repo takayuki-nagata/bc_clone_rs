@@ -5,6 +5,12 @@
 //! Conforms to standard POSIX bc lexical and syntax grammar rules, supporting
 //! operator precedence climbing and backslash-newline continuation.
 
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+
 /// The types of tokens supported by the bc lexer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenType {
@@ -521,7 +527,7 @@ impl Lexer {
                 break;
             }
         }
-        let idx = std::cmp::min(offset, self.buffer.len() - 1);
+        let idx = core::cmp::min(offset, self.buffer.len() - 1);
         &self.buffer[idx]
     }
 }

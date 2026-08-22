@@ -5,40 +5,55 @@
 //! Complies with POSIX bc specifications for registers, arrays, function definitions,
 //! dynamic scope resolution, and WrappedStdout formatting.
 
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::fmt::Write as FmtWrite;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
-use std::collections::HashMap;
-use std::io::Write;
 
-use crate::bc_math::BCNum;
+use crate::math::BCNum;
 use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Stmt};
+
+/// Abstract output writer trait compatible with both no_std and std environments.
+pub trait BcWriter: FmtWrite + Send {
+    /// Flushes any buffered content.
+    fn flush(&mut self) -> core::fmt::Result {
+        Ok(())
+    }
+}
+
+impl BcWriter for String {}
 
 /// Wrapper to write output characters with POSIX-style 70-character line wrapping.
 pub struct WrappedStdout {
-    writer: Box<dyn Write + Send>,
+    writer: Box<dyn BcWriter>,
     col: usize,
 }
 
 impl WrappedStdout {
     /// Creates a new WrappedStdout writing to the given writer.
-    pub fn new(writer: Box<dyn Write + Send>) -> Self {
+    pub fn new(writer: Box<dyn BcWriter>) -> Self {
         Self { writer, col: 0 }
     }
 
     /// Writes a string to the output stream, handling wrapping if columns exceed 68.
-    pub fn write_str(&mut self, s: &str) -> std::io::Result<()> {
+    pub fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for c in s.chars() {
             if c == '\n' {
-                self.writer.write_all(b"\n")?;
+                self.writer.write_str("\n")?;
                 self.col = 0;
             } else {
                 if self.col >= 68 {
-                    self.writer.write_all(b"\\\n")?;
+                    self.writer.write_str("\\\n")?;
                     self.col = 0;
                 }
                 let mut buf = [0; 4];
-                let bytes = c.encode_utf8(&mut buf);
-                self.writer.write_all(bytes.as_bytes())?;
+                let encoded = c.encode_utf8(&mut buf);
+                self.writer.write_str(encoded)?;
                 self.col += 1;
             }
         }
@@ -46,22 +61,22 @@ impl WrappedStdout {
     }
 
     /// Flushes the underlying writer.
-    pub fn flush(&mut self) -> std::io::Result<()> {
+    pub fn flush(&mut self) -> core::fmt::Result {
         self.writer.flush()
     }
 }
 
 /// Evaluator maintaining registers, scoped variables, functions, and state.
 pub struct Evaluator {
-    pub variables: HashMap<String, Vec<BCNum>>,
-    pub arrays: HashMap<String, Vec<HashMap<BigInt, BCNum>>>,
-    pub functions: HashMap<String, FunctionDef>,
+    pub variables: BTreeMap<String, Vec<BCNum>>,
+    pub arrays: BTreeMap<String, Vec<BTreeMap<BigInt, BCNum>>>,
+    pub functions: BTreeMap<String, FunctionDef>,
     pub scale: usize,
     pub ibase: usize,
     pub obase: usize,
     pub math_enabled: bool,
     pub stdout_writer: WrappedStdout,
-    pub stderr_writer: Box<dyn Write + Send>,
+    pub stderr_writer: Box<dyn BcWriter>,
 
     pub break_flag: bool,
     pub return_flag: bool,
@@ -104,22 +119,22 @@ impl<'a> Drop for ScopeGuard<'a> {
 }
 
 impl Evaluator {
-    /// Creates a new Evaluator.
+    /// Creates a new Evaluator with abstract BcWriter streams.
     pub fn new(
         math_enabled: bool,
-        stdout_stream: Box<dyn Write + Send>,
-        stderr_stream: Box<dyn Write + Send>,
+        stdout_writer: Box<dyn BcWriter>,
+        stderr_writer: Box<dyn BcWriter>,
     ) -> Self {
         Self {
-            variables: HashMap::new(),
-            arrays: HashMap::new(),
-            functions: HashMap::new(),
+            variables: BTreeMap::new(),
+            arrays: BTreeMap::new(),
+            functions: BTreeMap::new(),
             scale: 0,
             ibase: 10,
             obase: 10,
             math_enabled,
-            stdout_writer: WrappedStdout::new(stdout_stream),
-            stderr_writer: stderr_stream,
+            stdout_writer: WrappedStdout::new(stdout_writer),
+            stderr_writer,
             break_flag: false,
             return_flag: false,
             return_value: BCNum::zero(),
@@ -149,7 +164,7 @@ impl Evaluator {
                 let stack = self
                     .arrays
                     .entry(name.clone())
-                    .or_insert_with(|| vec![HashMap::new()]);
+                    .or_insert_with(|| vec![BTreeMap::new()]);
                 stack
                     .last()
                     .unwrap()
@@ -281,7 +296,7 @@ impl Evaluator {
                         let arr_stack = self
                             .arrays
                             .entry(name.clone())
-                            .or_insert_with(|| vec![HashMap::new()]);
+                            .or_insert_with(|| vec![BTreeMap::new()]);
                         arr_stack.last_mut().unwrap().insert(idx_val, val.clone());
                     }
                     Expr::RegisterAccess(name) => {
@@ -362,7 +377,7 @@ impl Evaluator {
                         let arr_stack = self
                             .arrays
                             .entry(name.clone())
-                            .or_insert_with(|| vec![HashMap::new()]);
+                            .or_insert_with(|| vec![BTreeMap::new()]);
                         arr_stack
                             .last_mut()
                             .unwrap()
@@ -417,7 +432,7 @@ impl Evaluator {
                                 let arr_stack = self
                                     .arrays
                                     .entry(arg_name.clone())
-                                    .or_insert_with(|| vec![HashMap::new()]);
+                                    .or_insert_with(|| vec![BTreeMap::new()]);
                                 let arr_copy = arr_stack.last().unwrap().clone();
                                 evaluated_args.push((
                                     true,
@@ -449,7 +464,7 @@ impl Evaluator {
                     for auto in &func.autos {
                         if auto.is_array {
                             let stack = self.arrays.entry(auto.name.clone()).or_default();
-                            stack.push(HashMap::new());
+                            stack.push(BTreeMap::new());
                         } else {
                             let stack = self.variables.entry(auto.name.clone()).or_default();
                             stack.push(BCNum::zero());
@@ -483,7 +498,7 @@ impl Evaluator {
                 }
 
                 if self.math_enabled {
-                    use crate::bc_math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
+                    use crate::math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
                     match (name.as_str(), args.as_slice()) {
                         ("s", [ExprOrArray::Expr(expr)]) => {
                             return bc_sin(&self.evaluate(expr), self.scale);
@@ -612,18 +627,23 @@ mod tests {
     use super::*;
     use crate::parser::Lexer;
     use crate::parser::Parser;
+    use alloc::string::ToString;
 
     #[derive(Clone)]
     struct TestWriter {
         buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
     }
 
-    impl Write for TestWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.buf.lock().unwrap().write(buf)
+    impl FmtWrite for TestWriter {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            self.buf.lock().unwrap().extend_from_slice(s.as_bytes());
+            Ok(())
         }
-        fn flush(&mut self) -> std::io::Result<()> {
-            self.buf.lock().unwrap().flush()
+    }
+
+    impl BcWriter for TestWriter {
+        fn flush(&mut self) -> core::fmt::Result {
+            Ok(())
         }
     }
 
@@ -699,7 +719,7 @@ mod tests {
     fn test_eval_uncovered_lines() {
         use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Stmt};
 
-        let mut evaluator = Evaluator::new(true, Box::new(Vec::new()), Box::new(Vec::new()));
+        let mut evaluator = Evaluator::new(true, Box::new(String::new()), Box::new(String::new()));
 
         // 1. Array access with fractional index (lines 108-109)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
@@ -963,12 +983,12 @@ mod tests {
             "uninit_arr".to_string(),
             Box::new(Expr::Number("0".to_string())),
         ));
-        let _ = evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
             Box::new(Expr::Variable("uninit_var_assign".to_string())),
             Box::new(Expr::Number("10".to_string())),
         )));
-        let _ = evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
             Box::new(Expr::ArrayAccess(
                 "uninit_arr_assign".to_string(),
@@ -1669,7 +1689,7 @@ mod tests {
 
     #[test]
     fn test_return_inside_while_and_for_loops() {
-        let mut evaluator = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let mut evaluator = Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
         let mut parser_while = Parser::new(Lexer::new(
             "define f_while() { i = 0; while (i < 10) { i = i + 1; return (i); }; return (999); }; f_while()",
         ));
@@ -1679,7 +1699,8 @@ mod tests {
         let res_while = evaluator.evaluate(&Expr::Variable("i".to_string()));
         assert_eq!(res_while.coeff, BigInt::from(1));
 
-        let mut evaluator_for = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let mut evaluator_for =
+            Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
         let mut parser_for = Parser::new(Lexer::new(
             "define f_for() { for (i = 0; i < 10; i = i + 1) { return (i + 1); }; return (999); }; f_for()",
         ));
@@ -1691,15 +1712,14 @@ mod tests {
     }
 
     struct FailingFlushWriter;
-    impl Write for FailingFlushWriter {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            Ok(buf.len())
+    impl FmtWrite for FailingFlushWriter {
+        fn write_str(&mut self, _s: &str) -> core::fmt::Result {
+            Ok(())
         }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "flush error",
-            ))
+    }
+    impl BcWriter for FailingFlushWriter {
+        fn flush(&mut self) -> core::fmt::Result {
+            Err(core::fmt::Error)
         }
     }
 
@@ -1711,7 +1731,7 @@ mod tests {
 
     #[test]
     fn test_function_early_return_short_circuits_body_loop() {
-        let mut evaluator = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let mut evaluator = Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
         let mut parser = Parser::new(Lexer::new(
             "define f() { return (10); x = 99; return (20); }; f()",
         ));
@@ -1726,7 +1746,7 @@ mod tests {
 
     #[test]
     fn test_execute_entry_and_block_guard_when_flags_set() {
-        let mut evaluator = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let mut evaluator = Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
         evaluator.break_flag = true;
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
@@ -1747,7 +1767,8 @@ mod tests {
         assert_eq!(val2.coeff, BigInt::from(0));
 
         // Block loop short-circuit when statement inside block sets return_flag or break_flag (kills line 530 mutants)
-        let mut evaluator2 = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let mut evaluator2 =
+            Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
         let stmt_ret = Stmt::Return(Some(Expr::Number("10".to_string())));
         let stmt_assign1 = Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
@@ -1759,7 +1780,8 @@ mod tests {
         let val3 = evaluator2.evaluate(&Expr::Variable("block_var1".to_string()));
         assert_eq!(val3.coeff, BigInt::from(0));
 
-        let mut evaluator3 = Evaluator::new(false, Box::new(Vec::new()), Box::new(Vec::new()));
+        let mut evaluator3 =
+            Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
         let stmt_break = Stmt::Break;
         let stmt_assign2 = Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
