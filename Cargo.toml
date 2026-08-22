@@ -3,6 +3,11 @@ resolver = "2"
 members = [
     "crates/bc_core",
     "crates/bc_cli",
+    "crates/bc_qemu_riscv32",
+]
+default-members = [
+    "crates/bc_core",
+    "crates/bc_cli",
 ]
 
 [workspace.package]

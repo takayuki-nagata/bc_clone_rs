@@ -107,7 +107,7 @@ To guarantee high test quality and ensure all code paths have meaningful asserti
 ### 6. Strict Pre-Commit Verification Workflow
 To prevent CI breakage (such as formatting mismatches or clippy warnings), AI agents MUST run full local verification before creating git commits:
 ```bash
-cargo fmt --check && cargo clippy -- -D warnings && cargo test
+cargo fmt --check && cargo clippy --package bc_core --package bc_clone --all-targets -- -D warnings && cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings && cargo test
 ```
 No changes should be committed until formatting, lints, and test suites pass with 100% success locally.
 
@@ -119,6 +119,10 @@ No changes should be committed until formatting, lints, and test suites pass wit
 ### 8. POSIX IEEE Std 1003.1 Compliance Test Suite
 - **Automated POSIX Conformance Verification**: `scripts/run_posix_compliance_tests.sh` evaluates `bc_clone` against standard `bc` across 20 strict POSIX IEEE Std 1003.1 specification test cases.
 - **CI Integration**: Executed automatically on every push and pull request in `.github/workflows/ci.yml` to guarantee zero regressions in POSIX standard compliance.
+
+### 9. Baremetal RISC-V 32 Automated Testing on QEMU (`crates/bc_qemu_riscv32`)
+- **Automated Baremetal Verification**: `scripts/run_qemu_riscv32_tests.sh` cross-compiles the baremetal runner (`bc_qemu_riscv32`) for both `riscv32imac-unknown-none-elf` (QEMU Virt) and `riscv32imc-unknown-none-elf` (ESP32-C3 compatible), booting the standalone binary under `qemu-system-riscv32 -M virt -bios none`.
+- **Heap & I/O Architecture**: Integrates `embedded-alloc` for dynamic heap management (2MB buffer), memory-mapped NS16550A UART (`0x1000_0000`) for text output, and the SiFive Test device (`0x10_0000`) for automated zero-exit/failure code signaling in CI pipelines.
 
 
 
