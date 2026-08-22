@@ -7,3 +7,4 @@ mutants.out/
 mutants.out*/
 
 examples/**/build/
+examples/**/target/
