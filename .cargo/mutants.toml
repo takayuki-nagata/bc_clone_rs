@@ -8,9 +8,17 @@ timeout_multiplier = 2.0
 # Command used to run tests
 test_tool = "cargo"
 
-# Exclude semantically equivalent over-precision guard calculation mutants in bc_exp
+# Exclude semantically equivalent mutants:
+# 1. Over-precision guard calculation mutants in transcendental functions (bc_exp, bc_sin, bc_cos, bc_atan, bc_ln)
+# 2. Trait default flush method returning Ok(())
 exclude_re = [
     "replace / with \\* in bc_exp",
+    "replace \\+ with \\* in bc_sin",
+    "replace \\+ with \\* in bc_cos",
+    "replace \\+ with \\* in bc_atan",
+    "replace \\+ with \\* in bc_ln",
+    "replace \\+ with \\* in bc_exp",
+    "replace BcWriter::flush",
 ]
 
 

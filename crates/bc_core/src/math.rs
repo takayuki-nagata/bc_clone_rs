@@ -290,6 +290,9 @@ impl BCNum {
                 while current < target {
                     current *= &ob;
                     k += 1;
+                    if current.is_zero() {
+                        break;
+                    }
                 }
                 k
             } else {

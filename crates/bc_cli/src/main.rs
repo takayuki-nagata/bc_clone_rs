@@ -1073,4 +1073,24 @@ mod tests {
         assert_eq!(count_open_braces("/* / */{"), 1);
         assert!(is_block_incomplete("/* / */{"));
     }
+
+    struct FailingFlushWriter;
+    impl Write for FailingFlushWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("flush failure"))
+        }
+    }
+
+    #[test]
+    fn test_io_writer_write_and_flush() {
+        let mut failing = IoWriter::new(FailingFlushWriter);
+        assert!(failing.flush().is_err());
+
+        let mut success = IoWriter::new(Vec::new());
+        assert!(FmtWrite::write_str(&mut success, "hello").is_ok());
+        assert!(success.flush().is_ok());
+    }
 }
