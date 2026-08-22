@@ -8,3 +8,4 @@ mutants.out*/
 
 examples/**/build/
 examples/**/target/
+examples/**/pkg/
