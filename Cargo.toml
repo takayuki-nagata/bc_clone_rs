@@ -11,6 +11,9 @@ default-members = [
     "crates/bc_cli",
     "crates/bc_c_api",
 ]
+exclude = [
+    "examples/m5stamp_c3",
+]
 
 [workspace.package]
 version = "0.2.0"

@@ -129,6 +129,11 @@ No changes should be committed until formatting, lints, and test suites pass wit
 - **Zephyr RTOS Application (`examples/zephyr_app`)**: Integrates `CMakeLists.txt` (with portable relative path resolution and automatic Cargo staticlib invocation) and `prj.conf`, evaluating math expressions directly inside Zephyr kernel threads on `qemu_riscv32`.
 - **Automated Zephyr Runner (`scripts/run_zephyr_tests.sh`)**: Discovers `west` / `ZEPHYR_BASE` / `ZEPHYR_SDK_INSTALL_DIR` dynamically without hardcoded machine paths, running full test suites on QEMU RISC-V 32 with 100% pass verification.
 
+### 11. M5Stamp C3 (ESP32-C3) Baremetal Application (`examples/m5stamp_c3`)
+- **Direct Hardware Target**: Runs `bc_core` on the Espressif ESP32-C3 RISC-V 32-bit RV32IMC @ 160MHz (`riscv32imc-unknown-none-elf`) using `esp-hal 1.1.0`, `esp-bootloader-esp-idf`, `esp-alloc` (128KB SRAM heap), and `esp-println`.
+- **Automated CI Build Validation**: `scripts/build_m5stamp_c3.sh` runs cross-compilation and linting without physical hardware.
+- **Hardware Flashing & Serial Monitor Testing**: `scripts/flash_and_test_m5stamp_c3.sh` flashes connected hardware via `espflash` and verifies 100% pass of arbitrary-precision math test suites over serial console.
+
 
 
 

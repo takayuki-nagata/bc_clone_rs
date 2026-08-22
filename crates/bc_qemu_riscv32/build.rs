@@ -11,5 +11,7 @@ fn main() {
         .write_all(memory_x)
         .unwrap();
     println!("cargo:rustc-link-search={}", out_dir.display());
+    println!("cargo:rustc-link-arg=-Tmemory.x");
+    println!("cargo:rustc-link-arg=-Tlink.x");
     println!("cargo:rerun-if-changed=memory.x");
 }

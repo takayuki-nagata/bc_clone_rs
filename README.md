@@ -156,6 +156,18 @@ To run the Zephyr RTOS integration test suite on QEMU RISC-V 32:
 bash scripts/run_zephyr_tests.sh
 ```
 
+To build and verify the M5Stamp C3 (ESP32-C3) baremetal application:
+
+```bash
+bash scripts/build_m5stamp_c3.sh
+```
+
+To flash M5Stamp C3 and run automated hardware tests via serial monitor:
+
+```bash
+bash scripts/flash_and_test_m5stamp_c3.sh
+```
+
 
 
 ### Coverage Measurement

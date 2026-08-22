@@ -57,6 +57,9 @@ jobs:
       - name: Run POSIX IEEE Std 1003.1 Compliance Test Suite
         run: bash scripts/run_posix_compliance_tests.sh
 
+      - name: Verify M5Stamp C3 (ESP32-C3) Baremetal Application
+        run: bash scripts/build_m5stamp_c3.sh
+
       - name: Install QEMU RISC-V System Emulator
         run: |
           sudo apt-get update -qq
