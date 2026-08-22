@@ -5,13 +5,17 @@
 //! Complies with POSIX bc specifications for registers, arrays, function definitions,
 //! dynamic scope resolution, and WrappedStdout formatting.
 
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::fmt::Write as FmtWrite;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
-use std::collections::BTreeMap;
-use std::io::Write as IoWrite;
 
-use crate::bc_math::BCNum;
+use crate::math::BCNum;
 use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Stmt};
 
 /// Abstract output writer trait compatible with both no_std and std environments.
@@ -23,32 +27,6 @@ pub trait BcWriter: FmtWrite + Send {
 }
 
 impl BcWriter for String {}
-
-/// Adapter converting any `std::io::Write + Send` into a `BcWriter`.
-pub struct IoWriter<W: IoWrite + Send> {
-    inner: W,
-}
-
-impl<W: IoWrite + Send> IoWriter<W> {
-    /// Creates a new IoWriter wrapping the given Write stream.
-    pub fn new(inner: W) -> Self {
-        Self { inner }
-    }
-}
-
-impl<W: IoWrite + Send> FmtWrite for IoWriter<W> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        self.inner
-            .write_all(s.as_bytes())
-            .map_err(|_| core::fmt::Error)
-    }
-}
-
-impl<W: IoWrite + Send> BcWriter for IoWriter<W> {
-    fn flush(&mut self) -> core::fmt::Result {
-        self.inner.flush().map_err(|_| core::fmt::Error)
-    }
-}
 
 /// Wrapper to write output characters with POSIX-style 70-character line wrapping.
 pub struct WrappedStdout {
@@ -162,19 +140,6 @@ impl Evaluator {
             return_value: BCNum::zero(),
             quit_flag: false,
         }
-    }
-
-    /// Creates a new Evaluator wrapping standard std::io::Write streams.
-    pub fn new_io(
-        math_enabled: bool,
-        stdout_stream: Box<dyn IoWrite + Send>,
-        stderr_stream: Box<dyn IoWrite + Send>,
-    ) -> Self {
-        Self::new(
-            math_enabled,
-            Box::new(IoWriter::new(stdout_stream)),
-            Box::new(IoWriter::new(stderr_stream)),
-        )
     }
 
     /// Evaluates an AST expression node and returns a BCNum.
@@ -533,7 +498,7 @@ impl Evaluator {
                 }
 
                 if self.math_enabled {
-                    use crate::bc_math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
+                    use crate::math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
                     match (name.as_str(), args.as_slice()) {
                         ("s", [ExprOrArray::Expr(expr)]) => {
                             return bc_sin(&self.evaluate(expr), self.scale);
@@ -662,6 +627,7 @@ mod tests {
     use super::*;
     use crate::parser::Lexer;
     use crate::parser::Parser;
+    use alloc::string::ToString;
 
     #[derive(Clone)]
     struct TestWriter {
@@ -1017,12 +983,12 @@ mod tests {
             "uninit_arr".to_string(),
             Box::new(Expr::Number("0".to_string())),
         ));
-        let _ = evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
             Box::new(Expr::Variable("uninit_var_assign".to_string())),
             Box::new(Expr::Number("10".to_string())),
         )));
-        let _ = evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
             Box::new(Expr::ArrayAccess(
                 "uninit_arr_assign".to_string(),

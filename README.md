@@ -13,6 +13,7 @@ A production-grade, POSIX-compliant arbitrary-precision calculator implemented i
 ## Features
 
 - **POSIX-Compliant Math with GNU Extensions**: Fully supports dynamic scoping, registers, variable/array stacks, and functions matching standard `bc` specifications, as well as popular GNU `bc` extensions (bare `return`, assignment operators `+=`, `-=`, etc., and array parameter passing `f(a[])`).
+- **`#![no_std]` + `alloc` Core Engine**: The core calculator engine (`bc_core`) is fully decoupled from the OS and standard library (`std`), supporting embedded systems, bare-metal RISC-V 32 (`riscv32imac-unknown-none-elf`, `riscv32imc-unknown-none-elf`), WebAssembly (`wasm32-unknown-unknown`), and RTOS (Zephyr / ESP32-C3).
 - **Arbitrary-Precision Arithmetic**: Implements high-performance arbitrary-precision decimal operations on top of `num-bigint` without external C library dependencies.
 - **Transcendental Library**: Supports the standard math library functions (`-l` flag):
   - Sine (`s(x)`) and Cosine (`c(x)`)

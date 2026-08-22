@@ -599,7 +599,7 @@ fn test_real_ctrlc_signal() {
     // Send SIGINT (2) using kill command
     let pid = child.id();
     let status = Command::new("kill")
-        .args(&["-2", &pid.to_string()])
+        .args(["-2", &pid.to_string()])
         .status()
         .expect("failed to send SIGINT");
     assert!(status.success());

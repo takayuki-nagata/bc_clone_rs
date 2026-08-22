@@ -6,6 +6,9 @@
 //! coefficients paired with a scale factor. Also implements transcendental
 //! functions using series expansions.
 
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive, Zero};
 
@@ -280,7 +283,15 @@ impl BCNum {
         let mut frac_str = String::new();
         if self.scale > 0 {
             let num_digits = if obase != 10 {
-                ((self.scale as f64) * (10f64.ln() / (obase as f64).ln())).ceil() as usize
+                let target = BigInt::from(10).pow(self.scale as u32);
+                let mut k = 0usize;
+                let mut current = BigInt::from(1);
+                let ob = BigInt::from(obase);
+                while current < target {
+                    current *= &ob;
+                    k += 1;
+                }
+                k
             } else {
                 self.scale
             };

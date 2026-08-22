@@ -4,37 +4,40 @@ This document outlines the design decisions, technical architecture, and mathema
 
 ## System Architecture Overview
 
-The system is designed with clean separation of concerns, divided into four key components:
+The system is designed with clean separation of concerns, divided into two distinct crates within a Cargo Workspace:
 
 ```mermaid
 graph TD
-    CLI[main.rs: CLI & REPL Loop] --> Lexer[parser.rs: Lexer]
-    Lexer --> Parser[parser.rs: Pratt Parser]
+    CLI[crates/bc_cli/src/main.rs: CLI & REPL Loop] --> Core[crates/bc_core: #![no_std] + alloc Core Engine]
+    Core --> Lexer[crates/bc_core/src/parser.rs: Lexer]
+    Lexer --> Parser[crates/bc_core/src/parser.rs: Pratt Parser]
     Parser --> AST[AST Nodes / Statements]
-    AST --> Evaluator[eval.rs: Evaluator]
-    Evaluator --> Math[bc_math.rs: BCNum & Decimal Math]
+    AST --> Evaluator[crates/bc_core/src/eval.rs: Evaluator]
+    Evaluator --> Math[crates/bc_core/src/math.rs: BCNum & Decimal Math]
 ```
 
-### 1. Lexical Analysis and Parsing (`src/parser.rs`)
+### 1. Lexical Analysis and Parsing (`crates/bc_core/src/parser.rs`)
 - **Lexer**: Tokenizes input character streams. Handles dynamic line number tracking, single and multi-line comments (`/* ... */`), string literals, escape characters, and backslash-newline continuation.
 - **Parser**: A recursive descent parser utilizing Pratt parsing (precedence climbing) for algebraic expressions. 
   - Resolves operator precedence and associativity (e.g., right-associative exponentiation `^` and assignments).
   - Emits a clean AST consisting of `Stmt` (Statements) and `Expr` (Expressions).
   - Handles the GNU extension permitting `return` without enclosing parentheses.
 
-### 2. Arbitrary-Precision Math (`src/bc_math.rs`)
+### 2. Arbitrary-Precision Math (`crates/bc_core/src/math.rs`)
 - **`BCNum`**: The primary representation for user-facing numbers. Stores numbers as a `coeff: BigInt` coefficient and a `scale: usize` representing the number of fractional decimal digits.
   - Implements POSIX-compliant truncation/extension semantics for addition, subtraction, multiplication, division, modulo, and exponentiation.
   - Handles base conversion under arbitrary input bases (`ibase` in $[2, 16]$) and output bases (`obase` in $[2, \infty]$).
+  - Fractional digit calculation for non-decimal `obase` uses exact `BigInt` power inequalities ($obase^k \ge 10^{scale}$) without floating-point `ln()` or `libm`, ensuring full `#![no_std]` compliance.
 - **`Decimal`**: An internal, high-precision fixed-point helper type used specifically for computing transcendental functions. Pairwise operations are computed with an extra guard precision of 15 decimal digits.
 
-### 3. AST Execution and Scoping (`src/eval.rs`)
-- **Stack-based Scoping**: POSIX `bc` uses dynamic scoping. When a function is called, variables and arrays declared as `auto` are pushed onto a global stack map. References to variables resolve to the top-most element of the stack. When the function returns, the auto values are popped, restoring the caller's context.
-- **WrappedStdout**: Custom output stream wrapping that formats number output lines to stay within 70 characters as mandated by POSIX, wrapping lines with a backslash-newline when necessary.
+### 3. AST Execution and Scoping (`crates/bc_core/src/eval.rs`)
+- **Stack-based Scoping**: POSIX `bc` uses dynamic scoping. When a function is called, variables and arrays declared as `auto` are pushed onto a global stack map. Uses `alloc::collections::BTreeMap` for memory-compact, zero-entropy, `no_std`-safe storage.
+- **BcWriter & WrappedStdout**: Abstract output stream wrapping (`BcWriter` trait) that formats number output lines to stay within 70 characters as mandated by POSIX, wrapping lines with a backslash-newline when necessary without `std::io` dependencies.
 
-### 4. Entry Point & REPL Loop (`src/main.rs`)
+### 4. Entry Point & REPL Loop (`crates/bc_cli/src/main.rs`)
 - **Option Parsing**: Handled natively without external dependencies, adhering strictly to POSIX option-argument combinations (e.g., `-l` flag to load the math library).
 - **Interactive REPL**: Employs an input accumulator that counts open braces and backslash-newlines to determine block completeness before evaluating. Bypasses signal registration under `#[cfg(test)]` to permit isolated, parallel tests.
+- **IoWriter**: Adapts host `std::io::Write` streams into `bc_core::BcWriter`.
 
 ---
 

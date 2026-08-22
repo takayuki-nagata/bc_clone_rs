@@ -12,7 +12,14 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 name = "bc_clone"
 version = "0.2.0"
 dependencies = [
+ "bc_core",
  "ctrlc",
+]
+
+[[package]]
+name = "bc_core"
+version = "0.2.0"
+dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
