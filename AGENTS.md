@@ -107,7 +107,7 @@ To guarantee high test quality and ensure all code paths have meaningful asserti
 ### 6. Strict Pre-Commit Verification Workflow
 To prevent CI breakage (such as formatting mismatches or clippy warnings), AI agents MUST run full local verification before creating git commits:
 ```bash
-cargo fmt --check && cargo clippy --package bc_core --package bc_clone --all-targets -- -D warnings && cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings && cargo test
+cargo fmt --check && cargo clippy --package bc_core --package bc_clone --package bc_c_api --all-targets -- -D warnings && cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings && cargo clippy --package bc_c_api --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo test
 ```
 No changes should be committed until formatting, lints, and test suites pass with 100% success locally.
 
@@ -123,6 +123,11 @@ No changes should be committed until formatting, lints, and test suites pass wit
 ### 9. Baremetal RISC-V 32 Automated Testing on QEMU (`crates/bc_qemu_riscv32`)
 - **Automated Baremetal Verification**: `scripts/run_qemu_riscv32_tests.sh` cross-compiles the baremetal runner (`bc_qemu_riscv32`) for both `riscv32imac-unknown-none-elf` (QEMU Virt) and `riscv32imc-unknown-none-elf` (ESP32-C3 compatible), booting the standalone binary under `qemu-system-riscv32 -M virt -bios none`.
 - **Heap & I/O Architecture**: Integrates `embedded-alloc` for dynamic heap management (2MB buffer), memory-mapped NS16550A UART (`0x1000_0000`) for text output, and the SiFive Test device (`0x10_0000`) for automated zero-exit/failure code signaling in CI pipelines.
+
+### 10. Zephyr RTOS C-FFI Integration & Automated Testing (`crates/bc_c_api`, `examples/zephyr_app`)
+- **C-FFI Static Library (`crates/bc_c_api`)**: Exposes C-ABI interfaces (`bc_eval`, `bc_eval_callback`) along with C header `include/bc_core.h`. Embeds `embedded-alloc` LLFF dynamic allocator to provide self-contained, fragmentation-resistant heap management independent of C runtime libc.
+- **Zephyr RTOS Application (`examples/zephyr_app`)**: Integrates `CMakeLists.txt` (with portable relative path resolution and automatic Cargo staticlib invocation) and `prj.conf`, evaluating math expressions directly inside Zephyr kernel threads on `qemu_riscv32`.
+- **Automated Zephyr Runner (`scripts/run_zephyr_tests.sh`)**: Discovers `west` / `ZEPHYR_BASE` / `ZEPHYR_SDK_INSTALL_DIR` dynamically without hardcoded machine paths, running full test suites on QEMU RISC-V 32 with 100% pass verification.
 
 
 

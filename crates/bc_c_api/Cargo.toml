@@ -1,0 +1,18 @@
+[package]
+name = "bc_c_api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C-FFI static library bindings for bc_core (Zephyr RTOS, FreeRTOS, Embedded C)"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+bc_core = { path = "../bc_core" }
+embedded-alloc = "0.6"
+critical-section = { version = "1.2", features = ["restore-state-none"] }
