@@ -1,6 +1,6 @@
 [package]
 name = "m5stamp_c3_bc"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 description = "M5Stamp C3 (ESP32-C3) Baremetal arbitrary-precision math runner with bc_core"
