@@ -10,11 +10,12 @@ name = "m5stamp_c3_bc"
 path = "./src/bin/main.rs"
 
 [dependencies]
-esp-hal = { version = "~1.1.0", features = ["esp32c3"] }
+esp-hal = { version = "~1.1.0", features = ["esp32c3", "unstable"] }
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c3"] }
 esp-println = { version = "0.14.0", features = ["esp32c3", "auto"] }
 esp-alloc = "0.8.0"
 critical-section = "1.2.0"
+embedded-io = "0.6.1"
 bc_core = { path = "../../crates/bc_core" }
 
 [profile.dev]
