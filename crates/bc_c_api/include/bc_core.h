@@ -72,6 +72,69 @@ bc_status_t bc_eval_callback(
     void *user_data
 );
 
+/**
+ * Opaque session handle representing a persistent bc execution environment.
+ */
+typedef struct bc_session bc_session_t;
+
+/**
+ * Creates a new persistent bc session.
+ *
+ * @param math_enabled If true, preloads standard math functions (s, c, a, l, e, j).
+ * @return Pointer to the newly allocated session, or NULL on failure.
+ */
+bc_session_t *bc_session_create(bool math_enabled);
+
+/**
+ * Evaluates bc code within a persistent session and writes output into a buffer.
+ * Variables, functions, and scale persist across calls to the same session.
+ *
+ * @param session Pointer to active bc session.
+ * @param code Null-terminated string containing the bc code to evaluate.
+ * @param out_buf Buffer where the output result string will be stored.
+ * @param buf_size Total size of out_buf in bytes.
+ * @return BC_STATUS_OK on success, or an error status code.
+ */
+bc_status_t bc_session_eval(
+    bc_session_t *session,
+    const char *code,
+    char *out_buf,
+    size_t buf_size
+);
+
+/**
+ * Evaluates bc code within a persistent session and streams output via callback.
+ *
+ * @param session Pointer to active bc session.
+ * @param code Null-terminated string containing the bc code to evaluate.
+ * @param stdout_cb Callback invoked for standard output chunks (may be NULL).
+ * @param stderr_cb Callback invoked for error/warning messages (may be NULL).
+ * @param user_data Context pointer passed to callback invocations.
+ * @return BC_STATUS_OK on success, or an error status code.
+ */
+bc_status_t bc_session_eval_callback(
+    bc_session_t *session,
+    const char *code,
+    bc_output_cb_t stdout_cb,
+    bc_output_cb_t stderr_cb,
+    void *user_data
+);
+
+/**
+ * Resets the session state (clearing variables and user-defined functions).
+ *
+ * @param session Pointer to active bc session.
+ * @param math_enabled If true, retains/re-enables standard math functions.
+ */
+void bc_session_reset(bc_session_t *session, bool math_enabled);
+
+/**
+ * Destroys a bc session and frees associated memory.
+ *
+ * @param session Pointer to session to destroy (may be NULL).
+ */
+void bc_session_destroy(bc_session_t *session);
+
 #ifdef __cplusplus
 }
 #endif
