@@ -38,10 +38,18 @@ bash scripts/build_zephyr_m5stamp_c3.sh
 
 ## Flashing and Testing on M5Stamp C3 Hardware
 
-To flash the connected M5Stamp C3 (`/dev/ttyACM0`) and run automated self-tests + interactive REPL verification:
+To flash the connected M5Stamp C3 (`/dev/ttyACM0`) and run automated self-tests + self-verification:
 
 ```bash
 bash scripts/flash_and_test_zephyr_m5stamp_c3.sh
+```
+
+## Launching Interactive REPL Terminal
+
+To flash and directly open an interactive terminal session where you can type commands:
+
+```bash
+bash scripts/repl_zephyr_m5stamp_c3.sh
 ```
 
 ## Interactive REPL on Hardware

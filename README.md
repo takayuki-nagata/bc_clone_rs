@@ -162,10 +162,16 @@ To build the Zephyr RTOS application for M5Stamp C3 (`stamp_c3`):
 bash scripts/build_zephyr_m5stamp_c3.sh
 ```
 
-To flash Zephyr RTOS to M5Stamp C3 and run automated hardware tests + REPL verification:
+To flash Zephyr RTOS to M5Stamp C3 and run automated hardware tests + self-verification:
 
 ```bash
 bash scripts/flash_and_test_zephyr_m5stamp_c3.sh
+```
+
+To flash Zephyr RTOS to M5Stamp C3 and launch an interactive REPL terminal session:
+
+```bash
+bash scripts/repl_zephyr_m5stamp_c3.sh
 ```
 
 To build and verify the M5Stamp C3 (ESP32-C3) baremetal application:
@@ -174,10 +180,16 @@ To build and verify the M5Stamp C3 (ESP32-C3) baremetal application:
 bash scripts/build_m5stamp_c3.sh
 ```
 
-To flash M5Stamp C3 and run automated hardware tests via serial monitor:
+To flash M5Stamp C3 (baremetal) and run automated hardware tests:
 
 ```bash
 bash scripts/flash_and_test_m5stamp_c3.sh
+```
+
+To flash M5Stamp C3 (baremetal) and launch an interactive REPL terminal session:
+
+```bash
+bash scripts/repl_m5stamp_c3.sh
 ```
 
 To build the WebAssembly (wasm32) module:
