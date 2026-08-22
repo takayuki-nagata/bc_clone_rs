@@ -168,6 +168,19 @@ To flash M5Stamp C3 and run automated hardware tests via serial monitor:
 bash scripts/flash_and_test_m5stamp_c3.sh
 ```
 
+To build the WebAssembly (wasm32) module:
+
+```bash
+bash scripts/build_wasm.sh
+```
+
+To run the WebAssembly Web App frontend locally:
+
+```bash
+bash scripts/serve_wasm.sh
+# Open http://localhost:8080/www/ in your browser
+```
+
 
 
 ### Coverage Measurement

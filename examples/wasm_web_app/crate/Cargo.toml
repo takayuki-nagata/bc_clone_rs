@@ -1,0 +1,17 @@
+[package]
+name = "bc_wasm"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "WebAssembly binding for bc_core arbitrary-precision math engine"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+bc_core = { path = "../../../crates/bc_core" }
+
+[profile.release]
+opt-level = "s"
+lto = true

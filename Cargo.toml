@@ -13,6 +13,7 @@ default-members = [
 ]
 exclude = [
     "examples/m5stamp_c3",
+    "examples/wasm_web_app/crate",
 ]
 
 [workspace.package]

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>bc_clone - Arbitrary Precision Calculator (WebAssembly)</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo-title">
+        <span class="badge">WASM</span>
+        <h1>bc_clone_rs</h1>
+      </div>
+      <p class="subtitle">POSIX-compliant Arbitrary-Precision Calculator running 100% in your browser via WebAssembly (Rust <code>#![no_std]</code> Core Engine).</p>
+    </header>
+
+    <main>
+      <!-- Preset Buttons Section -->
+      <section class="presets-section">
+        <h3>Quick Presets & Examples</h3>
+        <div class="preset-buttons">
+          <button class="preset-btn" data-code="scale = 100; 4 * a(1)">Pi (100 Digits)</button>
+          <button class="preset-btn" data-code="scale = 50; e(1)">Euler's e (50 Digits)</button>
+          <button class="preset-btn" data-code="2^128">2^128 (BigInt Power)</button>
+          <button class="preset-btn" data-code="define f(n) { if (n <= 1) return (1); return (n * f(n - 1)); }; f(50)">50! (Factorial)</button>
+          <button class="preset-btn" data-code="ibase = 16; obase = 2; DEAD_BEEF">Hex to Binary</button>
+          <button class="preset-btn" data-code="scale = 20; s(1)^2 + c(1)^2">sin²(1) + cos²(1)</button>
+        </div>
+      </section>
+
+      <!-- Terminal REPL Section -->
+      <section class="terminal-card">
+        <div class="terminal-header">
+          <div class="terminal-buttons">
+            <span class="btn close"></span>
+            <span class="btn minimize"></span>
+            <span class="btn maximize"></span>
+          </div>
+          <div class="terminal-title">bc_clone interactive session (wasm32)</div>
+          <div class="terminal-status" id="engine-status">Initializing Wasm...</div>
+        </div>
+
+        <div class="terminal-body" id="terminal-body">
+          <div class="terminal-output" id="terminal-output">
+            <div class="output-line banner">=================================================</div>
+            <div class="output-line banner">  bc_clone (bc_core) WebAssembly REPL (wasm32)   </div>
+            <div class="output-line banner">=================================================</div>
+            <div class="output-line info">Type bc expressions (e.g. 2^64, scale=10; 4*a(1), define f(x)...)</div>
+            <div class="output-line info">Use Up/Down arrows for command history.</div>
+            <br>
+          </div>
+
+          <form class="terminal-input-form" id="input-form">
+            <span class="prompt">bc&gt;</span>
+            <input type="text" id="command-input" autofocus autocomplete="off" spellcheck="false" placeholder="Enter bc expression...">
+            <button type="submit" id="eval-button">Eval</button>
+          </form>
+        </div>
+
+        <div class="terminal-footer">
+          <button class="action-btn" id="clear-btn">Clear Screen (Ctrl+L)</button>
+          <button class="action-btn" id="reset-btn">Reset Engine Session</button>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Built with Rust &amp; WebAssembly &bull; Powered by <a href="https://github.com/takayuki-nagata/bc_clone_rs" target="_blank">bc_clone_rs</a></p>
+    </footer>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

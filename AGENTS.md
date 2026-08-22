@@ -134,6 +134,11 @@ No changes should be committed until formatting, lints, and test suites pass wit
 - **Automated CI Build Validation**: `scripts/build_m5stamp_c3.sh` runs cross-compilation and linting without physical hardware.
 - **Hardware Flashing & Serial Monitor Testing**: `scripts/flash_and_test_m5stamp_c3.sh` flashes connected hardware via `espflash` and verifies 100% pass of arbitrary-precision math test suites over serial console.
 
+### 12. WebAssembly (wasm32) Web App Frontend (`examples/wasm_web_app`)
+- **Browser-Native Math Engine**: Exposes `eval_bc` and `BcSession` via `wasm-bindgen` (`examples/wasm_web_app/crate`), executing arbitrary-precision math 100% on the client-side.
+- **Modern Interactive UI**: Provides a dark-themed terminal REPL with command history ($\uparrow$/$\downarrow$), keyboard shortcuts, and quick preset buttons for $\pi$, $e$, $n!$, and base conversions.
+- **Automated Packaging & Server**: `scripts/build_wasm.sh` compiles and packages the Wasm bundle, and `scripts/serve_wasm.sh` serves the frontend locally.
+
 
 
 
