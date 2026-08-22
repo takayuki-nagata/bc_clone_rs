@@ -7,5 +7,6 @@ mutants.out/
 mutants.out*/
 
 examples/**/build/
+examples/**/build_*/
 examples/**/target/
 examples/**/pkg/
