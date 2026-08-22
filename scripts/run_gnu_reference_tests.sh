@@ -59,10 +59,10 @@ for test_file in "${TEST_DIR}"/*.b "${TEST_DIR}"/*.bc "${TEST_DIR}"/signum; do
     done
 
     # Run system bc
-    bc_out=$(bc $FLAGS "$test_file" 2>&1 || true)
+    bc_out=$(bc $FLAGS "$test_file" < /dev/null 2>&1 || true)
     
     # Run bc_clone
-    clone_out=$($CLONE_BIN $FLAGS "$test_file" 2>&1 || true)
+    clone_out=$($CLONE_BIN $FLAGS "$test_file" < /dev/null 2>&1 || true)
 
     if [ "$bc_out" == "$clone_out" ]; then
         echo "  [PASS] ${filename}"
