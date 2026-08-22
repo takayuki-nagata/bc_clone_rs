@@ -30,7 +30,10 @@ jobs:
         run: cargo fmt --check
 
       - name: Run Clippy Linter
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          cargo clippy --package bc_core --package bc_clone --all-targets -- -D warnings
+          cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings
+          cargo clippy --package bc_qemu_riscv32 --target riscv32imc-unknown-none-elf -- -D warnings
 
       - name: Verify no_std Compilation on RISC-V 32 and Wasm32
         run: |
@@ -42,13 +45,21 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run Tests with Coverage
-        run: cargo llvm-cov --workspace --all-targets --fail-under-lines 98 --lcov --output-path lcov.info
+        run: cargo llvm-cov --package bc_core --package bc_clone --all-targets --fail-under-lines 98 --lcov --output-path lcov.info
 
       - name: Run Official GNU bc Reference Test Suite
         run: bash scripts/run_gnu_reference_tests.sh
 
       - name: Run POSIX IEEE Std 1003.1 Compliance Test Suite
         run: bash scripts/run_posix_compliance_tests.sh
+
+      - name: Install QEMU RISC-V System Emulator
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-misc
+
+      - name: Run QEMU RISC-V 32 Baremetal Automated Test Suite
+        run: bash scripts/run_qemu_riscv32_tests.sh
 
 
       - name: Install cargo-audit

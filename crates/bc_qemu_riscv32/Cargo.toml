@@ -1,0 +1,18 @@
+[package]
+name = "bc_qemu_riscv32"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Baremetal RISC-V 32 runner and test suite for bc_clone on QEMU virt"
+
+[[bin]]
+name = "bc_qemu_riscv32"
+test = false
+bench = false
+
+[dependencies]
+bc_core = { path = "../bc_core" }
+riscv = "0.12"
+riscv-rt = "0.14"
+critical-section = { version = "1.2", features = ["restore-state-none"] }
+embedded-alloc = "0.6"

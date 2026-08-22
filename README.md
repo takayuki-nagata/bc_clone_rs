@@ -144,6 +144,12 @@ To run the POSIX IEEE Std 1003.1 compliance test suite:
 bash scripts/run_posix_compliance_tests.sh
 ```
 
+To run the automated Baremetal RISC-V 32 test suite on QEMU:
+
+```bash
+bash scripts/run_qemu_riscv32_tests.sh
+```
+
 
 
 ### Coverage Measurement
