@@ -8,12 +8,14 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
+use alloc::vec::Vec;
 use bc_core::{BcWriter, Evaluator, Lexer, Parser};
 use core::cell::RefCell;
 use core::fmt::Write;
+use embedded_io::Read;
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use esp_hal::time::{Duration, Instant};
+use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_println::{print, println};
 
 #[panic_handler]
@@ -42,6 +44,28 @@ impl BcWriter for SharedBuffer {
     }
 }
 
+/// Direct terminal writer that streams output directly to esp-println (USB-Serial).
+struct SerialWriter;
+
+impl Write for SerialWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for c in s.chars() {
+            if c == '\n' {
+                print!("\r\n");
+            } else {
+                print!("{}", c);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl BcWriter for SerialWriter {
+    fn flush(&mut self) -> core::fmt::Result {
+        Ok(())
+    }
+}
+
 fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> String {
     let out_buf = SharedBuffer::default();
     let err_buf = SharedBuffer::default();
@@ -65,14 +89,7 @@ fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> Strin
     out_buf.0.borrow().clone()
 }
 
-#[main]
-fn main() -> ! {
-    // Initialize 128KB heap for arbitrary-precision arithmetic
-    esp_alloc::heap_allocator!(size: 128 * 1024);
-
-    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
-    let _peripherals = esp_hal::init(config);
-
+fn run_self_tests() -> bool {
     println!("\n=================================================");
     println!("  bc_clone (bc_core) on M5Stamp C3 (ESP32-C3)    ");
     println!("=================================================");
@@ -170,12 +187,85 @@ fn main() -> ! {
         println!("SOME M5STAMP-C3 BC_CORE TESTS FAILED!");
         println!("=================================================\n");
     }
+    all_passed
+}
 
-    let mut counter: u32 = 0;
+#[main]
+fn main() -> ! {
+    // Initialize 128KB heap for arbitrary-precision arithmetic
+    esp_alloc::heap_allocator!(size: 128 * 1024);
+
+    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let peripherals = esp_hal::init(config);
+    let mut usb_serial = UsbSerialJtag::new(peripherals.USB_DEVICE);
+
+    // 1. Run automated self-tests first
+    run_self_tests();
+
+    // 2. Start Interactive REPL CLI
+    println!("Entering bc_core Interactive REPL mode...");
+    println!("Type bc expressions (e.g. 2^64, scale=10; 4*a(1), define f(x)...)");
+    print!("bc> ");
+
+    // Persistent Evaluator holding variables, user functions, scale, ibase, obase
+    let mut evaluator = Evaluator::new(
+        true, // Enable math library functions (s, c, e, l, a, j)
+        Box::new(SerialWriter),
+        Box::new(SerialWriter),
+    );
+
+    let mut line_buf = Vec::new();
+    let mut rx_byte = [0u8; 1];
+
     loop {
-        counter += 1;
-        println!("[M5Stamp C3 Heartbeat] Uptime tick #{}, bc_core active.", counter);
-        let delay_start = Instant::now();
-        while delay_start.elapsed() < Duration::from_millis(2000) {}
+        let count: usize = usb_serial.read(&mut rx_byte).unwrap_or_default();
+        if count == 0 {
+            continue;
+        }
+        let byte = rx_byte[0];
+
+            match byte {
+                b'\r' | b'\n' => {
+                    print!("\r\n");
+                    if !line_buf.is_empty() {
+                        if let Ok(input_str) = core::str::from_utf8(&line_buf) {
+                            let mut code_to_eval = String::from(input_str);
+                            code_to_eval.push('\n');
+
+                            let lexer = Lexer::new(&code_to_eval);
+                            let mut parser = Parser::new(lexer);
+                            let stmts = parser.parse_program();
+
+                            for stmt in &stmts {
+                                evaluator.execute(stmt);
+                            }
+                            let _ = evaluator.stdout_writer.flush();
+                        }
+                        line_buf.clear();
+                    }
+                    print!("bc> ");
+                }
+                0x08 | 0x7F if !line_buf.is_empty() => {
+                    // Backspace / Delete
+                    line_buf.pop();
+                    print!("\x08 \x08");
+                }
+                0x08 | 0x7F => {
+                    // Backspace with empty buffer: do nothing
+                }
+                0x03 => {
+                    // Ctrl+C: Cancel current line
+                    line_buf.clear();
+                    print!("^C\r\nbc> ");
+                }
+                0x20..=0x7E => {
+                    // Printable ASCII characters
+                    line_buf.push(byte);
+                    print!("{}", byte as char);
+                }
+                _ => {
+                    // Ignore other control characters
+                }
+            }
     }
 }

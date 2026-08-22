@@ -63,5 +63,13 @@ cargo run --release
 ALL M5STAMP-C3 BC_CORE TESTS PASSED (100%)!
 =================================================
 
-[M5Stamp C3 Heartbeat] Uptime tick #1, bc_core active.
+Entering bc_core Interactive REPL mode...
+Type bc expressions (e.g. 2^64, scale=10; 4*a(1), define f(x)...)
+bc> 2^64
+18446744073709551616
+bc> scale = 10; 4 * a(1)
+3.1415926532
+bc> define sq(x) { return (x * x) }; sq(12)
+144
+bc> 
 ```
