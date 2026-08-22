@@ -150,6 +150,12 @@ To run the automated Baremetal RISC-V 32 test suite on QEMU:
 bash scripts/run_qemu_riscv32_tests.sh
 ```
 
+To run the Zephyr RTOS integration test suite on QEMU RISC-V 32:
+
+```bash
+bash scripts/run_zephyr_tests.sh
+```
+
 
 
 ### Coverage Measurement

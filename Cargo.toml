@@ -4,10 +4,12 @@ members = [
     "crates/bc_core",
     "crates/bc_cli",
     "crates/bc_qemu_riscv32",
+    "crates/bc_c_api",
 ]
 default-members = [
     "crates/bc_core",
     "crates/bc_cli",
+    "crates/bc_c_api",
 ]
 
 [workspace.package]
