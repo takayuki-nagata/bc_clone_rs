@@ -12,20 +12,26 @@ BOARD="stamp_c3"
 
 echo "=== Zephyr RTOS bc_core M5Stamp C3 (${BOARD}) Builder ==="
 
-# 1. Discover west tool
+# 1. Discover west tool dynamically
 if [ -z "${WEST}" ]; then
     if command -v west &> /dev/null; then
         WEST="west"
+    elif [ -n "${VIRTUAL_ENV}" ] && [ -x "${VIRTUAL_ENV}/bin/west" ]; then
+        WEST="${VIRTUAL_ENV}/bin/west"
     elif [ -x "${HOME}/.venv/bin/west" ]; then
         WEST="${HOME}/.venv/bin/west"
     elif [ -x "${HOME}/zephyrproject/.venv/bin/west" ]; then
         WEST="${HOME}/zephyrproject/.venv/bin/west"
-    elif [ -x "${HOME}/VUX9K/.venv/bin/west" ]; then
-        WEST="${HOME}/VUX9K/.venv/bin/west"
     else
-        echo "Error: 'west' tool not found in PATH or standard virtual environments."
-        echo "Please install west or set the WEST environment variable (e.g. export WEST=/path/to/west)."
-        exit 1
+        # Dynamic discovery under user home directory
+        WEST_CANDIDATE=$(find "${HOME}" -maxdepth 4 -path "*/.venv/bin/west" 2>/dev/null | head -n 1 || true)
+        if [ -n "${WEST_CANDIDATE}" ] && [ -x "${WEST_CANDIDATE}" ]; then
+            WEST="${WEST_CANDIDATE}"
+        else
+            echo "Error: 'west' tool not found in PATH or standard virtual environments."
+            echo "Please install west or set the WEST environment variable (e.g. export WEST=/path/to/west)."
+            exit 1
+        fi
     fi
 fi
 
@@ -41,12 +47,15 @@ echo "Using west: ${WEST}"
 if [ -z "${ZEPHYR_BASE}" ]; then
     if [ -d "${HOME}/zephyrproject/zephyr" ]; then
         export ZEPHYR_BASE="${HOME}/zephyrproject/zephyr"
-    elif [ -d "${HOME}/VUX9K/zephyr_workspace/zephyr" ]; then
-        export ZEPHYR_BASE="${HOME}/VUX9K/zephyr_workspace/zephyr"
     else
-        echo "Error: ZEPHYR_BASE environment variable is not set and could not be auto-detected."
-        echo "Please set ZEPHYR_BASE (e.g. export ZEPHYR_BASE=/path/to/zephyr)."
-        exit 1
+        ZEPHYR_CANDIDATE=$(find "${HOME}" -maxdepth 4 -type d -path "*/zephyr/subsys" 2>/dev/null | head -n 1 || true)
+        if [ -n "${ZEPHYR_CANDIDATE}" ]; then
+            export ZEPHYR_BASE="$(dirname "${ZEPHYR_CANDIDATE}")"
+        else
+            echo "Error: ZEPHYR_BASE environment variable is not set and could not be auto-detected."
+            echo "Please set ZEPHYR_BASE (e.g. export ZEPHYR_BASE=/path/to/zephyr)."
+            exit 1
+        fi
     fi
 fi
 

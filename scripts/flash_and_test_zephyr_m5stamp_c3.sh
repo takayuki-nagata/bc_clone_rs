@@ -23,12 +23,33 @@ if [ ! -e "${PORT}" ]; then
     exit 0
 fi
 
-# 2. Discover Python with esptool support
+# 2. Discover west / Python with Zephyr dependencies
+if [ -z "${WEST}" ]; then
+    if command -v west &> /dev/null; then
+        WEST="west"
+    elif [ -n "${VIRTUAL_ENV}" ] && [ -x "${VIRTUAL_ENV}/bin/west" ]; then
+        WEST="${VIRTUAL_ENV}/bin/west"
+    elif [ -x "${HOME}/.venv/bin/west" ]; then
+        WEST="${HOME}/.venv/bin/west"
+    elif [ -x "${HOME}/zephyrproject/.venv/bin/west" ]; then
+        WEST="${HOME}/zephyrproject/.venv/bin/west"
+    else
+        WEST_CANDIDATE=$(find "${HOME}" -maxdepth 4 -path "*/.venv/bin/west" 2>/dev/null | head -n 1 || true)
+        if [ -n "${WEST_CANDIDATE}" ] && [ -x "${WEST_CANDIDATE}" ]; then
+            WEST="${WEST_CANDIDATE}"
+        fi
+    fi
+fi
+
 PYTHON_EXE="python3"
-if [ -x "${HOME}/VUX9K/.venv/bin/python3" ]; then
-    PYTHON_EXE="${HOME}/VUX9K/.venv/bin/python3"
+if [ -n "${WEST}" ] && [ -x "$(dirname "${WEST}")/python3" ]; then
+    PYTHON_EXE="$(dirname "${WEST}")/python3"
+elif [ -n "${VIRTUAL_ENV}" ] && [ -x "${VIRTUAL_ENV}/bin/python3" ]; then
+    PYTHON_EXE="${VIRTUAL_ENV}/bin/python3"
 elif [ -x "${HOME}/zephyrproject/.venv/bin/python3" ]; then
     PYTHON_EXE="${HOME}/zephyrproject/.venv/bin/python3"
+elif [ -x "${HOME}/.venv/bin/python3" ]; then
+    PYTHON_EXE="${HOME}/.venv/bin/python3"
 fi
 
 # Discover esptool.py
@@ -40,8 +61,13 @@ elif [ -n "${ZEPHYR_BASE}" ] && [ -f "${ZEPHYR_BASE}/../modules/hal/espressif/to
 elif [ -f "${HOME}/zephyrproject/modules/hal/espressif/tools/esptool_py/esptool.py" ]; then
     ESPTOOL_PY="${HOME}/zephyrproject/modules/hal/espressif/tools/esptool_py/esptool.py"
 else
-    echo "Error: esptool.py could not be found."
-    exit 1
+    ESPTOOL_CANDIDATE=$(find "${HOME}" -maxdepth 5 -name "esptool.py" 2>/dev/null | head -n 1 || true)
+    if [ -n "${ESPTOOL_CANDIDATE}" ] && [ -f "${ESPTOOL_CANDIDATE}" ]; then
+        ESPTOOL_PY="${ESPTOOL_CANDIDATE}"
+    else
+        echo "Error: esptool.py could not be found."
+        exit 1
+    fi
 fi
 
 echo ""
@@ -50,7 +76,7 @@ echo "=== Flashing Zephyr RTOS to M5Stamp C3 on ${PORT} ==="
 
 echo ""
 echo "=== Monitoring M5Stamp C3 Zephyr Serial Output & Interactive REPL ==="
-python3 -c "
+"${PYTHON_EXE}" -c "
 import serial, time, sys
 
 try:
