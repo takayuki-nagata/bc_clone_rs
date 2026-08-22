@@ -29,7 +29,7 @@ use embedded_alloc::LlffHeap as Heap;
 static HEAP: Heap = Heap::empty();
 
 #[cfg(not(feature = "std"))]
-const HEAP_SIZE: usize = 2 * 1024 * 1024;
+const HEAP_SIZE: usize = 2097152;
 #[cfg(not(feature = "std"))]
 static mut HEAP_MEM: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 

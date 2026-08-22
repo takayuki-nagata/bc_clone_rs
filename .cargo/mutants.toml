@@ -10,7 +10,8 @@ test_tool = "cargo"
 
 # Exclude semantically equivalent mutants:
 # 1. Over-precision guard calculation mutants in transcendental functions (bc_exp, bc_sin, bc_cos, bc_atan, bc_ln)
-# 2. Trait default flush method returning Ok(())
+# 2. Trait default / no-op flush methods returning Ok(())
+# 3. no_std embedded-only heap initialization in C-API (executed only on embedded targets, not during host cargo test)
 exclude_re = [
     "replace / with \\* in bc_exp",
     "replace \\+ with \\* in bc_sin",
@@ -18,8 +19,6 @@ exclude_re = [
     "replace \\+ with \\* in bc_atan",
     "replace \\+ with \\* in bc_ln",
     "replace \\+ with \\* in bc_exp",
-    "replace BcWriter::flush",
+    "flush.* -> core::fmt::Result with Ok\\(Default::default\\(\\)\\)",
+    "init_heap_if_needed",
 ]
-
-
-
