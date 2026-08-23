@@ -231,8 +231,8 @@ pub fn run_single_test(tc: &TestCase) -> bool {
     captured.trim() == tc.expected
 }
 
-/// Runs the complete test suite and outputs results.
-pub fn run_self_tests() -> bool {
+/// Runs a test suite with the given test cases.
+pub fn run_test_suite(cases: &[TestCase]) -> bool {
     zephyr_println!("\n=================================================");
     zephyr_println!("  bc_clone (bc_core) on Zephyr RTOS              ");
     zephyr_println!("=================================================");
@@ -240,7 +240,7 @@ pub fn run_self_tests() -> bool {
 
     let mut all_passed = true;
 
-    for tc in TEST_CASES {
+    for tc in cases {
         zephyr_print!("  Running: {:<35} ... ", tc.name);
 
         if run_single_test(tc) {
@@ -276,6 +276,11 @@ pub fn run_self_tests() -> bool {
     }
 
     all_passed
+}
+
+/// Runs the complete default test suite.
+pub fn run_self_tests() -> bool {
+    run_test_suite(TEST_CASES)
 }
 
 /// Runs the interactive serial REPL loop with customizable I/O functions.
@@ -429,7 +434,12 @@ mod tests {
         MOCK_PUT_CHARS.lock().unwrap().clear();
         let mut writer = ZephyrConsoleWriter;
         write!(writer, "test").unwrap();
+        assert!(writer.flush().is_ok());
         assert_eq!(MOCK_PUT_CHARS.lock().unwrap().as_slice(), b"test");
+
+        zephyr_print!("foo");
+        zephyr_println!();
+        zephyr_println!("bar");
     }
 
     #[test]
@@ -449,6 +459,7 @@ mod tests {
             expected: "999",
         };
         assert!(!run_single_test(&fake_tc));
+        assert!(!run_test_suite(&[fake_tc]));
     }
 
     #[test]
@@ -503,7 +514,16 @@ mod tests {
     #[test]
     fn test_repl_del_and_bs() {
         let mut out = String::new();
-        let mut input = vec![b'x' as i32, 0x08, b'y' as i32, 0x7F, -2];
+        let mut input = vec![
+            0x08,
+            0x7F,
+            b'x' as i32,
+            0x08,
+            b'y' as i32,
+            0x7F,
+            b'\n' as i32,
+            -2,
+        ];
         run_repl_with(
             || {
                 if input.is_empty() {
