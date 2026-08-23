@@ -46,6 +46,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bc_zephyr"
+version = "0.3.0"
+dependencies = [
+ "bc_core",
+ "critical-section",
+ "embedded-alloc",
+]
+
+[[package]]
 name = "bitflags"
 version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,8 +1,8 @@
 # bc_clone_rs Zephyr RTOS Application Example
 
-This example demonstrates executing the arbitrary-precision mathematical engine `bc_core` inside **Zephyr RTOS** kernel threads via C-FFI (`crates/bc_c_api`).
+This example demonstrates executing the arbitrary-precision mathematical engine `bc_core` inside **Zephyr RTOS** kernel threads with a **Rust-first architecture (`crates/bc_zephyr`)** and a minimal C trampoline (`src/main.c`).
 
-It supports both **QEMU RISC-V 32 (`qemu_riscv32`)** emulation for CI/headless verification and physical **M5Stack STAMP-C3 (`stamp_c3`)** hardware with an interactive serial REPL.
+All application logic, self-test verification, formatted output, and interactive serial REPL are implemented in pure `#![no_std]` Rust, while C is minimized to a thin ~40-line bridge layer interfacing with Zephyr Devicetree and kernel macros.
 
 ## Supported Targets
 

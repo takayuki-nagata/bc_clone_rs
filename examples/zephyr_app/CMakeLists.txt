@@ -15,21 +15,21 @@ if(NOT DEFINED RUST_TARGET)
 endif()
 
 get_filename_component(BC_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
-set(BC_C_API_DIR "${BC_REPO_ROOT}/crates/bc_c_api")
+set(BC_ZEPHYR_DIR "${BC_REPO_ROOT}/crates/bc_zephyr")
 set(RUST_LIB_DIR "${BC_REPO_ROOT}/target/${RUST_TARGET}/release")
-set(RUST_LIB "${RUST_LIB_DIR}/libbc_c_api.a")
+set(RUST_LIB "${RUST_LIB_DIR}/libbc_zephyr.a")
 
 # Automatically invoke Cargo to build Rust staticlib during Zephyr build
 add_custom_command(
     OUTPUT ${RUST_LIB}
-    COMMAND cargo build --release --target ${RUST_TARGET} --no-default-features --manifest-path "${BC_C_API_DIR}/Cargo.toml"
-    WORKING_DIRECTORY ${BC_C_API_DIR}
-    COMMENT "Building bc_c_api staticlib for Zephyr target (${RUST_TARGET})..."
+    COMMAND cargo build --release --target ${RUST_TARGET} --no-default-features --manifest-path "${BC_ZEPHYR_DIR}/Cargo.toml"
+    WORKING_DIRECTORY ${BC_ZEPHYR_DIR}
+    COMMENT "Building bc_zephyr staticlib for Zephyr target (${RUST_TARGET})..."
 )
 
-add_custom_target(bc_c_api_staticlib DEPENDS ${RUST_LIB})
+add_custom_target(bc_zephyr_staticlib DEPENDS ${RUST_LIB})
 
 target_sources(app PRIVATE src/main.c)
-target_include_directories(app PRIVATE "${BC_C_API_DIR}/include")
-add_dependencies(app bc_c_api_staticlib)
+add_dependencies(app bc_zephyr_staticlib)
 target_link_libraries(app PRIVATE ${RUST_LIB})
+

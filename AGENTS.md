@@ -107,7 +107,7 @@ To guarantee high test quality and ensure all code paths have meaningful asserti
 ### 6. Strict Pre-Commit Verification Workflow
 To prevent CI breakage (such as formatting mismatches or clippy warnings), AI agents MUST run full local verification before creating git commits:
 ```bash
-cargo fmt --check && cargo clippy --package bc_core --package bc_clone --package bc_c_api --all-targets -- -D warnings && cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings && cargo clippy --package bc_c_api --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo test
+cargo fmt --check && cargo clippy --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --all-targets -- -D warnings && cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings && cargo clippy --package bc_c_api --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo clippy --package bc_zephyr --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo test
 ```
 No changes should be committed until formatting, lints, and test suites pass with 100% success locally.
 
@@ -124,7 +124,8 @@ No changes should be committed until formatting, lints, and test suites pass wit
 - **Automated Baremetal Verification**: `scripts/run_qemu_riscv32_tests.sh` cross-compiles the baremetal runner (`bc_qemu_riscv32`) for both `riscv32imac-unknown-none-elf` (QEMU Virt) and `riscv32imc-unknown-none-elf` (ESP32-C3 compatible), booting the standalone binary under `qemu-system-riscv32 -M virt -bios none`.
 - **Heap & I/O Architecture**: Integrates `embedded-alloc` for dynamic heap management (2MB buffer), memory-mapped NS16550A UART (`0x1000_0000`) for text output, and the SiFive Test device (`0x10_0000`) for automated zero-exit/failure code signaling in CI pipelines.
 
-### 10. Zephyr RTOS C-FFI Integration, M5Stamp C3 & Automated Testing (`crates/bc_c_api`, `examples/zephyr_app`)
+### 10. Zephyr RTOS Rust Application, M5Stamp C3 & Automated Testing (`crates/bc_zephyr`, `examples/zephyr_app`, `crates/bc_c_api`)
+- **Rust-Centric Architecture (`crates/bc_zephyr`)**: All application logic (self-test suite, interactive REPL line editor, `bc_core` direct execution, and QEMU test exit device) is implemented 100% in `#![no_std]` Rust (`crates/bc_zephyr`), with a minimal C trampoline (~40 lines in `examples/zephyr_app/src/main.c`) only bridging Zephyr Devicetree and kernel macros.
 - **C-FFI Static Library (`crates/bc_c_api`)**: Exposes C-ABI interfaces (`bc_eval`, `bc_eval_callback`, and stateful session APIs `bc_session_create`, `bc_session_eval`, `bc_session_reset`, `bc_session_destroy`) along with C header `include/bc_core.h`. Embeds `embedded-alloc` LLFF dynamic allocator (64KB heap) to provide self-contained, fragmentation-resistant heap management independent of C runtime libc.
 - **Zephyr RTOS Application (`examples/zephyr_app`)**: Integrates `CMakeLists.txt` (with portable multi-target architecture auto-detection and automatic Cargo staticlib invocation) and `prj.conf`, evaluating math expressions directly inside Zephyr kernel threads on both `qemu_riscv32` and physical `stamp_c3` (M5Stamp C3) hardware with an interactive serial REPL.
 - **Automated Zephyr Runners (`scripts/run_zephyr_tests.sh`, `scripts/build_zephyr_m5stamp_c3.sh`, `scripts/flash_and_test_zephyr_m5stamp_c3.sh`)**: Discovers `west` / `ZEPHYR_BASE` / `ZEPHYR_SDK_INSTALL_DIR` dynamically without hardcoded machine paths, running full test suites on QEMU RISC-V 32 and physical hardware with 100% pass verification.

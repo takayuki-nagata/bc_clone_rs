@@ -1,0 +1,18 @@
+[package]
+name = "bc_zephyr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Zephyr RTOS application runner and REPL for bc_clone"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+bc_core = { path = "../bc_core" }
+embedded-alloc = "0.6"
+critical-section = { version = "1.2", features = ["restore-state-none"] }
