@@ -15,4 +15,4 @@ bc_core = { path = "../bc_core" }
 riscv = "0.12"
 riscv-rt = "0.14"
 critical-section = { version = "1.2", features = ["restore-state-none"] }
-embedded-alloc = "0.6"
+embedded-alloc = "0.7"
