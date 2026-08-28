@@ -13,6 +13,6 @@ bench = false
 [dependencies]
 bc_core = { path = "../bc_core" }
 riscv = "0.12"
-riscv-rt = "0.14"
+riscv-rt = "0.18"
 critical-section = { version = "1.2", features = ["restore-state-none"] }
 embedded-alloc = "0.6"
