@@ -14,5 +14,5 @@ std = []
 
 [dependencies]
 bc_core = { path = "../bc_core" }
-embedded-alloc = "0.6"
+embedded-alloc = "0.7"
 critical-section = { version = "1.2", features = ["restore-state-none"] }
