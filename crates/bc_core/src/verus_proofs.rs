@@ -760,4 +760,131 @@ pub fn verified_pow_binary_loop(
     (res_scale, Ghost(res_coeff))
 }
 
+// ============================================================================
+// Target 5: Base Conversion (`ibase`/`obase`) Digit Bounds, LUT Safety & Padding
+// ============================================================================
+
+/// Verified hexadecimal digit parser (`crates/bc_core/src/math.rs:45-56` & `eval.rs:245-254`).
+///
+/// Proves that any ASCII byte maps to a bounded value in $0..=15$, with exact mappings
+/// for `'0'..='9'`, `'A'..='F'`, and `'a'..='f'`.
+pub fn verified_hex_char_val(c: u8) -> (res: usize)
+    ensures
+        res <= 15,
+        (b'0' <= c && c <= b'9') ==> res == (c - b'0') as usize,
+        (b'A' <= c && c <= b'F') ==> res == (c - b'A') as usize + 10,
+        (b'a' <= c && c <= b'f') ==> res == (c - b'a') as usize + 10,
+        !((b'0' <= c && c <= b'9') || (b'A' <= c && c <= b'F') || (b'a' <= c && c <= b'f'))
+            ==> res == 0,
+{
+    if c >= b'0' && c <= b'9' {
+        (c - b'0') as usize
+    } else if c >= b'A' && c <= b'F' {
+        (c - b'A') as usize + 10
+    } else if c >= b'a' && c <= b'f' {
+        (c - b'a') as usize + 10
+    } else {
+        0
+    }
+}
+
+/// Verified fractional base conversion step and hexadecimal LUT indexing (`math.rs:306-318`).
+///
+/// Given $0 \le \text{num} < \text{den}$ and $2 \le \text{obase} \le 16$:
+/// 1. Proves that `d = (num * obase) / den` satisfies $0 \le d < \text{obase} \le 16$.
+/// 2. Proves that indexing `hex_lut[d as usize]` is 100% bounds-safe (never panics).
+/// 3. Proves that `next_num = (num * obase) % den` preserves the loop invariant $0 \le \text{next\_num} < \text{den}$.
+pub fn verified_obase_frac_step_and_lut(
+    num: u64,
+    den: u64,
+    obase: u64,
+    hex_lut: &[u8],
+) -> (res: (u64, u64, u8))
+    requires
+        den >= 1,
+        num < den,
+        2 <= obase <= 16,
+        (den as int) * (obase as int) <= u64::MAX as int,
+        hex_lut@.len() == 16,
+    ensures
+        // res = (digit_d, next_num, ascii_hex_char)
+        res.0 < obase,
+        res.0 < 16,
+        res.1 < den,
+        (num as int) * (obase as int) == (res.0 as int) * (den as int) + (res.1 as int),
+        res.2 == hex_lut@[res.0 as int],
+{
+    proof {
+        assert((num as int) * (obase as int) < (den as int) * (obase as int)) by (nonlinear_arith)
+            requires
+                num < den,
+                obase >= 2,
+        ;
+    }
+    let prod: u64 = num * obase;
+    let d: u64 = prod / den;
+    let next_num: u64 = prod % den;
+
+    proof {
+        assert((prod as int) == (d as int) * (den as int) + (next_num as int)) by (nonlinear_arith)
+            requires
+                prod == num * obase,
+                d == prod / den,
+                next_num == prod % den,
+                den >= 1,
+        ;
+        assert(next_num < den) by (nonlinear_arith)
+            requires
+                next_num == prod % den,
+                den >= 1,
+        ;
+        assert(d < obase) by (nonlinear_arith)
+            requires
+                (prod as int) < (den as int) * (obase as int),
+                (prod as int) == (d as int) * (den as int) + (next_num as int),
+                next_num >= 0,
+                den >= 1,
+        ;
+    }
+
+    let ch: u8 = hex_lut[d as usize];
+    (d, next_num, ch)
+}
+
+/// Verified multi-digit base (`obase > 16`) zero-padding width calculation (`math.rs:268-271`).
+///
+/// Proves that `digit_width - rem_len` never underflows when `1 <= rem_len <= digit_width`,
+/// and that the resulting padded chunk has exact width `digit_width` (plus 1 leading separator).
+pub fn verified_multi_digit_obase_padding(
+    digit_width: usize,
+    rem_len: usize,
+) -> (res: (usize, usize))
+    requires
+        digit_width >= 2,
+        digit_width <= 32,
+        1 <= rem_len <= digit_width,
+    ensures
+        // res = (zero_pad_count, total_padded_digit_len)
+        res.0 == digit_width - rem_len,
+        res.1 == digit_width,
+        res.0 + rem_len == res.1,
+{
+    let mut pad_count: usize = 0;
+    let target_pads: usize = digit_width - rem_len;
+
+    while pad_count < target_pads
+        invariant
+            0 <= pad_count <= target_pads,
+            target_pads == digit_width - rem_len,
+            1 <= rem_len <= digit_width,
+            digit_width <= 32,
+        decreases target_pads - pad_count,
+    {
+        pad_count = pad_count + 1;
+    }
+
+    let total_len: usize = pad_count + rem_len;
+    (pad_count, total_len)
+}
+
 } // verus!
