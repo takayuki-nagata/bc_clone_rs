@@ -247,4 +247,138 @@ pub proof fn lemma_truncating_div_mod_bounds(num: int, den: int)
     ;
 }
 
+// ============================================================================
+// Target 2: Non-Decimal `obase` Fractional Digit Count Termination & Minimality
+// ============================================================================
+
+/// Mathematical specification of $\text{base}^{\text{exp}}$ over natural numbers.
+pub open spec fn pow_base(base: nat, exp: nat) -> nat
+    decreases exp,
+{
+    if exp == 0 {
+        1
+    } else {
+        base * pow_base(base, (exp - 1) as nat)
+    }
+}
+
+/// Lemma: For $\text{base} \ge 1$, $\text{base}^{\text{exp}} \ge 1$.
+pub proof fn lemma_pow_base_pos(base: nat, exp: nat)
+    requires
+        base >= 1,
+    ensures
+        pow_base(base, exp) >= 1,
+    decreases exp,
+{
+    if exp > 0 {
+        lemma_pow_base_pos(base, (exp - 1) as nat);
+        assert(base * pow_base(base, (exp - 1) as nat) >= 1 * 1) by (nonlinear_arith)
+            requires
+                base >= 1,
+                pow_base(base, (exp - 1) as nat) >= 1,
+        ;
+    }
+}
+
+/// Lemma: For $\text{base} \ge 2$, $\text{base}^{\text{exp} + 1} > \text{base}^{\text{exp}}$.
+pub proof fn lemma_pow_base_strictly_increasing(base: nat, exp: nat)
+    requires
+        base >= 2,
+    ensures
+        pow_base(base, exp + 1) == base * pow_base(base, exp),
+        pow_base(base, exp + 1) > pow_base(base, exp),
+{
+    lemma_pow_base_pos(base, exp);
+    let p = pow_base(base, exp);
+    assert(pow_base(base, exp + 1) == base * p);
+    assert(base * p >= 2 * p) by (nonlinear_arith)
+        requires
+            base >= 2,
+            p >= 1,
+    ;
+}
+
+/// Verified calculation of the minimum fractional digit count $k$ in base `obase`
+/// such that $\text{obase}^k \ge \text{target}$ (where $\text{target} = 10^{\text{scale}}$).
+///
+/// Mirrors the `#![no_std]` floating-point-free loop in `crates/bc_core/src/math.rs` (`format_obase`):
+/// proves both loop termination (`decreases target - current`) and exact minimality of $k$:
+/// $\text{obase}^k \ge \text{target}$ and ($k > 0 \implies \text{obase}^{k-1} < \text{target}$).
+pub fn verified_obase_frac_digits(obase: u64, target: u64, max_bound: u64) -> (res: (usize, u64))
+    requires
+        obase >= 2,
+        target >= 1,
+        // Ensure `current * obase` will not overflow u64 before reaching `target`
+        target <= max_bound,
+        max_bound <= usize::MAX as u64,
+        max_bound * (obase as int) <= u64::MAX as int,
+    ensures
+        res.1 as nat == pow_base(obase as nat, res.0 as nat),
+        res.1 >= target,
+        pow_base(obase as nat, res.0 as nat) >= target as nat,
+        res.0 > 0 ==> pow_base(obase as nat, (res.0 - 1) as nat) < target as nat,
+        res.0 == 0 <==> target == 1,
+{
+    let mut k: usize = 0;
+    let mut current: u64 = 1;
+
+    while current < target
+        invariant
+            obase >= 2,
+            target >= 1,
+            target <= max_bound,
+            max_bound <= usize::MAX as u64,
+            max_bound * (obase as int) <= u64::MAX as int,
+            current >= 1,
+            current as nat == pow_base(obase as nat, k as nat),
+            (k as int) < (current as int),
+            k > 0 ==> pow_base(obase as nat, (k - 1) as nat) < target as nat,
+            k == 0 <==> current == 1,
+        decreases
+            if current < target {
+                target - current
+            } else {
+                0
+            },
+    {
+        let prev_current = current;
+        let prev_k = k;
+
+        proof {
+            lemma_pow_base_strictly_increasing(obase as nat, prev_k as nat);
+            assert((prev_current as int) * (obase as int) <= (max_bound as int) * (obase as int))
+                by (nonlinear_arith)
+                requires
+                    prev_current < target,
+                    target <= max_bound,
+                    obase >= 2,
+            ;
+            assert((prev_current as int) * (obase as int) >= (prev_current as int) * 2)
+                by (nonlinear_arith)
+                requires
+                    prev_current >= 1,
+                    obase >= 2,
+            ;
+            assert((prev_k as int) + 1 < (prev_current as int) * (obase as int))
+                by (nonlinear_arith)
+                requires
+                    (prev_k as int) < (prev_current as int),
+                    prev_current >= 1,
+                    (prev_current as int) * (obase as int) >= (prev_current as int) * 2,
+            ;
+        }
+
+        current = current * obase;
+        k = k + 1;
+    }
+
+    proof {
+        if k > 0 {
+            lemma_pow_base_pos(obase as nat, (k - 1) as nat);
+        }
+    }
+
+    (k, current)
+}
+
 } // verus!
