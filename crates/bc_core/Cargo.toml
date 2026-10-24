@@ -13,3 +13,6 @@ num-integer = { version = "0.1", default-features = false }
 [features]
 default = []
 c-api = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
