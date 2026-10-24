@@ -1433,4 +1433,203 @@ pub fn verified_lexer_peek_token_index(buffer_len: usize, offset: usize) -> (res
     }
 }
 
+// ============================================================================
+// Target 9: `BCNum::length` & `atan` / `ln` / `bessel` Mathematical Identities
+// ============================================================================
+
+/// Verified POSIX `length(x)` significant digit count calculation (`math.rs:219-228`).
+///
+/// Proves that `length(x)` is unconditionally $\ge 1$ and $\ge \text{scale}(x)$, matching
+/// POSIX `bc` rules for both zero and non-zero integer parts.
+pub fn verified_bcnum_length(
+    int_part_is_zero: bool,
+    int_part_digits: usize,
+    scale: usize,
+) -> (res: usize)
+    requires
+        scale <= MAX_VERIFIED_SCALE,
+        int_part_digits <= MAX_VERIFIED_SCALE,
+        !int_part_is_zero ==> int_part_digits >= 1,
+    ensures
+        res >= 1,
+        res >= scale,
+        int_part_is_zero ==> res == (if scale >= 1 { scale } else { 1 }),
+        !int_part_is_zero ==> res == int_part_digits + scale,
+{
+    if int_part_is_zero {
+        if scale >= 1 {
+            scale
+        } else {
+            1
+        }
+    } else {
+        int_part_digits + scale
+    }
+}
+
+/// Verified arctangent reciprocal argument reduction $|x| > 1 \implies 1/x \in [0, 1)$
+/// (`crates/bc_core/src/math.rs:620-624` in `decimal_atan`).
+///
+/// Proves via non-linear arithmetic that when `x_p > one_p`, replacing `x_p` with
+/// `(one_p * one_p) / x_p` strictly reduces the argument below `one_p` ($|x'| < 1$),
+/// ensuring rapid convergence of the subsequent half-angle and Taylor series steps.
+pub fn verified_atan_inversion_reduction(x_p: u64, one_p: u64) -> (res: (u64, bool))
+    requires
+        one_p >= 1,
+        one_p <= 1_000_000_000,
+    ensures
+        // res = (reduced_x_p, inverted_flag)
+        res.0 <= one_p,
+        x_p > one_p ==> (res.1 && res.0 < one_p),
+        x_p <= one_p ==> (!res.1 && res.0 == x_p),
+{
+    if x_p > one_p {
+        proof {
+            assert((one_p as int) * (one_p as int) <= 1_000_000_000 * 1_000_000_000)
+                by (nonlinear_arith)
+                requires
+                    one_p <= 1_000_000_000,
+            ;
+            assert((one_p as int) * (one_p as int) < (one_p as int) * (x_p as int))
+                by (nonlinear_arith)
+                requires
+                    x_p > one_p,
+                    one_p >= 1,
+            ;
+        }
+        let num: u64 = one_p * one_p;
+        let inv_x: u64 = num / x_p;
+        proof {
+            assert(inv_x < one_p) by (nonlinear_arith)
+                requires
+                    num == one_p * one_p,
+                    inv_x == num / x_p,
+                    x_p > one_p,
+                    one_p >= 1,
+            ;
+        }
+        (inv_x, true)
+    } else {
+        (x_p, false)
+    }
+}
+
+/// Verified natural logarithm Cayley transform $y = \frac{m - 1}{m + 1}$ (`math.rs:716-719`).
+///
+/// Given a positive fixed-point mantissa `m_val > 0` and unit `one_val > 0`, proves:
+/// 1. Denominator `den_y = m_val + one_val > one_val > 0` (division by zero is impossible).
+/// 2. Numerator magnitude satisfies `-den_y < num_y < den_y` ($|y| < 1$, inside the convergence radius).
+/// 3. When $m \ge 1$ (`m_val >= one_val`), $0 \le y < \text{one\_val}$.
+pub fn verified_ln_cayley_transform(m_val: i64, one_val: i64) -> (res: (i64, i64, i64))
+    requires
+        m_val > 0,
+        one_val > 0,
+        m_val <= 1_000_000_000,
+        one_val <= 1_000_000_000,
+    ensures
+        // res = (num_y, den_y, scaled_y)
+        res.0 == m_val - one_val,
+        res.1 == m_val + one_val,
+        res.1 > one_val && res.1 > 0,
+        -res.1 < res.0 && res.0 < res.1,
+        m_val >= one_val ==> (0 <= res.2 && res.2 < one_val),
+{
+    let num_y: i64 = m_val - one_val;
+    let den_y: i64 = m_val + one_val;
+
+    let scaled_y: i64 = if num_y >= 0 {
+        let num_u: u64 = num_y as u64;
+        let one_u: u64 = one_val as u64;
+        let den_u: u64 = den_y as u64;
+        proof {
+            assert((num_u as int) * (one_u as int) <= 1_000_000_000 * 1_000_000_000)
+                by (nonlinear_arith)
+                requires
+                    num_u <= 1_000_000_000,
+                    one_u <= 1_000_000_000,
+            ;
+            assert((num_u as int) * (one_u as int) < (den_u as int) * (one_u as int))
+                by (nonlinear_arith)
+                requires
+                    num_u < den_u,
+                    one_u >= 1,
+            ;
+        }
+        let prod_u: u64 = num_u * one_u;
+        let q_u64: u64 = prod_u / den_u;
+        proof {
+            assert(q_u64 < one_u) by (nonlinear_arith)
+                requires
+                    prod_u == num_u * one_u,
+                    num_u < den_u,
+                    den_u >= 1,
+                    one_u >= 1,
+                    q_u64 == prod_u / den_u,
+            ;
+        }
+        q_u64 as i64
+    } else {
+        let abs_num_u: u64 = (-num_y) as u64;
+        let one_u: u64 = one_val as u64;
+        let den_u: u64 = den_y as u64;
+        proof {
+            assert((abs_num_u as int) * (one_u as int) <= 1_000_000_000 * 1_000_000_000)
+                by (nonlinear_arith)
+                requires
+                    abs_num_u <= 1_000_000_000,
+                    one_u <= 1_000_000_000,
+            ;
+            assert((abs_num_u as int) * (one_u as int) < (den_u as int) * (one_u as int))
+                by (nonlinear_arith)
+                requires
+                    abs_num_u < den_u,
+                    one_u >= 1,
+            ;
+        }
+        let prod_u: u64 = abs_num_u * one_u;
+        let q_u64: u64 = prod_u / den_u;
+        proof {
+            assert(q_u64 < one_u) by (nonlinear_arith)
+                requires
+                    prod_u == abs_num_u * one_u,
+                    abs_num_u < den_u,
+                    den_u >= 1,
+                    one_u >= 1,
+                    q_u64 == prod_u / den_u,
+            ;
+        }
+        -(q_u64 as i64)
+    };
+
+    (num_y, den_y, scaled_y)
+}
+
+/// Verified Bessel function negative-order parity identity $J_{-n}(x) = (-1)^n J_n(x)$
+/// (`crates/bc_core/src/math.rs:879-884` in `bc_bessel`).
+///
+/// Proves that `n_abs >= 0`, `sign` is strictly $\pm 1$, and negative odd orders flip sign
+/// while negative even and non-negative orders preserve sign $+1$.
+pub fn verified_bessel_negative_order_parity(n_i64: i64) -> (res: (i64, i64))
+    requires
+        n_i64 > i64::MIN,
+    ensures
+        // res = (n_abs, sign)
+        res.0 >= 0,
+        res.0 == if n_i64 < 0 { -(n_i64 as int) } else { n_i64 as int },
+        res.1 == 1 || res.1 == -1,
+        n_i64 >= 0 ==> res.1 == 1,
+        (n_i64 < 0 && (-(n_i64 as int)) % 2 == 1) ==> res.1 == -1,
+        (n_i64 < 0 && (-(n_i64 as int)) % 2 == 0) ==> res.1 == 1,
+{
+    if n_i64 < 0 {
+        let neg_n: i64 = -n_i64;
+        let neg_n_u64: u64 = neg_n as u64;
+        let rem: u64 = neg_n_u64 % 2;
+        let sign: i64 = if rem == 1 { -1 } else { 1 };
+        (neg_n, sign)
+    } else {
+        (n_i64, 1)
+    }
+}
+
 } // verus!
