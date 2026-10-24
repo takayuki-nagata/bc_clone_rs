@@ -6,6 +6,11 @@
 //! coefficients paired with a scale factor. Also implements transcendental
 //! functions using series expansions.
 
+use crate::verified_kernels::{
+    verified_add_sub_scales, verified_alphanumeric_char_val, verified_bcnum_length,
+    verified_bessel_negative_order_parity, verified_div_scale_and_shift,
+    verified_mul_scale_and_shift, verified_sqrt_scale_and_shift,
+};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -42,29 +47,16 @@ impl BCNum {
             (num_str.as_str(), "")
         };
 
-        let char_val = |c: char| -> usize {
-            if c.is_ascii_digit() {
-                (c as usize) - ('0' as usize)
-            } else {
-                let cu = c.to_ascii_uppercase();
-                if cu.is_ascii_uppercase() {
-                    (cu as usize) - ('A' as usize) + 10
-                } else {
-                    0
-                }
-            }
-        };
-
         let mut int_val = BigInt::zero();
-        for c in int_part.chars() {
-            int_val = int_val * ibase + char_val(c);
+        for b in int_part.bytes() {
+            int_val = int_val * ibase + verified_alphanumeric_char_val(b);
         }
 
         let scale_val = frac_part.len();
         let coeff = if scale_val > 0 {
             let mut frac_numerator = BigInt::zero();
-            for c in frac_part.chars() {
-                frac_numerator = frac_numerator * ibase + char_val(c);
+            for b in frac_part.bytes() {
+                frac_numerator = frac_numerator * ibase + verified_alphanumeric_char_val(b);
             }
             let frac_denominator = BigInt::from(ibase).pow(scale_val as u32);
             let num = (int_val * &frac_denominator + frac_numerator)
@@ -87,33 +79,28 @@ impl BCNum {
 
     /// Adds two BCNum values.
     pub fn add(&self, other: &Self) -> Self {
-        let sr = core::cmp::max(self.scale, other.scale);
-        let coeff_a = &self.coeff * BigInt::from(10).pow((sr - self.scale) as u32);
-        let coeff_b = &other.coeff * BigInt::from(10).pow((sr - other.scale) as u32);
+        let (sr, shift_a, shift_b) = verified_add_sub_scales(self.scale, other.scale);
+        let coeff_a = &self.coeff * BigInt::from(10).pow(shift_a as u32);
+        let coeff_b = &other.coeff * BigInt::from(10).pow(shift_b as u32);
         Self::new(coeff_a + coeff_b, sr)
     }
 
     /// Subtracts other from self.
     pub fn sub(&self, other: &Self) -> Self {
-        let sr = core::cmp::max(self.scale, other.scale);
-        let coeff_a = &self.coeff * BigInt::from(10).pow((sr - self.scale) as u32);
-        let coeff_b = &other.coeff * BigInt::from(10).pow((sr - other.scale) as u32);
+        let (sr, shift_a, shift_b) = verified_add_sub_scales(self.scale, other.scale);
+        let coeff_a = &self.coeff * BigInt::from(10).pow(shift_a as u32);
+        let coeff_b = &other.coeff * BigInt::from(10).pow(shift_b as u32);
         Self::new(coeff_a - coeff_b, sr)
     }
 
     /// Multiplies two BCNum values under scale.
     pub fn mul(&self, other: &Self, global_scale: usize) -> Self {
-        let sr = core::cmp::min(
-            self.scale + other.scale,
-            core::cmp::max(global_scale, core::cmp::max(self.scale, other.scale)),
-        );
+        let (sr, diff) = verified_mul_scale_and_shift(self.scale, other.scale, global_scale);
         let exact_coeff = &self.coeff * &other.coeff;
-        let exact_scale = self.scale + other.scale;
-        let diff = exact_scale as i64 - sr as i64;
         let coeff = if diff > 0 {
             exact_coeff / BigInt::from(10).pow(diff as u32)
         } else {
-            exact_coeff * BigInt::from(10).pow((-diff) as u32)
+            exact_coeff
         };
         Self::new(coeff, sr)
     }
@@ -123,8 +110,7 @@ impl BCNum {
         if other.coeff.is_zero() {
             panic!("division by zero");
         }
-        let sr = global_scale;
-        let shift = other.scale as i64 - self.scale as i64 + sr as i64;
+        let (sr, shift) = verified_div_scale_and_shift(self.scale, other.scale, global_scale);
         let coeff = if shift >= 0 {
             let num = &self.coeff * BigInt::from(10).pow(shift as u32);
             num / &other.coeff
@@ -208,8 +194,7 @@ impl BCNum {
         if self.coeff < BigInt::zero() {
             panic!("square root of negative number");
         }
-        let sr = core::cmp::max(self.scale, global_scale);
-        let shift = 2 * sr - self.scale;
+        let (sr, shift) = verified_sqrt_scale_and_shift(self.scale, global_scale);
         let num = &self.coeff * BigInt::from(10).pow(shift as u32);
         let coeff = num.sqrt();
         Self::new(coeff, sr)
@@ -219,11 +204,13 @@ impl BCNum {
     pub fn length(&self) -> Self {
         let divisor = BigInt::from(10).pow(self.scale as u32);
         let int_part = self.coeff.abs() / divisor;
-        let val = if int_part.is_zero() {
-            core::cmp::max(1, self.scale)
+        let is_zero = int_part.is_zero();
+        let digits = if is_zero {
+            0
         } else {
-            int_part.to_string().len() + self.scale
+            int_part.to_string().len()
         };
+        let val = verified_bcnum_length(is_zero, digits, self.scale);
         Self::new(BigInt::from(val), 0)
     }
 
@@ -876,12 +863,7 @@ pub fn bc_bessel(n_num: &BCNum, x: &BCNum, global_scale: usize) -> BCNum {
         return res_val.to_bc_num(global_scale);
     }
 
-    let sign = if n_i64 < 0 {
-        if (-n_i64) % 2 == 1 { -1 } else { 1 }
-    } else {
-        1
-    };
-    let n_abs = n_i64.abs();
+    let (n_abs, sign) = verified_bessel_negative_order_parity(n_i64);
 
     let x_half = dec_x.div_int(2);
     let mut term_factor = Decimal::one(prec);
