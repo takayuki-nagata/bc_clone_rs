@@ -1770,4 +1770,206 @@ pub fn verified_loop_flag_propagation(
     }
 }
 
+// ============================================================================
+// Target 11: CLI REPL Block Scanner, C-FFI NUL Buffer Safety & Zephyr Editor
+// ============================================================================
+
+/// Verified CLI REPL `count_open_braces` & `is_block_incomplete` state machine
+/// (`crates/bc_cli/src/main.rs:78-177`).
+///
+/// Scans an arbitrary byte slice tracking `/* ... */` comments, `"..."` strings
+/// (including `\\\n` and `\\\r\n` continuations), and `{` / `}` brace nesting depth.
+/// Proves:
+/// 1. Mutual exclusion invariant: `!(in_comment && in_string)` holds at every step.
+/// 2. 100% bounds-safe slice indexing and loop termination (`decreases len - i`).
+/// 3. Brace depth is bounded by `-(len as int) <= count <= (len as int)`.
+/// 4. Exact block incompleteness criterion: `res.3 <==> (res.0 > 0 || res.1 || res.2)`.
+pub fn verified_repl_block_completeness(text: &[u8]) -> (res: (i64, bool, bool, bool))
+    requires
+        text@.len() <= 1_000_000_000,
+    ensures
+        // res = (open_brace_count, in_comment, in_string, is_incomplete)
+        !(res.1 && res.2),
+        -(text@.len() as int) <= res.0 && res.0 <= (text@.len() as int),
+        res.3 <==> (res.0 > 0 || res.1 || res.2),
+{
+    let mut count: i64 = 0;
+    let mut in_comment: bool = false;
+    let mut in_string: bool = false;
+    let mut i: usize = 0;
+    let len: usize = text.len();
+
+    while i < len
+        invariant
+            0 <= i <= len,
+            len == text@.len(),
+            len <= 1_000_000_000,
+            !(in_comment && in_string),
+            -(i as int) <= count && count <= (i as int),
+        decreases len - i,
+    {
+        let c = text[i];
+        if in_comment {
+            if c == b'*' && len - i >= 2 && text[i + 1] == b'/' {
+                in_comment = false;
+                i = i + 2;
+            } else {
+                i = i + 1;
+            }
+        } else if in_string {
+            if c == b'"' {
+                in_string = false;
+                i = i + 1;
+            } else if c == b'\\' && len - i >= 2 && text[i + 1] == b'\n' {
+                i = i + 2;
+            } else if c == b'\\' && len - i >= 3 && text[i + 1] == b'\r' && text[i + 2] == b'\n' {
+                i = i + 3;
+            } else {
+                i = i + 1;
+            }
+        } else {
+            if c == b'/' && len - i >= 2 && text[i + 1] == b'*' {
+                in_comment = true;
+                i = i + 2;
+            } else if c == b'"' {
+                in_string = true;
+                i = i + 1;
+            } else if c == b'{' {
+                count = count + 1;
+                i = i + 1;
+            } else if c == b'}' {
+                count = count - 1;
+                i = i + 1;
+            } else {
+                i = i + 1;
+            }
+        }
+    }
+
+    let is_incomplete: bool = count > 0 || in_comment || in_string;
+    (count, in_comment, in_string, is_incomplete)
+}
+
+/// Status constants matching `crates/bc_c_api/src/lib.rs` (`BcStatus`).
+pub const BC_STATUS_OK: u8 = 0;
+pub const BC_STATUS_ERR_BUFFER_TOO_SMALL: u8 = 2;
+
+/// Verified C-FFI output buffer bounds check and NUL-terminated copy
+/// (`crates/bc_c_api/src/lib.rs:149-190, 293-336`).
+///
+/// Proves:
+/// 1. If `buf_size == 0` or `src.len() >= buf_size` (`src.len() + 1 > buf_size`),
+///    returns `BC_STATUS_ERR_BUFFER_TOO_SMALL` without overflowing the buffer.
+/// 2. On `BC_STATUS_OK`, `out_buf` has exact length `src.len() + 1 <= buf_size`,
+///    its prefix matches `src@` byte-for-byte, and its final byte is guaranteed to be `0u8` (NUL).
+pub fn verified_c_ffi_copy_nul_terminated(
+    src: &[u8],
+    out_buf: &mut alloc::vec::Vec<u8>,
+    buf_size: usize,
+) -> (status: u8)
+    ensures
+        (buf_size == 0 || src@.len() >= buf_size) ==> (
+            status == BC_STATUS_ERR_BUFFER_TOO_SMALL
+            && final(out_buf)@ == old(out_buf)@
+        ),
+        (buf_size > 0 && src@.len() < buf_size) ==> (
+            status == BC_STATUS_OK
+            && final(out_buf)@.len() == src@.len() + 1
+            && final(out_buf)@.len() <= buf_size
+            && final(out_buf)@.subrange(0, src@.len() as int) =~= src@
+            && final(out_buf)@[src@.len() as int] == 0u8
+        ),
+{
+    if buf_size == 0 || src.len() >= buf_size {
+        return BC_STATUS_ERR_BUFFER_TOO_SMALL;
+    }
+
+    out_buf.clear();
+    let len: usize = src.len();
+    let mut i: usize = 0;
+
+    while i < len
+        invariant
+            0 <= i <= len,
+            len == src@.len(),
+            len < buf_size,
+            out_buf@.len() == i,
+            out_buf@ =~= src@.subrange(0, i as int),
+        decreases len - i,
+    {
+        out_buf.push(src[i]);
+        i = i + 1;
+    }
+
+    out_buf.push(0u8);
+    proof {
+        assert(out_buf@.subrange(0, len as int) =~= src@);
+    }
+
+    BC_STATUS_OK
+}
+
+/// Action codes for the Zephyr RTOS interactive serial REPL line editor (`crates/bc_zephyr/src/lib.rs:327-358`).
+pub const REPL_ACTION_NONE: u8 = 0;
+pub const REPL_ACTION_EVAL_LINE: u8 = 1;
+pub const REPL_ACTION_BACKSPACE: u8 = 2;
+pub const REPL_ACTION_CTRL_C: u8 = 3;
+pub const REPL_ACTION_APPEND_CHAR: u8 = 4;
+
+/// Verified Zephyr RTOS interactive serial REPL line editor transition
+/// (`crates/bc_zephyr/src/lib.rs:327-358`).
+///
+/// Proves:
+/// 1. Backspace (`0x08` or `0x7F`) on an empty buffer is a safe no-op (no underflow),
+///    and on a non-empty buffer removes exactly the last character.
+/// 2. Ctrl+C (`0x03`) immediately clears the line buffer (`len == 0`).
+/// 3. Printable ASCII (`0x20..=0x7E`) appends the character to `line_buf`.
+pub fn verified_zephyr_repl_edit_step(
+    line_buf: &mut alloc::vec::Vec<u8>,
+    b: u8,
+) -> (action: u8)
+    requires
+        old(line_buf)@.len() <= 1_000_000,
+    ensures
+        (b == b'\r' || b == b'\n') ==> (
+            action == REPL_ACTION_EVAL_LINE
+            && final(line_buf)@.len() == 0
+        ),
+        (b == 0x08 || b == 0x7F) ==> (
+            action == REPL_ACTION_BACKSPACE
+            && (old(line_buf)@.len() == 0 ==> final(line_buf)@.len() == 0)
+            && (old(line_buf)@.len() > 0 ==> (
+                final(line_buf)@.len() == old(line_buf)@.len() - 1
+                && final(line_buf)@ =~= old(line_buf)@.subrange(0, (old(line_buf)@.len() - 1) as int)
+            ))
+        ),
+        b == 0x03 ==> (
+            action == REPL_ACTION_CTRL_C
+            && final(line_buf)@.len() == 0
+        ),
+        (0x20 <= b && b <= 0x7E) ==> (
+            action == REPL_ACTION_APPEND_CHAR
+            && final(line_buf)@.len() == old(line_buf)@.len() + 1
+            && final(line_buf)@[old(line_buf)@.len() as int] == b
+        ),
+{
+    if b == b'\r' || b == b'\n' {
+        line_buf.clear();
+        REPL_ACTION_EVAL_LINE
+    } else if b == 0x08 || b == 0x7F {
+        if line_buf.len() > 0 {
+            let _ = line_buf.pop();
+        }
+        REPL_ACTION_BACKSPACE
+    } else if b == 0x03 {
+        line_buf.clear();
+        REPL_ACTION_CTRL_C
+    } else if b >= 0x20 && b <= 0x7E {
+        line_buf.push(b);
+        REPL_ACTION_APPEND_CHAR
+    } else {
+        REPL_ACTION_NONE
+    }
+}
+
 } // verus!
