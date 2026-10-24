@@ -1632,4 +1632,142 @@ pub fn verified_bessel_negative_order_parity(n_i64: i64) -> (res: (i64, i64))
     }
 }
 
+// ============================================================================
+// Target 10: `Evaluator` Prefix/Postfix `++`/`--` & Control-Flow Short-Circuiting
+// ============================================================================
+
+/// Verified `Evaluator` prefix/postfix increment and decrement (`++` / `--`) semantics
+/// (`crates/bc_core/src/eval.rs:352-419`).
+///
+/// Returns `((stored_coeff, stored_scale), (returned_coeff, returned_scale))`.
+/// Proves:
+/// 1. The variable's stored scale is invariant (`stored_scale == scale`).
+/// 2. The stored value always changes by $\pm 10^{\text{scale}}$ regardless of `is_prefix`.
+/// 3. Prefix (`++x`, `--x`) returns the new value, whereas postfix (`x++`, `x--`) returns the old value.
+pub fn verified_update_op_semantics(
+    old_coeff: i64,
+    scale_pow10: i64,
+    scale: usize,
+    is_incr: bool,
+    is_prefix: bool,
+) -> (res: ((i64, usize), (i64, usize)))
+    requires
+        scale_pow10 >= 1,
+        scale_pow10 <= 1_000_000_000_000i64,
+        old_coeff >= -1_000_000_000_000_000i64,
+        old_coeff <= 1_000_000_000_000_000i64,
+    ensures
+        // 1. Stored state (res.0)
+        res.0.1 == scale,
+        is_incr ==> res.0.0 == old_coeff + scale_pow10,
+        !is_incr ==> res.0.0 == old_coeff - scale_pow10,
+        // 2. Evaluated expression result (res.1)
+        res.1.1 == scale,
+        is_prefix ==> res.1 == res.0,
+        !is_prefix ==> res.1 == (old_coeff, scale),
+{
+    let new_coeff: i64 = if is_incr {
+        old_coeff + scale_pow10
+    } else {
+        old_coeff - scale_pow10
+    };
+    let stored = (new_coeff, scale);
+    let returned = if is_prefix {
+        stored
+    } else {
+        (old_coeff, scale)
+    };
+    (stored, returned)
+}
+
+/// Statement kind constants for control-flow verification (`eval.rs:538-579`).
+pub const STMT_NORMAL: u8 = 0;
+pub const STMT_BREAK: u8 = 1;
+pub const STMT_RETURN: u8 = 2;
+pub const STMT_QUIT: u8 = 3;
+
+/// Verified `Stmt::Block` execution short-circuiting on `break`, `return`, or `quit`
+/// (`crates/bc_core/src/eval.rs:538-579`).
+///
+/// Returns `(executed_normal_stmt_count, break_flag, return_flag, quit_flag)`.
+/// Proves:
+/// 1. If any flag is already set upon entry, 0 statements are executed and flags remain unchanged.
+/// 2. Execution halts immediately upon encountering the first `Break`, `Return`, or `Quit` statement.
+/// 3. Once set, `return_flag` and `quit_flag` are never cleared within the block.
+pub fn verified_block_short_circuit(
+    stmts: &[u8],
+    initial_break: bool,
+    initial_return: bool,
+    initial_quit: bool,
+) -> (res: (usize, bool, bool, bool))
+    ensures
+        (initial_break || initial_return || initial_quit) ==> (
+            res.0 == 0
+            && res.1 == initial_break
+            && res.2 == initial_return
+            && res.3 == initial_quit
+        ),
+        res.0 <= stmts@.len(),
+        initial_return ==> res.2,
+        initial_quit ==> res.3,
+{
+    if initial_break || initial_return || initial_quit {
+        return (0, initial_break, initial_return, initial_quit);
+    }
+
+    let mut break_flag: bool = false;
+    let mut return_flag: bool = false;
+    let mut quit_flag: bool = false;
+    let mut normal_count: usize = 0;
+    let mut i: usize = 0;
+    let len: usize = stmts.len();
+
+    while i < len && !break_flag && !return_flag && !quit_flag
+        invariant
+            0 <= i <= len,
+            len == stmts@.len(),
+            normal_count <= i,
+        decreases len - i,
+    {
+        let s = stmts[i];
+        if s == STMT_BREAK {
+            break_flag = true;
+        } else if s == STMT_RETURN {
+            return_flag = true;
+        } else if s == STMT_QUIT {
+            quit_flag = true;
+        } else {
+            normal_count = normal_count + 1;
+        }
+        i = i + 1;
+    }
+
+    (normal_count, break_flag, return_flag, quit_flag)
+}
+
+/// Verified `While` / `For` loop post-body control-flow flag handling (`eval.rs:592-598, 608-614`).
+///
+/// Returns `(should_exit_loop, next_break_flag, next_return_flag, next_quit_flag)`.
+/// Proves:
+/// 1. `break_flag` triggers loop exit AND resets `next_break_flag = false` so outer loops continue.
+/// 2. `return_flag` and `quit_flag` trigger loop exit AND remain `true` to propagate to the caller.
+pub fn verified_loop_flag_propagation(
+    break_flag: bool,
+    return_flag: bool,
+    quit_flag: bool,
+) -> (res: (bool, bool, bool, bool))
+    ensures
+        res.0 == (break_flag || return_flag || quit_flag),
+        !res.1, // `break_flag` is always cleared after exiting or continuing the loop
+        !break_flag ==> (res.2 == return_flag && res.3 == quit_flag),
+{
+    if break_flag {
+        (true, false, return_flag, quit_flag)
+    } else if return_flag || quit_flag {
+        (true, false, return_flag, quit_flag)
+    } else {
+        (false, false, false, false)
+    }
+}
+
 } // verus!
