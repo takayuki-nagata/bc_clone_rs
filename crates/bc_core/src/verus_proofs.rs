@@ -1061,4 +1061,235 @@ pub fn verified_exp_ln2_reduction(x_abs: i64, ln2_val: i64) -> (res: (i64, i64))
     (n, r)
 }
 
+// ============================================================================
+// Target 7: `Evaluator` Relational Total Order, Register Clamping & ScopeGuard
+// ============================================================================
+
+/// Normalized left-hand numerator when comparing `a` and `b` (`eval.rs:208-217`).
+pub open spec fn spec_rel_norm_lhs(a: SpecBCNum, b: SpecBCNum) -> int {
+    if a.scale >= b.scale {
+        a.coeff
+    } else {
+        a.coeff * pow10((b.scale - a.scale) as nat)
+    }
+}
+
+/// Normalized right-hand numerator when comparing `a` and `b` (`eval.rs:208-217`).
+pub open spec fn spec_rel_norm_rhs(a: SpecBCNum, b: SpecBCNum) -> int {
+    if a.scale > b.scale {
+        b.coeff * pow10((a.scale - b.scale) as nat)
+    } else {
+        b.coeff
+    }
+}
+
+/// Relational predicates (`<`, `==`, `>`) over `SpecBCNum`.
+pub open spec fn spec_bcnum_lt(a: SpecBCNum, b: SpecBCNum) -> bool {
+    spec_rel_norm_lhs(a, b) < spec_rel_norm_rhs(a, b)
+}
+
+pub open spec fn spec_bcnum_eq(a: SpecBCNum, b: SpecBCNum) -> bool {
+    spec_rel_norm_lhs(a, b) == spec_rel_norm_rhs(a, b)
+}
+
+pub open spec fn spec_bcnum_gt(a: SpecBCNum, b: SpecBCNum) -> bool {
+    spec_rel_norm_lhs(a, b) > spec_rel_norm_rhs(a, b)
+}
+
+/// Proof that `Evaluator`'s relational comparison forms a strict trichotomous total order
+/// and agrees with common-scale normalization `max(a.scale, b.scale)`.
+pub proof fn lemma_bcnum_relational_total_order(a: SpecBCNum, b: SpecBCNum)
+    ensures
+        // 1. Equivalence with scaling to `sr = max(a.scale, b.scale)`
+        spec_rel_norm_lhs(a, b) == a.scaled_coeff(if a.scale >= b.scale { a.scale } else { b.scale }),
+        spec_rel_norm_rhs(a, b) == b.scaled_coeff(if a.scale >= b.scale { a.scale } else { b.scale }),
+        // 2. Reflexivity
+        spec_bcnum_eq(a, a),
+        !spec_bcnum_lt(a, a),
+        // 3. Symmetry of equality and antisymmetry of `<` / `>`
+        spec_bcnum_eq(a, b) <==> spec_bcnum_eq(b, a),
+        spec_bcnum_lt(a, b) <==> spec_bcnum_gt(b, a),
+        // 4. Strict trichotomy: exactly one of `<`, `==`, `>` holds
+        (spec_bcnum_lt(a, b) && !spec_bcnum_eq(a, b) && !spec_bcnum_gt(a, b))
+            || (!spec_bcnum_lt(a, b) && spec_bcnum_eq(a, b) && !spec_bcnum_gt(a, b))
+            || (!spec_bcnum_lt(a, b) && !spec_bcnum_eq(a, b) && spec_bcnum_gt(a, b)),
+{
+    assert((a.scale - a.scale) as nat == 0);
+    assert((b.scale - b.scale) as nat == 0);
+    assert(pow10(0) == 1);
+}
+
+/// Verified exponent shift calculation for relational operators (`eval.rs:208-217`).
+pub fn verified_relational_scale_shifts(l_scale: usize, r_scale: usize) -> (res: (usize, usize))
+    requires
+        l_scale <= MAX_VERIFIED_SCALE,
+        r_scale <= MAX_VERIFIED_SCALE,
+    ensures
+        // res = (shift_l, shift_r)
+        l_scale > r_scale ==> (res.0 == 0 && res.1 == l_scale - r_scale),
+        l_scale < r_scale ==> (res.0 == r_scale - l_scale && res.1 == 0),
+        l_scale == r_scale ==> (res.0 == 0 && res.1 == 0),
+        l_scale + res.0 == r_scale + res.1,
+{
+    let diff: i64 = (l_scale as i64) - (r_scale as i64);
+    if diff > 0 {
+        (0, (diff as usize))
+    } else if diff < 0 {
+        ((-diff) as usize, 0)
+    } else {
+        (0, 0)
+    }
+}
+
+/// Verified `ibase` register clamping and warning trigger (`eval.rs:316-333, 395-399`).
+///
+/// Proves that `ibase` is unconditionally constrained to $[2, 16]$ and reports whether
+/// a out-of-range warning was triggered.
+pub fn verified_clamp_ibase(reg_val: usize) -> (res: (usize, bool))
+    ensures
+        2 <= res.0 && res.0 <= 16,
+        (2 <= reg_val && reg_val <= 16) ==> (res.0 == reg_val && !res.1),
+        reg_val < 2 ==> (res.0 == 2 && res.1),
+        reg_val > 16 ==> (res.0 == 16 && res.1),
+{
+    if reg_val < 2 {
+        (2, true)
+    } else if reg_val > 16 {
+        (16, true)
+    } else {
+        (reg_val, false)
+    }
+}
+
+/// Verified `obase` register clamping (`eval.rs:334-341, 400-407`).
+///
+/// Proves that `obase` is unconditionally constrained to $\ge 2$.
+pub fn verified_clamp_obase(reg_val: usize) -> (res: usize)
+    ensures
+        res >= 2,
+        reg_val >= 2 ==> res == reg_val,
+        reg_val < 2 ==> res == 2,
+{
+    if reg_val < 2 {
+        2
+    } else {
+        reg_val
+    }
+}
+
+/// Verified dynamic scope frame push, mutation, and `ScopeGuard` drop restoration
+/// (`crates/bc_core/src/eval.rs:87-119, 454-497`).
+///
+/// Models a variable's dynamic scope stack (`Vec<i64>`) across a function call that:
+/// 1. Pushes `num_params` parameter bindings and `num_autos` local `auto` bindings (initialized to 0).
+/// 2. Mutates the active top-of-stack binding during function execution.
+/// 3. Restores `prev_return_flag` / `prev_return_value` and pops all `num_autos` and `num_params`
+///    in reverse order upon `ScopeGuard::drop`.
+///
+/// Formally proves the **Stack Frame Restoration Theorem**:
+/// After `ScopeGuard` cleanup, `stack@ == old(stack)@` (every caller binding and stack depth
+/// is 100% preserved without shadowing leaks).
+pub fn verified_scope_guard_lifecycle(
+    stack: &mut alloc::vec::Vec<i64>,
+    param_vals: &[i64],
+    num_autos: usize,
+    mutated_top_val: i64,
+    caller_return_flag: bool,
+    caller_return_val: i64,
+) -> (res: (bool, i64))
+    requires
+        old(stack)@.len() >= 1,
+        old(stack)@.len() + param_vals@.len() + num_autos <= 1_000_000,
+    ensures
+        // 1. Exact stack restoration (length and all caller elements unchanged)
+        final(stack)@ == old(stack)@,
+        // 2. Exact restoration of caller's return control-flow state
+        res.0 == caller_return_flag,
+        res.1 == caller_return_val,
+{
+    let ghost initial_stack = stack@;
+    let initial_len: usize = stack.len();
+    let num_params: usize = param_vals.len();
+
+    // 1. Push evaluated parameters onto dynamic scope stack
+    let mut p_idx: usize = 0;
+    while p_idx < num_params
+        invariant
+            0 <= p_idx <= num_params,
+            num_params == param_vals@.len(),
+            initial_len == initial_stack.len(),
+            initial_len + num_params + num_autos <= 1_000_000,
+            stack@.len() == initial_len + p_idx,
+            stack@.subrange(0, initial_len as int) =~= initial_stack,
+        decreases num_params - p_idx,
+    {
+        stack.push(param_vals[p_idx]);
+        p_idx = p_idx + 1;
+    }
+
+    // 2. Push zero-initialized `auto` variables onto dynamic scope stack
+    let mut a_idx: usize = 0;
+    while a_idx < num_autos
+        invariant
+            0 <= a_idx <= num_autos,
+            num_params == param_vals@.len(),
+            initial_len == initial_stack.len(),
+            initial_len + num_params + num_autos <= 1_000_000,
+            stack@.len() == initial_len + num_params + a_idx,
+            stack@.subrange(0, initial_len as int) =~= initial_stack,
+        decreases num_autos - a_idx,
+    {
+        stack.push(0);
+        a_idx = a_idx + 1;
+    }
+
+    // Save caller return state
+    let prev_return_flag: bool = caller_return_flag;
+    let prev_return_val: i64 = caller_return_val;
+
+    // 3. Simulate in-body mutation of the active variable binding (if any local binding was pushed)
+    if num_params + num_autos > 0 {
+        let top_idx: usize = stack.len() - 1;
+        stack.set(top_idx, mutated_top_val);
+        proof {
+            assert(stack@.subrange(0, initial_len as int) =~= initial_stack);
+        }
+    }
+
+    // 4. ScopeGuard::drop: pop `autos` in reverse, then `params` in reverse
+    let mut pop_a: usize = 0;
+    while pop_a < num_autos
+        invariant
+            0 <= pop_a <= num_autos,
+            initial_len == initial_stack.len(),
+            stack@.len() == initial_len + num_params + (num_autos - pop_a),
+            stack@.subrange(0, initial_len as int) =~= initial_stack,
+        decreases num_autos - pop_a,
+    {
+        let _ = stack.pop();
+        pop_a = pop_a + 1;
+    }
+
+    let mut pop_p: usize = 0;
+    while pop_p < num_params
+        invariant
+            0 <= pop_p <= num_params,
+            initial_len == initial_stack.len(),
+            stack@.len() == initial_len + (num_params - pop_p),
+            stack@.subrange(0, initial_len as int) =~= initial_stack,
+        decreases num_params - pop_p,
+    {
+        let _ = stack.pop();
+        pop_p = pop_p + 1;
+    }
+
+    proof {
+        assert(stack@.len() == initial_stack.len());
+        assert(stack@ =~= stack@.subrange(0, initial_len as int));
+        assert(stack@ =~= initial_stack);
+    }
+
+    (prev_return_flag, prev_return_val)
+}
+
 } // verus!
