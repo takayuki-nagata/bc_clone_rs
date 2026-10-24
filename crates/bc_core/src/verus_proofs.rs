@@ -527,4 +527,237 @@ pub fn verified_lexer_advance_bytes(
     (pos, line)
 }
 
+// ============================================================================
+// Target 4: Binary Exponentiation (`BCNum::pow`) Loop & POSIX Scale Invariants
+// ============================================================================
+
+/// Mathematical specification of integer exponentiation $\text{base}^{\text{exp}}$.
+pub open spec fn spec_pow_int(base: int, exp: nat) -> int
+    decreases exp,
+{
+    if exp == 0 {
+        1
+    } else {
+        base * spec_pow_int(base, (exp - 1) as nat)
+    }
+}
+
+/// Lemma: Inductive step for binary exponentiation (exponentiation by squaring):
+/// - If `exp` is even ($\text{exp} > 0$), $\text{base}^{\text{exp}} == (\text{base} \cdot \text{base})^{\text{exp} / 2}$.
+/// - If `exp` is odd, $\text{base}^{\text{exp}} == \text{base} \cdot (\text{base} \cdot \text{base})^{\text{exp} / 2}$.
+pub proof fn lemma_pow_int_squaring(base: int, exp: nat)
+    requires
+        exp > 0,
+    ensures
+        exp % 2 == 0 ==> spec_pow_int(base, exp) == spec_pow_int(base * base, exp / 2),
+        exp % 2 == 1 ==> spec_pow_int(base, exp) == base * spec_pow_int(base * base, exp / 2),
+    decreases exp,
+{
+    reveal_with_fuel(spec_pow_int, 2);
+    if exp == 1 {
+        assert(1nat % 2 == 1);
+        assert(1nat / 2 == 0);
+        assert(spec_pow_int(base * base, 0) == 1);
+    } else if exp % 2 == 1 {
+        let prev = (exp - 1) as nat;
+        assert(prev > 0);
+        assert(prev % 2 == 0);
+        assert(prev / 2 == exp / 2);
+        lemma_pow_int_squaring(base, prev);
+        assert(spec_pow_int(base, exp) == base * spec_pow_int(base, prev));
+    } else {
+        let prev = (exp - 1) as nat;
+        assert(prev % 2 == 1);
+        assert(prev / 2 == (exp / 2 - 1) as nat);
+        lemma_pow_int_squaring(base, prev);
+        assert(spec_pow_int(base, exp) == base * spec_pow_int(base, prev));
+        assert(spec_pow_int(base, prev) == base * spec_pow_int(base * base, prev / 2));
+        let sub_pow = spec_pow_int(base * base, prev / 2);
+        assert(base * (base * sub_pow) == (base * base) * sub_pow) by (nonlinear_arith);
+        assert(spec_pow_int(base * base, exp / 2) == (base * base) * sub_pow);
+    }
+}
+
+/// POSIX specification for positive-exponent power scale:
+/// $\min(a \cdot b, \max(\text{global\_scale}, a))$.
+pub open spec fn spec_posix_pow_scale(a: nat, b: nat, global_scale: nat) -> nat {
+    let max_gs = if global_scale >= a { global_scale } else { a };
+    if a * b <= max_gs {
+        a * b
+    } else {
+        max_gs
+    }
+}
+
+/// Verified POSIX scale and truncation shift calculation for `BCNum::pow` (positive exponent $b > 0$).
+///
+/// Mirrors `crates/bc_core/src/math.rs` (`BCNum::pow`):
+/// `sr = min(self.scale * b, max(global_scale, self.scale))`, `diff = self.scale * b - sr`.
+/// Proves that `self.scale * b >= sr` always holds (so `diff >= 0`).
+pub fn verified_pow_scale_and_shift(
+    self_scale: usize,
+    b_val: usize,
+    global_scale: usize,
+) -> (res: (usize, usize, usize))
+    requires
+        b_val >= 1,
+        self_scale <= 30_000,
+        b_val <= 30_000,
+        global_scale <= MAX_VERIFIED_SCALE,
+    ensures
+        res.1 == self_scale * b_val,
+        res.0 <= res.1,
+        res.2 == res.1 - res.0,
+        res.0 as nat == spec_posix_pow_scale(
+            self_scale as nat,
+            b_val as nat,
+            global_scale as nat,
+        ),
+{
+    proof {
+        assert(self_scale * b_val <= 900_000_000) by (nonlinear_arith)
+            requires
+                self_scale <= 30_000,
+                b_val <= 30_000,
+        ;
+    }
+    let self_scale_b = self_scale * b_val;
+    let max_gs = if global_scale >= self_scale { global_scale } else { self_scale };
+    let sr = if self_scale_b <= max_gs { self_scale_b } else { max_gs };
+    let diff = self_scale_b - sr;
+    (sr, self_scale_b, diff)
+}
+
+/// Verified binary exponentiation loop for `BCNum::pow` (`crates/bc_core/src/math.rs:164-177`).
+///
+/// Tracks both the executable `res_scale` / `base_scale` and the ghost `res_coeff` / `base_coeff`
+/// across the `while temp_b > 0` squaring loop, proving:
+/// 1. Loop termination in $\mathcal{O}(\log b)$ iterations (`decreases temp_b`).
+/// 2. Exact final scale: `res_scale == self_scale * b_val`.
+/// 3. Exact final coefficient: `res_coeff@ == spec_pow_int(initial_coeff, b_val as nat)`.
+pub fn verified_pow_binary_loop(
+    Ghost(initial_coeff): Ghost<int>,
+    self_scale: usize,
+    b_val: usize,
+) -> (res: (usize, Ghost<int>))
+    requires
+        self_scale <= 30_000,
+        b_val <= 30_000,
+    ensures
+        res.0 == self_scale * b_val,
+        res.1@ == spec_pow_int(initial_coeff, b_val as nat),
+{
+    let mut res_scale: usize = 0;
+    let mut base_scale: usize = self_scale;
+    let mut temp_b: usize = b_val;
+
+    let ghost mut res_coeff: int = 1;
+    let ghost mut base_coeff: int = initial_coeff;
+
+    proof {
+        assert(self_scale * b_val <= 900_000_000) by (nonlinear_arith)
+            requires
+                self_scale <= 30_000,
+                b_val <= 30_000,
+        ;
+    }
+
+    while temp_b > 0
+        invariant
+            temp_b <= b_val,
+            self_scale <= 30_000,
+            b_val <= 30_000,
+            self_scale * b_val <= 900_000_000,
+            res_scale <= self_scale * b_val,
+            base_scale * temp_b <= self_scale * b_val,
+            res_scale + base_scale * temp_b == self_scale * b_val,
+            res_coeff * spec_pow_int(base_coeff, temp_b as nat)
+                == spec_pow_int(initial_coeff, b_val as nat),
+        decreases temp_b,
+    {
+        let prev_temp_b = temp_b;
+        let prev_base_scale = base_scale;
+        let prev_res_scale = res_scale;
+        let ghost prev_base_coeff = base_coeff;
+        let ghost prev_res_coeff = res_coeff;
+
+        proof {
+            lemma_pow_int_squaring(prev_base_coeff, prev_temp_b as nat);
+            assert(prev_base_scale <= prev_base_scale * prev_temp_b) by (nonlinear_arith)
+                requires
+                    prev_temp_b >= 1,
+                    prev_base_scale >= 0,
+            ;
+        }
+
+        if temp_b % 2 == 1 {
+            proof {
+                assert(prev_temp_b == 2 * (prev_temp_b / 2) + 1);
+                assert(prev_res_scale + prev_base_scale + (prev_base_scale + prev_base_scale) * (prev_temp_b / 2)
+                    == prev_res_scale + prev_base_scale * prev_temp_b) by (nonlinear_arith)
+                    requires
+                        prev_temp_b == 2 * (prev_temp_b / 2) + 1,
+                ;
+                let sq_pow = spec_pow_int(prev_base_coeff * prev_base_coeff, (prev_temp_b / 2) as nat);
+                assert((prev_res_coeff * prev_base_coeff) * sq_pow
+                    == prev_res_coeff * (prev_base_coeff * sq_pow)) by (nonlinear_arith);
+            }
+            res_scale = res_scale + base_scale;
+            proof {
+                res_coeff = res_coeff * base_coeff;
+            }
+        } else {
+            proof {
+                assert(prev_temp_b == 2 * (prev_temp_b / 2));
+                assert(prev_res_scale + (prev_base_scale + prev_base_scale) * (prev_temp_b / 2)
+                    == prev_res_scale + prev_base_scale * prev_temp_b) by (nonlinear_arith)
+                    requires
+                        prev_temp_b == 2 * (prev_temp_b / 2),
+                ;
+            }
+        }
+
+        temp_b = temp_b / 2;
+        if temp_b > 0 {
+            proof {
+                assert(prev_base_scale + prev_base_scale <= prev_base_scale * prev_temp_b)
+                    by (nonlinear_arith)
+                    requires
+                        prev_temp_b >= 2,
+                        prev_base_scale >= 0,
+                ;
+            }
+            base_scale = base_scale + base_scale;
+        } else {
+            proof {
+                assert(temp_b == 0);
+                assert(base_scale * temp_b == 0) by (nonlinear_arith)
+                    requires
+                        temp_b == 0,
+                ;
+                assert(prev_temp_b == 1);
+                assert(prev_base_scale * prev_temp_b == prev_base_scale) by (nonlinear_arith)
+                    requires
+                        prev_temp_b == 1,
+                ;
+            }
+        }
+        proof {
+            base_coeff = base_coeff * base_coeff;
+        }
+    }
+
+    proof {
+        assert(temp_b == 0);
+        assert(spec_pow_int(base_coeff, 0) == 1);
+        assert(res_scale + base_scale * 0 == self_scale * b_val) by (nonlinear_arith)
+            requires
+                res_scale + base_scale * temp_b == self_scale * b_val,
+                temp_b == 0,
+        ;
+    }
+
+    (res_scale, Ghost(res_coeff))
+}
+
 } // verus!
