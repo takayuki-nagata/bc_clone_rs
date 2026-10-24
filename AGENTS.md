@@ -140,6 +140,15 @@ No changes should be committed until formatting, lints, and test suites pass wit
 - **Modern Interactive UI**: Provides a dark-themed terminal REPL with command history ($\uparrow$/$\downarrow$), keyboard shortcuts, and quick preset buttons for $\pi$, $e$, $n!$, and base conversions.
 - **Automated Packaging & Server**: `scripts/build_wasm.sh` compiles and packages the Wasm bundle, and `scripts/serve_wasm.sh` serves the frontend locally.
 
+### 13. Verus Formal Verification (`crates/bc_core/src/verus_proofs.rs`, `scripts/run_verus_verification.sh`)
+- **Zero-Overhead `#![cfg(verus_keep_ghost)]` Integration**: Formal proofs and verified core algorithms reside in `crates/bc_core/src/verus_proofs.rs` gated behind `#[cfg(verus_keep_ghost)]`. This guarantees zero runtime overhead and zero interference with standard `cargo test`, `cargo llvm-cov` (98%+ line coverage gate), `cargo mutants`, or baremetal/embedded cross-compilation targets.
+- **Verified Target Areas (30 SMT-Verified Proofs & Functions)**:
+  1. **POSIX `bc` Scale Rules & Fixed-Point Arithmetic (`math.rs`)**: Formally proves `pow10` exponential identities, `SpecBCNum` addition commutativity and subtraction inversion, exact POSIX scale formulas for `add`, `sub`, `mul` ($\min(a+b, \max(\text{scale}, a, b))$ with non-negative truncation shifts), `div` signed shifts, `sqrt` radicand shifts ($2 \cdot \max(a, \text{scale}) - a \ge 0$ without underflow), and truncating division/modulo error bounds.
+  2. **Non-Decimal `obase` Fractional Digit Loop Termination & Minimality (`math.rs`)**: Proves termination (`decreases`) and exact minimality of the `#![no_std]` floating-point-free power loop ($\text{obase}^k \ge 10^{\text{scale}}$ and $k > 0 \implies \text{obase}^{k-1} < 10^{\text{scale}}$).
+  3. **POSIX 70-Character Line Wrapping & `Lexer` Bounds Safety (`eval.rs`, `parser.rs`)**: Proves that `WrappedStdout` maintains the column invariant $\text{col} \le 68$ (at most 70 characters per line including `\\\n`) across arbitrary byte streams, and that `Lexer` lookahead (`peek`) and cursor advancement (`advance`) are free of out-of-bounds slice panics and integer overflows.
+- **Automated Verification Runner**: `scripts/run_verus_verification.sh` invokes Verus to verify `crates/bc_core/src/lib.rs` with 0 errors.
+
+
 
 
 

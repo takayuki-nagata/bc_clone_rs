@@ -381,4 +381,150 @@ pub fn verified_obase_frac_digits(obase: u64, target: u64, max_bound: u64) -> (r
     (k, current)
 }
 
+// ============================================================================
+// Target 3: POSIX 70-Char Line Wrapping (`WrappedStdout`) & `Lexer` Safety
+// ============================================================================
+
+/// Maximum column index before POSIX `bc` emits a `\\\n` continuation (68 chars + `\` + `\n` = 70 chars).
+pub const POSIX_WRAP_COL_LIMIT: usize = 68;
+
+/// Verified single-character state transition for `WrappedStdout` (`crates/bc_core/src/eval.rs`).
+///
+/// Returns `(next_col, emitted_backslash_newline)`.
+/// Proves that if `col <= 68`, then `next_col <= 68` holds unconditionally, and whenever
+/// a line wrap (`\\\n`, 2 characters) is emitted, the line length including `\\\n` is at most 70.
+pub fn verified_wrapped_stdout_step(col: usize, is_newline: bool) -> (res: (usize, bool))
+    requires
+        col <= POSIX_WRAP_COL_LIMIT,
+    ensures
+        res.0 <= POSIX_WRAP_COL_LIMIT,
+        is_newline ==> (res.0 == 0 && !res.1),
+        (!is_newline && col < POSIX_WRAP_COL_LIMIT) ==> (res.0 == col + 1 && !res.1),
+        (!is_newline && col == POSIX_WRAP_COL_LIMIT) ==> (res.0 == 1 && res.1 && col + 2 <= 70),
+{
+    if is_newline {
+        (0, false)
+    } else if col >= POSIX_WRAP_COL_LIMIT {
+        // Emits "\\\n" (resets column to 0), then emits the character (col becomes 1)
+        (1, true)
+    } else {
+        (col + 1, false)
+    }
+}
+
+/// Verified multi-character stream processing loop for `WrappedStdout::write_str`.
+///
+/// Proves that across an arbitrary input slice `bytes`, the column counter invariant
+/// `col <= 68` is preserved at every iteration and upon return, and the total number
+/// of line-wrap continuations emitted is bounded by the input length.
+pub fn verified_wrapped_stdout_write_bytes(initial_col: usize, bytes: &[u8]) -> (res: (usize, usize))
+    requires
+        initial_col <= POSIX_WRAP_COL_LIMIT,
+    ensures
+        res.0 <= POSIX_WRAP_COL_LIMIT,
+        res.1 <= bytes@.len(),
+{
+    let mut col: usize = initial_col;
+    let mut wrap_count: usize = 0;
+    let mut i: usize = 0;
+    let len: usize = bytes.len();
+
+    while i < len
+        invariant
+            0 <= i <= len,
+            len == bytes@.len(),
+            col <= POSIX_WRAP_COL_LIMIT,
+            wrap_count <= i,
+        decreases len - i,
+    {
+        let b = bytes[i];
+        let (next_col, wrapped) = verified_wrapped_stdout_step(col, b == b'\n');
+        col = next_col;
+        if wrapped {
+            wrap_count = wrap_count + 1;
+        }
+        i = i + 1;
+    }
+
+    (col, wrap_count)
+}
+
+/// Verified bounds-safe lookahead `Lexer::peek_char` (`crates/bc_core/src/parser.rs`).
+///
+/// Proves absence of out-of-bounds slice indexing and arithmetic overflow when peeking ahead.
+pub fn verified_lexer_peek_byte(text: &[u8], pos: usize, offset: usize) -> (res: u8)
+    requires
+        pos <= text@.len(),
+        offset <= usize::MAX - pos,
+    ensures
+        pos + offset >= text@.len() ==> res == 0u8,
+        pos + offset < text@.len() ==> res == text@[pos + offset],
+{
+    let idx = pos + offset;
+    if idx >= text.len() {
+        0u8
+    } else {
+        text[idx]
+    }
+}
+
+/// Verified cursor and line advancement `Lexer::advance_char` (`crates/bc_core/src/parser.rs`).
+///
+/// Proves that:
+/// 1. Slice indexing `text[pos]` never panics (out-of-bounds is impossible).
+/// 2. `pos` advances monotonically to `min(initial_pos + steps, text.len())`.
+/// 3. `line` increases monotonically and never overflows `usize`.
+pub fn verified_lexer_advance_bytes(
+    text: &[u8],
+    initial_pos: usize,
+    initial_line: usize,
+    steps: usize,
+) -> (res: (usize, usize))
+    requires
+        initial_pos <= text@.len(),
+        initial_line >= 1,
+        initial_line <= usize::MAX - text@.len(),
+    ensures
+        res.0 <= text@.len(),
+        res.0 >= initial_pos,
+        res.0 == if initial_pos + steps <= text@.len() {
+            (initial_pos + steps) as usize
+        } else {
+            text@.len() as usize
+        },
+        res.1 >= initial_line,
+        res.1 <= initial_line + (res.0 - initial_pos),
+{
+    let mut pos: usize = initial_pos;
+    let mut line: usize = initial_line;
+    let mut s: usize = 0;
+    let len: usize = text.len();
+
+    while s < steps
+        invariant
+            0 <= s <= steps,
+            len == text@.len(),
+            initial_pos <= pos <= len,
+            initial_line <= usize::MAX - len,
+            pos == if initial_pos + s <= len {
+                (initial_pos + s) as usize
+            } else {
+                len
+            },
+            line >= initial_line,
+            line <= initial_line + (pos - initial_pos),
+        decreases steps - s,
+    {
+        if pos < len {
+            if text[pos] == b'\n' {
+                line = line + 1;
+            }
+            pos = pos + 1;
+        }
+        s = s + 1;
+    }
+
+    (pos, line)
+}
+
 } // verus!
