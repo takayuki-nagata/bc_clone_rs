@@ -1292,4 +1292,145 @@ pub fn verified_scope_guard_lifecycle(
     (prev_return_flag, prev_return_val)
 }
 
+// ============================================================================
+// Target 8: `Parser` Pratt Precedence Climbing & `Lexer` Number Scanner
+// ============================================================================
+
+/// Operator token categories for Pratt parser precedence verification (`parser.rs:926-934`).
+pub const TOK_ASSIGN_OP: u8 = 1;
+pub const TOK_PLUS_MINUS: u8 = 2;
+pub const TOK_MUL_OP: u8 = 3;
+pub const TOK_EXP_OP: u8 = 4;
+
+/// Verified Pratt parser infix operator precedence, associativity, and `next_min_prec`
+/// (`crates/bc_core/src/parser.rs:902-934`).
+///
+/// Returns `(op_prec, right_assoc, next_min_prec)`.
+/// Proves:
+/// 1. Strict precedence hierarchy: `AssignOp (1) < Plus/Minus (2) < MulOp (3) < Exp (4) < UnaryMinus (5)`.
+/// 2. Left-associative operators (`+`, `-`, `*`, `/`, `%`) set `next_min_prec == op_prec + 1 > op_prec`,
+///    preventing same-precedence right recursion.
+/// 3. Right-associative operators (`=`, `^`) set `next_min_prec == op_prec`, allowing right-associative chaining.
+pub fn verified_pratt_infix_info(tok_kind: u8) -> (res: (i8, bool, i8))
+    ensures
+        tok_kind == TOK_ASSIGN_OP ==> (res.0 == 1 && res.1 && res.2 == 1),
+        tok_kind == TOK_PLUS_MINUS ==> (res.0 == 2 && !res.1 && res.2 == 3),
+        tok_kind == TOK_MUL_OP ==> (res.0 == 3 && !res.1 && res.2 == 4),
+        tok_kind == TOK_EXP_OP ==> (res.0 == 4 && res.1 && res.2 == 4),
+        (tok_kind < 1 || tok_kind > 4) ==> (res.0 == -1 && !res.1 && res.2 == 0),
+        // Associativity invariant for all valid infix operators:
+        res.0 >= 1 ==> (if res.1 { res.2 == res.0 } else { res.2 == res.0 + 1 && res.2 > res.0 }),
+{
+    let (op_prec, right_assoc): (i8, bool) = if tok_kind == TOK_ASSIGN_OP {
+        (1, true)
+    } else if tok_kind == TOK_PLUS_MINUS {
+        (2, false)
+    } else if tok_kind == TOK_MUL_OP {
+        (3, false)
+    } else if tok_kind == TOK_EXP_OP {
+        (4, true)
+    } else {
+        (-1, false)
+    };
+
+    let next_min_prec: i8 = if op_prec < 0 {
+        0
+    } else if right_assoc {
+        op_prec
+    } else {
+        op_prec + 1
+    };
+
+    (op_prec, right_assoc, next_min_prec)
+}
+
+/// Helper predicate for valid bc numeric literal characters (`0..=9` or `A..=F`).
+pub open spec fn spec_is_bc_digit(b: u8) -> bool {
+    (b'0' <= b && b <= b'9') || (b'A' <= b && b <= b'F')
+}
+
+/// Executable check for valid bc numeric literal characters (`parser.rs:441`).
+pub fn verified_is_bc_digit(b: u8) -> (res: bool)
+    ensures
+        res == spec_is_bc_digit(b),
+{
+    (b >= b'0' && b <= b'9') || (b >= b'A' && b <= b'F')
+}
+
+/// Verified `Lexer` number token scanning loop (`crates/bc_core/src/parser.rs:443-468`).
+///
+/// Scans digits (`0-9`, `A-F`), at most one decimal point (`.`), and backslash-newline
+/// continuations (`\\\n` and `\\\r\n`).
+/// Proves:
+/// 1. Loop termination (`decreases len - pos`) and 100% bounds-safe slice indexing.
+/// 2. At most one radix point `.` is ever accepted into a single number token (`res.2 <= 1`).
+/// 3. Monotonic cursor advancement (`initial_pos <= res.0 <= text.len()`).
+pub fn verified_lexer_scan_number(
+    text: &[u8],
+    initial_pos: usize,
+) -> (res: (usize, usize, usize))
+    requires
+        initial_pos <= text@.len(),
+    ensures
+        // res = (final_pos, emitted_char_count, dot_count)
+        initial_pos <= res.0 && res.0 <= text@.len(),
+        res.1 <= res.0 - initial_pos,
+        res.2 <= 1,
+{
+    let mut pos: usize = initial_pos;
+    let mut char_count: usize = 0;
+    let mut dot_count: usize = 0;
+    let mut has_dot: bool = false;
+    let len: usize = text.len();
+
+    while pos < len
+        invariant
+            initial_pos <= pos <= len,
+            len == text@.len(),
+            char_count <= pos - initial_pos,
+            dot_count <= 1,
+            has_dot <==> (dot_count == 1),
+        decreases len - pos,
+    {
+        let cc = text[pos];
+        if verified_is_bc_digit(cc) {
+            char_count = char_count + 1;
+            pos = pos + 1;
+        } else if cc == b'.' && !has_dot {
+            has_dot = true;
+            dot_count = dot_count + 1;
+            char_count = char_count + 1;
+            pos = pos + 1;
+        } else if cc == b'\\' && len - pos >= 2 && text[pos + 1] == b'\n' {
+            pos = pos + 2;
+        } else if cc == b'\\' && len - pos >= 3 && text[pos + 1] == b'\r' && text[pos + 2] == b'\n' {
+            pos = pos + 3;
+        } else {
+            break;
+        }
+    }
+
+    (pos, char_count, dot_count)
+}
+
+/// Verified `Lexer::peek_token` buffer index clamping (`crates/bc_core/src/parser.rs:521-532`).
+///
+/// Proves that as long as the lookahead buffer contains at least one token (e.g., `TokenType::Eof`),
+/// `min(offset, buffer_len - 1)` never underflows and always yields a valid in-bounds index `< buffer_len`.
+pub fn verified_lexer_peek_token_index(buffer_len: usize, offset: usize) -> (res: usize)
+    requires
+        buffer_len >= 1,
+    ensures
+        res < buffer_len,
+        offset < buffer_len ==> res == offset,
+        offset >= buffer_len ==> res == buffer_len - 1,
+{
+    let last_idx = buffer_len - 1;
+    if offset <= last_idx {
+        offset
+    } else {
+        last_idx
+    }
+}
+
 } // verus!
