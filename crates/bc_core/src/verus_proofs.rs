@@ -887,4 +887,178 @@ pub fn verified_multi_digit_obase_padding(
     (pad_count, total_len)
 }
 
+// ============================================================================
+// Target 6: Transcendental Math (`Decimal`) Roundtrip & Argument Reduction
+// ============================================================================
+
+/// Abstract specification of fixed-point `Decimal` (`crates/bc_core/src/math.rs:350-402`).
+pub ghost struct SpecDecimal {
+    pub value: int,
+    pub prec: nat,
+}
+
+impl SpecDecimal {
+    /// Specification of `Decimal::from_bc_num` when `prec >= num.scale`.
+    pub open spec fn spec_from_bc_num(num: SpecBCNum, prec: nat) -> SpecDecimal
+        recommends
+            prec >= num.scale,
+    {
+        SpecDecimal {
+            value: num.coeff * pow10((prec - num.scale) as nat),
+            prec,
+        }
+    }
+
+    /// Specification of `Decimal::to_bc_num` when `self.prec >= target_scale`.
+    pub open spec fn spec_to_bc_num(self, target_scale: nat) -> SpecBCNum
+        recommends
+            self.prec >= target_scale,
+    {
+        SpecBCNum {
+            coeff: self.value / pow10((self.prec - target_scale) as nat),
+            scale: target_scale,
+        }
+    }
+}
+
+/// Proof that converting `BCNum` to `Decimal` at higher guard precision (`prec >= num.scale`,
+/// e.g. `max(x.scale, global_scale) + 15`) and converting back to `num.scale` is 100% lossless.
+pub proof fn lemma_decimal_bcnum_roundtrip(num: SpecBCNum, prec: nat)
+    requires
+        prec >= num.scale,
+    ensures
+        SpecDecimal::spec_from_bc_num(num, prec).spec_to_bc_num(num.scale) == num,
+{
+    let shift = (prec - num.scale) as nat;
+    lemma_pow10_pos(shift);
+    let p10 = pow10(shift);
+    assert((num.coeff * p10) / p10 == num.coeff) by (nonlinear_arith)
+        requires
+            p10 >= 1,
+    ;
+}
+
+/// Verified trigonometric argument reduction modulo $2\pi$ into $[-\pi, \pi]$
+/// (`crates/bc_core/src/math.rs:516-522, 564-570` in `decimal_sin` / `decimal_cos`).
+///
+/// Given any signed fixed-point angle `x_val` and positive `pi_val`, proves that:
+/// 1. The reduced angle `res.0` lies strictly within $[-\pi, \pi]$.
+/// 2. There exists an exact integer multiple $k$ (`res.1@`) of $2\pi$ such that
+///    `x_val == res.0 + k * (2 * pi_val)`, guaranteeing periodicity invariance.
+pub fn verified_trig_range_reduction(x_val: i64, pi_val: i64) -> (res: (i64, Ghost<int>))
+    requires
+        pi_val > 0,
+        pi_val <= 1_000_000_000_000_000_000i64,
+        x_val > i64::MIN,
+    ensures
+        -pi_val <= res.0 && res.0 <= pi_val,
+        (x_val as int) == (res.0 as int) + res.1@ * (2 * (pi_val as int)),
+{
+    let two_pi: i64 = 2 * pi_val;
+    let is_neg: bool = x_val < 0;
+    let abs_x_i64: i64 = if is_neg { -x_val } else { x_val };
+    let abs_x: u64 = abs_x_i64 as u64;
+    let two_pi_u64: u64 = two_pi as u64;
+
+    let q_u64: u64 = abs_x / two_pi_u64;
+    let rem_u64: u64 = abs_x % two_pi_u64;
+    let q_abs: i64 = q_u64 as i64;
+    let rem_abs: i64 = rem_u64 as i64;
+
+    proof {
+        assert((abs_x as int) == (q_u64 as int) * (two_pi_u64 as int) + (rem_u64 as int))
+            by (nonlinear_arith)
+            requires
+                two_pi_u64 > 0,
+                q_u64 == abs_x / two_pi_u64,
+                rem_u64 == abs_x % two_pi_u64,
+        ;
+        assert(rem_u64 < two_pi_u64) by (nonlinear_arith)
+            requires
+                two_pi_u64 > 0,
+                rem_u64 == abs_x % two_pi_u64,
+        ;
+    }
+
+    let mut rem: i64 = if is_neg { -rem_abs } else { rem_abs };
+    let ghost mut k: int = if is_neg { -(q_abs as int) } else { q_abs as int };
+
+    proof {
+        if is_neg {
+            assert((x_val as int) == -(abs_x as int));
+            assert(-(abs_x as int) == (-(q_abs as int)) * (two_pi as int) + (-(rem_abs as int)))
+                by (nonlinear_arith)
+                requires
+                    (abs_x as int) == (q_abs as int) * (two_pi as int) + (rem_abs as int),
+            ;
+        }
+        assert((x_val as int) == (rem as int) + k * (two_pi as int));
+    }
+
+    if rem > pi_val {
+        let prev_rem = rem;
+        let ghost prev_k = k;
+        rem = rem - two_pi;
+        proof {
+            k = prev_k + 1;
+            assert((prev_rem as int) + prev_k * (two_pi as int)
+                == (rem as int) + k * (two_pi as int)) by (nonlinear_arith)
+                requires
+                    rem == prev_rem - two_pi,
+                    k == prev_k + 1,
+            ;
+        }
+    } else if rem < -pi_val {
+        let prev_rem = rem;
+        let ghost prev_k = k;
+        rem = rem + two_pi;
+        proof {
+            k = prev_k - 1;
+            assert((prev_rem as int) + prev_k * (two_pi as int)
+                == (rem as int) + k * (two_pi as int)) by (nonlinear_arith)
+                requires
+                    rem == prev_rem + two_pi,
+                    k == prev_k - 1,
+            ;
+        }
+    }
+
+    (rem, Ghost(k))
+}
+
+/// Verified exponential argument reduction $x = n \cdot \ln(2) + r$ (`math.rs:758-760`).
+///
+/// Proves that for any non-negative fixed-point value `x_abs >= 0` and `ln2_val > 0`,
+/// the reduced Taylor series argument $r$ satisfies $0 \le r < \ln(2)$ and reconstructs $x$ exactly.
+pub fn verified_exp_ln2_reduction(x_abs: i64, ln2_val: i64) -> (res: (i64, i64))
+    requires
+        x_abs >= 0,
+        ln2_val > 0,
+    ensures
+        // res = (n, r)
+        res.0 >= 0,
+        0 <= res.1 && res.1 < ln2_val,
+        (x_abs as int) == (res.0 as int) * (ln2_val as int) + (res.1 as int),
+{
+    let n: i64 = x_abs / ln2_val;
+    proof {
+        assert(0 <= (n as int) * (ln2_val as int) && (n as int) * (ln2_val as int) <= (x_abs as int))
+            by (nonlinear_arith)
+            requires
+                n == x_abs / ln2_val,
+                x_abs >= 0,
+                ln2_val > 0,
+        ;
+        assert((x_abs as int) - (n as int) * (ln2_val as int) < (ln2_val as int))
+            by (nonlinear_arith)
+            requires
+                n == x_abs / ln2_val,
+                x_abs >= 0,
+                ln2_val > 0,
+        ;
+    }
+    let r: i64 = x_abs - n * ln2_val;
+    (n, r)
+}
+
 } // verus!
