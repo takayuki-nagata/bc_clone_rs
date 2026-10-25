@@ -77,6 +77,31 @@ jobs:
       - name: Run QEMU RISC-V 32 Baremetal Automated Test Suite
         run: bash scripts/run_qemu_riscv32_tests.sh
 
+      - name: Install Verus Formal Verifier
+        run: |
+          VERUS_VERSION="0.2026.10.18.7d82994"
+          VERUS_URL="https://github.com/verus-lang/verus/releases/download/release%2F${VERUS_VERSION}/verus-${VERUS_VERSION}-x86-linux.zip"
+          if [ ! -x "$HOME/.local/verus/verus" ]; then
+            TMP_DIR="$(mktemp -d)"
+            curl -fL "$VERUS_URL" -o "$TMP_DIR/verus.zip"
+            unzip -q "$TMP_DIR/verus.zip" -d "$TMP_DIR/extracted"
+            mkdir -p "$HOME/.local/verus"
+            if [ -d "$TMP_DIR/extracted/verus-x86-linux" ]; then
+              cp -a "$TMP_DIR/extracted/verus-x86-linux/." "$HOME/.local/verus/"
+            else
+              cp -a "$TMP_DIR/extracted/." "$HOME/.local/verus/"
+            fi
+            chmod +x "$HOME/.local/verus/verus" "$HOME/.local/verus/rust_verify" "$HOME/.local/verus/z3" "$HOME/.local/verus/cargo-verus" 2>/dev/null || true
+            rm -rf "$TMP_DIR"
+          fi
+          REQUIRED_TOOLCHAIN="$(sed -n 's/.*"toolchain": "\([^" ]*\).*/\1/p' "$HOME/.local/verus/version.json" | head -n 1)"
+          if [ -n "$REQUIRED_TOOLCHAIN" ] && ! rustup toolchain list | grep -q "^${REQUIRED_TOOLCHAIN}"; then
+            rustup toolchain install "$REQUIRED_TOOLCHAIN" --profile minimal --no-self-update
+          fi
+
+      - name: Run Verus Formal Verification (bc_core)
+        run: bash scripts/run_verus_verification.sh
+
 
       - name: Install cargo-audit
 
