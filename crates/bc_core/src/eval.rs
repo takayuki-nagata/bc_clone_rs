@@ -8,7 +8,7 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Write as FmtWrite;
@@ -148,19 +148,19 @@ impl Evaluator {
         }
     }
 
-    /// Evaluates an AST expression node and returns a BCNum.
-    pub fn evaluate(&mut self, node: &Expr) -> BCNum {
+    /// Evaluates an AST expression node, returning Err on runtime math/call errors.
+    pub fn try_evaluate(&mut self, node: &Expr) -> Result<BCNum, String> {
         match node {
-            Expr::Number(value) => BCNum::from_string(value, self.ibase),
+            Expr::Number(value) => Ok(BCNum::from_string(value, self.ibase)),
             Expr::Variable(name) => {
                 let stack = self
                     .variables
                     .entry(name.clone())
                     .or_insert_with(|| vec![BCNum::zero()]);
-                stack.last().cloned().unwrap_or_else(BCNum::zero)
+                Ok(stack.last().cloned().unwrap_or_else(BCNum::zero))
             }
             Expr::ArrayAccess(name, index_expr) => {
-                let idx = self.evaluate(index_expr);
+                let idx = self.try_evaluate(index_expr)?;
                 let idx_val = if idx.scale > 0 {
                     let divisor = BigInt::from(10).pow(idx.scale as u32);
                     &idx.coeff / divisor
@@ -171,12 +171,12 @@ impl Evaluator {
                     .arrays
                     .entry(name.clone())
                     .or_insert_with(|| vec![BTreeMap::new()]);
-                stack
+                Ok(stack
                     .last()
                     .unwrap()
                     .get(&idx_val)
                     .cloned()
-                    .unwrap_or_else(BCNum::zero)
+                    .unwrap_or_else(BCNum::zero))
             }
             Expr::RegisterAccess(name) => {
                 let val = match name.as_str() {
@@ -185,32 +185,32 @@ impl Evaluator {
                     "obase" => self.obase,
                     _ => 0,
                 };
-                BCNum::new(BigInt::from(val), 0)
+                Ok(BCNum::new(BigInt::from(val), 0))
             }
             Expr::UnaryOp(op, expr) => {
-                let val = self.evaluate(expr);
+                let val = self.try_evaluate(expr)?;
                 if *op == '-' {
-                    BCNum::new(-val.coeff, val.scale)
+                    Ok(BCNum::new(-val.coeff, val.scale))
                 } else {
-                    val
+                    Ok(val)
                 }
             }
             Expr::BinaryOp(op, left, right) => {
-                let l = self.evaluate(left);
-                let r = self.evaluate(right);
+                let l = self.try_evaluate(left)?;
+                let r = self.try_evaluate(right)?;
                 match op.as_str() {
-                    "+" => l.add(&r),
-                    "-" => l.sub(&r),
-                    "*" => l.mul(&r, self.scale),
-                    "/" => l.div(&r, self.scale),
-                    "%" => l.mod_op(&r, self.scale),
-                    "^" => l.pow(&r, self.scale),
-                    _ => BCNum::zero(),
+                    "+" => Ok(l.add(&r)),
+                    "-" => Ok(l.sub(&r)),
+                    "*" => Ok(l.mul(&r, self.scale)),
+                    "/" => l.try_div(&r, self.scale).map_err(String::from),
+                    "%" => l.try_mod_op(&r, self.scale).map_err(String::from),
+                    "^" => l.try_pow(&r, self.scale).map_err(String::from),
+                    _ => Ok(BCNum::zero()),
                 }
             }
             Expr::RelationalOp(op, left, right) => {
-                let l = self.evaluate(left);
-                let r = self.evaluate(right);
+                let l = self.try_evaluate(left)?;
+                let r = self.try_evaluate(right)?;
                 let (shift_l, shift_r) = verified_relational_scale_shifts(l.scale, r.scale);
                 let coeff_l = &l.coeff * BigInt::from(10).pow(shift_l as u32);
                 let coeff_r = &r.coeff * BigInt::from(10).pow(shift_r as u32);
@@ -224,7 +224,7 @@ impl Evaluator {
                     ">" => coeff_l > coeff_r,
                     _ => false,
                 };
-                BCNum::new(BigInt::from(if res { 1 } else { 0 }), 0)
+                Ok(BCNum::new(BigInt::from(if res { 1 } else { 0 }), 0))
             }
             Expr::AssignOp(op, target, expr) => {
                 let is_base_reg = if let Expr::RegisterAccess(reg_name) = &**target {
@@ -247,20 +247,20 @@ impl Evaluator {
                     if is_single_char {
                         BCNum::new(BigInt::from(char_val), 0)
                     } else {
-                        self.evaluate(expr)
+                        self.try_evaluate(expr)?
                     }
                 } else {
-                    let mut val = self.evaluate(expr);
+                    let mut val = self.try_evaluate(expr)?;
                     if op != "=" {
-                        let old_val = self.evaluate(target);
+                        let old_val = self.try_evaluate(target)?;
                         let base_op = &op[..op.len() - 1];
                         val = match base_op {
                             "+" => old_val.add(&val),
                             "-" => old_val.sub(&val),
                             "*" => old_val.mul(&val, self.scale),
-                            "/" => old_val.div(&val, self.scale),
-                            "%" => old_val.mod_op(&val, self.scale),
-                            "^" => old_val.pow(&val, self.scale),
+                            "/" => old_val.try_div(&val, self.scale).map_err(String::from)?,
+                            "%" => old_val.try_mod_op(&val, self.scale).map_err(String::from)?,
+                            "^" => old_val.try_pow(&val, self.scale).map_err(String::from)?,
                             _ => BCNum::zero(),
                         };
                     }
@@ -276,7 +276,7 @@ impl Evaluator {
                         *var_stack.last_mut().unwrap() = val.clone();
                     }
                     Expr::ArrayAccess(name, idx_expr) => {
-                        let idx = self.evaluate(idx_expr);
+                        let idx = self.try_evaluate(idx_expr)?;
                         let idx_val = if idx.scale > 0 {
                             let divisor = BigInt::from(10).pow(idx.scale as u32);
                             &idx.coeff / divisor
@@ -329,14 +329,14 @@ impl Evaluator {
                                 reg_val = BigInt::from(0);
                             }
                         }
-                        return BCNum::new(reg_val, 0);
+                        return Ok(BCNum::new(reg_val, 0));
                     }
                     _ => {}
                 }
-                val
+                Ok(val)
             }
             Expr::UpdateOp(op, is_prefix, target) => {
-                let old_val = self.evaluate(target);
+                let old_val = self.try_evaluate(target)?;
                 let step = BCNum::new(BigInt::from(1), 0);
                 let new_val = if op == "++" {
                     old_val.add(&step)
@@ -353,7 +353,7 @@ impl Evaluator {
                         *var_stack.last_mut().unwrap() = new_val.clone();
                     }
                     Expr::ArrayAccess(name, idx_expr) => {
-                        let idx = self.evaluate(idx_expr);
+                        let idx = self.try_evaluate(idx_expr)?;
                         let idx_val = if idx.scale > 0 {
                             let divisor = BigInt::from(10).pow(idx.scale as u32);
                             &idx.coeff / divisor
@@ -393,18 +393,18 @@ impl Evaluator {
                             }
                         }
                         let final_val = BCNum::new(reg_val, 0);
-                        return if *is_prefix { final_val } else { old_val };
+                        return Ok(if *is_prefix { final_val } else { old_val });
                     }
                     _ => {}
                 }
 
-                if *is_prefix { new_val } else { old_val }
+                Ok(if *is_prefix { new_val } else { old_val })
             }
             Expr::Call(name, args) => {
                 if self.functions.contains_key(name) {
                     let func = self.functions.get(name).unwrap().clone();
                     if args.len() != func.params.len() {
-                        panic!("argument count mismatch");
+                        return Err("argument count mismatch".to_string());
                     }
 
                     let mut evaluated_args = Vec::new();
@@ -424,13 +424,13 @@ impl Evaluator {
                                     None,
                                 ));
                             } else {
-                                panic!("expected array argument");
+                                return Err("expected array argument".to_string());
                             }
                         } else if let ExprOrArray::Expr(expr) = arg {
-                            let val = self.evaluate(expr);
+                            let val = self.try_evaluate(expr)?;
                             evaluated_args.push((false, param.name.clone(), None, Some(val)));
                         } else {
-                            panic!("argument count mismatch");
+                            return Err("argument count mismatch".to_string());
                         }
                     }
 
@@ -468,7 +468,7 @@ impl Evaluator {
                     };
 
                     for stmt in &func.body {
-                        guard.evaluator.execute(stmt);
+                        guard.evaluator.try_execute(stmt)?;
                         if guard.evaluator.return_flag || guard.evaluator.quit_flag {
                             break;
                         }
@@ -477,56 +477,62 @@ impl Evaluator {
                     let ret_val = guard.evaluator.return_value.clone();
                     drop(guard);
 
-                    return ret_val;
+                    return Ok(ret_val);
                 }
 
                 if self.math_enabled {
                     use crate::math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
                     match (name.as_str(), args.as_slice()) {
                         ("s", [ExprOrArray::Expr(expr)]) => {
-                            return bc_sin(&self.evaluate(expr), self.scale);
+                            return Ok(bc_sin(&self.try_evaluate(expr)?, self.scale));
                         }
                         ("c", [ExprOrArray::Expr(expr)]) => {
-                            return bc_cos(&self.evaluate(expr), self.scale);
+                            return Ok(bc_cos(&self.try_evaluate(expr)?, self.scale));
                         }
                         ("a", [ExprOrArray::Expr(expr)]) => {
-                            return bc_atan(&self.evaluate(expr), self.scale);
+                            return Ok(bc_atan(&self.try_evaluate(expr)?, self.scale));
                         }
                         ("l", [ExprOrArray::Expr(expr)]) => {
-                            return bc_ln(&self.evaluate(expr), self.scale);
+                            return Ok(bc_ln(&self.try_evaluate(expr)?, self.scale));
                         }
                         ("e", [ExprOrArray::Expr(expr)]) => {
-                            return bc_exp(&self.evaluate(expr), self.scale);
+                            return Ok(bc_exp(&self.try_evaluate(expr)?, self.scale));
                         }
                         ("j", [ExprOrArray::Expr(expr_n), ExprOrArray::Expr(expr_x)]) => {
-                            return bc_bessel(
-                                &self.evaluate(expr_n),
-                                &self.evaluate(expr_x),
-                                self.scale,
-                            );
+                            let n_val = self.try_evaluate(expr_n)?;
+                            let x_val = self.try_evaluate(expr_x)?;
+                            return Ok(bc_bessel(&n_val, &x_val, self.scale));
                         }
                         _ => {}
                     }
                 }
 
-                panic!("undefined function {}", name);
+                Err(format!("undefined function {}", name))
             }
-            Expr::LengthCall(expr) => self.evaluate(expr).length(),
-            Expr::SqrtCall(expr) => self.evaluate(expr).sqrt(self.scale),
-            Expr::ScaleCall(expr) => self.evaluate(expr).scale_func(),
+            Expr::LengthCall(expr) => Ok(self.try_evaluate(expr)?.length()),
+            Expr::SqrtCall(expr) => self
+                .try_evaluate(expr)?
+                .try_sqrt(self.scale)
+                .map_err(String::from),
+            Expr::ScaleCall(expr) => Ok(self.try_evaluate(expr)?.scale_func()),
         }
     }
 
-    /// Executes an AST statement node.
-    pub fn execute(&mut self, node: &Stmt) {
+    /// Evaluates an AST expression node and returns a BCNum.
+    pub fn evaluate(&mut self, node: &Expr) -> BCNum {
+        self.try_evaluate(node).unwrap_or_else(|e| panic!("{}", e))
+    }
+
+    /// Executes an AST statement node, returning Err on runtime errors.
+    pub fn try_execute(&mut self, node: &Stmt) -> Result<(), String> {
         if verified_should_abort_execution(self.break_flag, self.return_flag, self.quit_flag) {
-            return;
+            return Ok(());
         }
 
         match node {
             Stmt::Block(stmts) => {
                 for stmt in stmts {
-                    self.execute(stmt);
+                    self.try_execute(stmt)?;
                     if verified_should_abort_execution(
                         self.break_flag,
                         self.return_flag,
@@ -538,9 +544,9 @@ impl Evaluator {
             }
             Stmt::Expr(expr) => {
                 if let Expr::AssignOp(..) = expr {
-                    self.evaluate(expr);
+                    self.try_evaluate(expr)?;
                 } else {
-                    let val = self.evaluate(expr);
+                    let val = self.try_evaluate(expr)?;
                     let out_str = val.format_obase(self.obase);
                     let _ = self.stdout_writer.write_str(&format!("{}\n", out_str));
                     let _ = self.stdout_writer.flush();
@@ -558,24 +564,24 @@ impl Evaluator {
             }
             Stmt::Return(expr_opt) => {
                 if let Some(expr) = expr_opt {
-                    self.return_value = self.evaluate(expr);
+                    self.return_value = self.try_evaluate(expr)?;
                 } else {
                     self.return_value = BCNum::zero();
                 }
                 self.return_flag = true;
             }
             Stmt::If(cond, body) => {
-                let c = self.evaluate(cond);
+                let c = self.try_evaluate(cond)?;
                 if !c.is_zero() {
-                    self.execute(body);
+                    self.try_execute(body)?;
                 }
             }
             Stmt::While(cond, body) => loop {
-                let c = self.evaluate(cond);
+                let c = self.try_evaluate(cond)?;
                 if c.is_zero() || self.quit_flag {
                     break;
                 }
-                self.execute(body);
+                self.try_execute(body)?;
                 let (should_break, next_break) = verified_loop_post_body_action(
                     self.break_flag,
                     self.return_flag,
@@ -587,13 +593,13 @@ impl Evaluator {
                 }
             },
             Stmt::For(init, cond, post, body) => {
-                self.evaluate(init);
+                self.try_evaluate(init)?;
                 loop {
-                    let c = self.evaluate(cond);
+                    let c = self.try_evaluate(cond)?;
                     if c.is_zero() || self.quit_flag {
                         break;
                     }
-                    self.execute(body);
+                    self.try_execute(body)?;
                     let (should_break, next_break) = verified_loop_post_body_action(
                         self.break_flag,
                         self.return_flag,
@@ -603,13 +609,19 @@ impl Evaluator {
                     if should_break {
                         break;
                     }
-                    self.evaluate(post);
+                    self.try_evaluate(post)?;
                 }
             }
             Stmt::FunctionDef(func) => {
                 self.functions.insert(func.name.clone(), func.clone());
             }
         }
+        Ok(())
+    }
+
+    /// Executes an AST statement node.
+    pub fn execute(&mut self, node: &Stmt) {
+        self.try_execute(node).unwrap_or_else(|e| panic!("{}", e))
     }
 }
 
@@ -1816,5 +1828,64 @@ mod tests {
         evaluator3.execute(&block_break);
         let val4 = evaluator3.evaluate(&Expr::Variable("block_var2".to_string()));
         assert_eq!(val4.coeff, BigInt::from(0));
+    }
+
+    #[test]
+    fn test_fallible_evaluator_and_scope_restoration() {
+        let mut ev = Evaluator::new(true, Box::new(String::new()), Box::new(String::new()));
+
+        let mut p_setup = Parser::try_new(Lexer::new(
+            "x = 42; a[0] = 7\ndefine bad(x, a[]) {\n  auto y, b[]\n  x = 99\n  y = 1 / 0\n  return (y)\n}\n",
+        ))
+        .unwrap();
+        for stmt in p_setup.try_parse_program().unwrap() {
+            assert!(ev.try_execute(&stmt).is_ok());
+        }
+
+        // Calling bad(10, a[]) must return Err("division by zero") AND ScopeGuard must restore x = 42
+        let mut p_call = Parser::try_new(Lexer::new("bad(10, a[])\n")).unwrap();
+        let call_stmts = p_call.try_parse_program().unwrap();
+        assert_eq!(
+            ev.try_execute(&call_stmts[0]),
+            Err("division by zero".to_string())
+        );
+        let x_after = ev.try_evaluate(&Expr::Variable("x".to_string())).unwrap();
+        assert_eq!(x_after.coeff, BigInt::from(42));
+
+        // Argument errors and undefined function
+        let mut p_mismatch = Parser::try_new(Lexer::new("bad(10)\n")).unwrap();
+        let stmts_mismatch = p_mismatch.try_parse_program().unwrap();
+        assert_eq!(
+            ev.try_execute(&stmts_mismatch[0]),
+            Err("argument count mismatch".to_string())
+        );
+
+        let mut p_arr_err = Parser::try_new(Lexer::new("bad(10, 20)\n")).unwrap();
+        let stmts_arr_err = p_arr_err.try_parse_program().unwrap();
+        assert_eq!(
+            ev.try_execute(&stmts_arr_err[0]),
+            Err("expected array argument".to_string())
+        );
+
+        let mut p_scalar_err = Parser::try_new(Lexer::new("bad(a[], a[])\n")).unwrap();
+        let stmts_scalar_err = p_scalar_err.try_parse_program().unwrap();
+        assert_eq!(
+            ev.try_execute(&stmts_scalar_err[0]),
+            Err("argument count mismatch".to_string())
+        );
+
+        let mut p_undef = Parser::try_new(Lexer::new("nonexistent(1)\n")).unwrap();
+        let stmts_undef = p_undef.try_parse_program().unwrap();
+        assert_eq!(
+            ev.try_execute(&stmts_undef[0]),
+            Err("undefined function nonexistent".to_string())
+        );
+
+        let mut p_sqrt = Parser::try_new(Lexer::new("sqrt(-1)\n")).unwrap();
+        let stmts_sqrt = p_sqrt.try_parse_program().unwrap();
+        assert_eq!(
+            ev.try_execute(&stmts_sqrt[0]),
+            Err("square root of negative number".to_string())
+        );
     }
 }

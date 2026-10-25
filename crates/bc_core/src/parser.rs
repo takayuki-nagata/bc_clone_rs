@@ -88,8 +88,8 @@ impl Lexer {
     }
 
     /// Triggers a syntax error during lexical analysis.
-    fn error(&self, msg: &str) -> ! {
-        panic!("Lexical error on line {}: {}", self.line, msg);
+    fn error<T>(&self, msg: &str) -> Result<T, String> {
+        Err(format!("Lexical error on line {}: {}", self.line, msg))
     }
 
     /// Peeks a character ahead of the current position by the given offset.
@@ -111,7 +111,7 @@ impl Lexer {
     }
 
     /// Skips whitespace, comments (`/* ... */`), and backslash-newlines.
-    fn skip_whitespace_and_comments(&mut self) {
+    fn skip_whitespace_and_comments(&mut self) -> Result<(), String> {
         loop {
             let c = self.peek_char(0);
             if c == ' ' || c == '\t' || c == '\r' {
@@ -125,7 +125,7 @@ impl Lexer {
                 loop {
                     let cc = self.peek_char(0);
                     if cc == '\0' {
-                        self.error("unterminated comment");
+                        return self.error("unterminated comment");
                     }
                     if cc == '*' && self.peek_char(1) == '/' {
                         self.advance_char(2);
@@ -137,273 +137,274 @@ impl Lexer {
                 break;
             }
         }
+        Ok(())
     }
 
     /// Scans the next token from input.
-    fn scan_token(&mut self) -> Token {
-        self.skip_whitespace_and_comments();
+    fn scan_token(&mut self) -> Result<Token, String> {
+        self.skip_whitespace_and_comments()?;
         let c = self.peek_char(0);
         if c == '\0' {
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Eof,
                 value: String::new(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '\n' {
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Newline,
                 value: "\n".to_string(),
                 line: self.line - 1,
-            };
+            });
         }
 
         if c == ';' {
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Semicolon,
                 value: ";".to_string(),
                 line: self.line,
-            };
+            });
         }
         if c == ',' {
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Comma,
                 value: ",".to_string(),
                 line: self.line,
-            };
+            });
         }
         if c == '(' {
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Lparen,
                 value: "(".to_string(),
                 line: self.line,
-            };
+            });
         }
         if c == ')' {
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Rparen,
                 value: ")".to_string(),
                 line: self.line,
-            };
+            });
         }
         if c == '[' {
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Lbracket,
                 value: "[".to_string(),
                 line: self.line,
-            };
+            });
         }
         if c == ']' {
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Rbracket,
                 value: "]".to_string(),
                 line: self.line,
-            };
+            });
         }
         if c == '{' {
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Lbrace,
                 value: "{".to_string(),
                 line: self.line,
-            };
+            });
         }
         if c == '}' {
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Rbrace,
                 value: "}".to_string(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '^' {
             if self.peek_char(1) == '=' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::AssignOp,
                     value: "^=".to_string(),
                     line: self.line,
-                };
+                });
             }
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Exp,
                 value: "^".to_string(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '+' {
             if self.peek_char(1) == '+' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::IncrDecr,
                     value: "++".to_string(),
                     line: self.line,
-                };
+                });
             }
             if self.peek_char(1) == '=' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::AssignOp,
                     value: "+=".to_string(),
                     line: self.line,
-                };
+                });
             }
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Plus,
                 value: "+".to_string(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '-' {
             if self.peek_char(1) == '-' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::IncrDecr,
                     value: "--".to_string(),
                     line: self.line,
-                };
+                });
             }
             if self.peek_char(1) == '=' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::AssignOp,
                     value: "-=".to_string(),
                     line: self.line,
-                };
+                });
             }
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Minus,
                 value: "-".to_string(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '*' {
             if self.peek_char(1) == '=' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::AssignOp,
                     value: "*=".to_string(),
                     line: self.line,
-                };
+                });
             }
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::MulOp,
                 value: "*".to_string(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '/' {
             if self.peek_char(1) == '=' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::AssignOp,
                     value: "/=".to_string(),
                     line: self.line,
-                };
+                });
             }
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::MulOp,
                 value: "/".to_string(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '%' {
             if self.peek_char(1) == '=' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::AssignOp,
                     value: "%=".to_string(),
                     line: self.line,
-                };
+                });
             }
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::MulOp,
                 value: "%".to_string(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '=' {
             if self.peek_char(1) == '=' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::RelOp,
                     value: "==".to_string(),
                     line: self.line,
-                };
+                });
             }
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::AssignOp,
                 value: "=".to_string(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '<' {
             if self.peek_char(1) == '=' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::RelOp,
                     value: "<=".to_string(),
                     line: self.line,
-                };
+                });
             }
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::RelOp,
                 value: "<".to_string(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '>' {
             if self.peek_char(1) == '=' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::RelOp,
                     value: ">=".to_string(),
                     line: self.line,
-                };
+                });
             }
             self.advance_char(1);
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::RelOp,
                 value: ">".to_string(),
                 line: self.line,
-            };
+            });
         }
 
         if c == '!' {
             if self.peek_char(1) == '=' {
                 self.advance_char(2);
-                return Token {
+                return Ok(Token {
                     token_type: TokenType::RelOp,
                     value: "!=".to_string(),
                     line: self.line,
-                };
+                });
             }
-            self.error("unexpected character '!'");
+            return self.error("unexpected character '!'");
         }
 
         if c == '"' {
@@ -412,7 +413,7 @@ impl Lexer {
             loop {
                 let cc = self.peek_char(0);
                 if cc == '\0' {
-                    self.error("unterminated string");
+                    return self.error("unterminated string");
                 }
                 if cc == '"' {
                     self.advance_char(1);
@@ -432,11 +433,11 @@ impl Lexer {
                     self.advance_char(1);
                 }
             }
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::String,
                 value: val_chars.into_iter().collect(),
                 line: self.line,
-            };
+            });
         }
 
         let is_digit = |ch: char| -> bool { verified_is_bc_digit(ch as u32) };
@@ -461,11 +462,11 @@ impl Lexer {
                     break;
                 }
             }
-            return Token {
+            return Ok(Token {
                 token_type: TokenType::Number,
                 value: val_chars.into_iter().collect(),
                 line: self.line,
-            };
+            });
         }
 
         if c.is_ascii_lowercase() {
@@ -499,29 +500,35 @@ impl Lexer {
                 _ => TokenType::Letter,
             };
 
-            return Token {
+            return Ok(Token {
                 token_type,
                 value: word,
                 line: self.line,
-            };
+            });
         }
 
-        self.error(&format!("unexpected character {:?}", c));
+        self.error(&format!("unexpected character {:?}", c))
     }
 
-    /// Obtains the next token, consuming it from the buffer or stream.
-    pub fn get_next_token(&mut self) -> Token {
+    /// Obtains the next token, returning Err on lexical error.
+    pub fn try_get_next_token(&mut self) -> Result<Token, String> {
         if !self.buffer.is_empty() {
-            self.buffer.remove(0)
+            Ok(self.buffer.remove(0))
         } else {
             self.scan_token()
         }
     }
 
-    /// Peeks a token at a given offset forward.
-    pub fn peek_token(&mut self, offset: usize) -> &Token {
+    /// Obtains the next token, consuming it from the buffer or stream.
+    pub fn get_next_token(&mut self) -> Token {
+        self.try_get_next_token()
+            .unwrap_or_else(|e| panic!("{}", e))
+    }
+
+    /// Peeks a token at a given offset forward, returning Err on lexical error.
+    pub fn try_peek_token(&mut self, offset: usize) -> Result<&Token, String> {
         while self.buffer.len() <= offset {
-            let tok = self.scan_token();
+            let tok = self.scan_token()?;
             let is_eof = tok.token_type == TokenType::Eof;
             self.buffer.push(tok);
             if is_eof {
@@ -529,7 +536,13 @@ impl Lexer {
             }
         }
         let idx = verified_lexer_peek_token_index(self.buffer.len(), offset);
-        &self.buffer[idx]
+        Ok(&self.buffer[idx])
+    }
+
+    /// Peeks a token at a given offset forward.
+    pub fn peek_token(&mut self, offset: usize) -> &Token {
+        self.try_peek_token(offset)
+            .unwrap_or_else(|e| panic!("{}", e))
     }
 }
 
@@ -599,70 +612,89 @@ pub struct Parser {
 }
 
 impl Parser {
-    /// Creates a new Parser from the Lexer.
-    pub fn new(mut lexer: Lexer) -> Self {
-        let current_token = lexer.get_next_token();
-        Self {
+    /// Creates a new Parser from the Lexer, returning Err on initial lexical error.
+    pub fn try_new(mut lexer: Lexer) -> Result<Self, String> {
+        let current_token = lexer.try_get_next_token()?;
+        Ok(Self {
             lexer,
             current_token,
-        }
+        })
+    }
+
+    /// Creates a new Parser from the Lexer.
+    pub fn new(lexer: Lexer) -> Self {
+        Self::try_new(lexer).unwrap_or_else(|e| panic!("{}", e))
     }
 
     /// Triggers a syntax error during parsing.
-    fn error(&self, msg: &str) -> ! {
-        panic!("Parser error on line {}: {}", self.current_token.line, msg);
+    fn error<T>(&self, msg: &str) -> Result<T, String> {
+        Err(format!(
+            "Parser error on line {}: {}",
+            self.current_token.line, msg
+        ))
     }
 
     /// Consumes a token of the expected type, otherwise raises error.
-    fn eat(&mut self, token_type: TokenType) {
+    fn eat(&mut self, token_type: TokenType) -> Result<(), String> {
         if self.current_token.token_type == token_type {
-            self.current_token = self.lexer.get_next_token();
+            self.current_token = self.lexer.try_get_next_token()?;
+            Ok(())
         } else {
             self.error(&format!(
                 "expected {:?}, got {:?}",
                 token_type, self.current_token.token_type
-            ));
+            ))
         }
     }
 
     /// Peeks the token type of the token at `offset`.
-    fn peek_token_type(&mut self, offset: usize) -> TokenType {
-        self.lexer.peek_token(offset).token_type
+    fn peek_token_type(&mut self, offset: usize) -> Result<TokenType, String> {
+        Ok(self.lexer.try_peek_token(offset)?.token_type)
+    }
+
+    /// Parses the program fully, returning Err on lexical/syntax error or `"quit"`.
+    pub fn try_parse_program(&mut self) -> Result<Vec<Stmt>, String> {
+        let mut items = Vec::new();
+        while self.current_token.token_type != TokenType::Eof {
+            if let Some(item) = self.parse_input_item()? {
+                items.push(item);
+            }
+        }
+        Ok(items)
     }
 
     /// Parses the program fully (entry point).
     pub fn parse_program(&mut self) -> Vec<Stmt> {
-        let mut items = Vec::new();
-        while self.current_token.token_type != TokenType::Eof {
-            if let Some(item) = self.parse_input_item() {
-                items.push(item);
+        self.try_parse_program().unwrap_or_else(|e| {
+            if e == "quit" {
+                panic!("quit");
             }
-        }
-        items
+            panic!("{}", e);
+        })
     }
 
     /// Parses a single top-level item (statement block or function definition).
-    fn parse_input_item(&mut self) -> Option<Stmt> {
+    fn parse_input_item(&mut self) -> Result<Option<Stmt>, String> {
         if self.current_token.token_type == TokenType::Define {
-            return Some(self.parse_function());
+            return Ok(Some(self.parse_function()?));
         }
 
-        let lst = self.parse_semicolon_list();
+        let lst = self.parse_semicolon_list()?;
         if self.current_token.token_type == TokenType::Newline {
-            self.eat(TokenType::Newline);
+            self.eat(TokenType::Newline)?;
         } else {
-            self.eat(TokenType::Eof);
+            self.eat(TokenType::Eof)?;
         }
 
         if lst.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(Stmt::Block(lst))
+            Ok(Some(Stmt::Block(lst)))
         }
     }
 
     /// Parses a list of statements separated by semicolons.
-    fn parse_semicolon_list(&mut self) -> Vec<Stmt> {
+    fn parse_semicolon_list(&mut self) -> Result<Vec<Stmt>, String> {
         let mut stmts = Vec::new();
         loop {
             let t = self.current_token.token_type;
@@ -670,80 +702,79 @@ impl Parser {
                 break;
             }
             if t == TokenType::Semicolon {
-                self.eat(TokenType::Semicolon);
+                self.eat(TokenType::Semicolon)?;
                 continue;
             }
 
-            let stmt = self.parse_statement();
+            let stmt = self.parse_statement()?;
             stmts.push(stmt);
 
             if self.current_token.token_type == TokenType::Semicolon {
-                self.eat(TokenType::Semicolon);
+                self.eat(TokenType::Semicolon)?;
             } else {
                 break;
             }
         }
-        stmts
+        Ok(stmts)
     }
 
     /// Parses a list of statements within a block (with newline and semicolon separations).
-    fn parse_statement_list(&mut self) -> Vec<Stmt> {
+    fn parse_statement_list(&mut self) -> Result<Vec<Stmt>, String> {
         let mut stmts = Vec::new();
         loop {
-            self.skip_newlines();
+            self.skip_newlines()?;
             let t = self.current_token.token_type;
             if t == TokenType::Eof || t == TokenType::Rbrace {
                 break;
             }
 
-            let stmt = self.parse_statement();
+            let stmt = self.parse_statement()?;
             stmts.push(stmt);
 
             let nt = self.current_token.token_type;
             match nt {
                 TokenType::Semicolon => {
-                    self.eat(TokenType::Semicolon);
+                    self.eat(TokenType::Semicolon)?;
                 }
                 TokenType::Newline => {
-                    self.eat(TokenType::Newline);
+                    self.eat(TokenType::Newline)?;
                 }
                 TokenType::Rbrace | TokenType::Eof => {}
-                _ => self.error(&format!("expected separator, got {:?}", nt)),
+                _ => return self.error(&format!("expected separator, got {:?}", nt)),
             }
         }
-        stmts
+        Ok(stmts)
     }
 
     /// Skips sequence of newline tokens.
-    fn skip_newlines(&mut self) {
+    fn skip_newlines(&mut self) -> Result<(), String> {
         while self.current_token.token_type == TokenType::Newline {
-            self.eat(TokenType::Newline);
+            self.eat(TokenType::Newline)?;
         }
+        Ok(())
     }
 
     /// Parses a statement.
-    fn parse_statement(&mut self) -> Stmt {
+    fn parse_statement(&mut self) -> Result<Stmt, String> {
         let t = self.current_token.token_type;
         match t {
             TokenType::String => {
                 let val = self.current_token.value.clone();
-                self.eat(TokenType::String);
-                Stmt::StringLiteral(val)
+                self.eat(TokenType::String)?;
+                Ok(Stmt::StringLiteral(val))
             }
             TokenType::Break => {
-                self.eat(TokenType::Break);
-                Stmt::Break
+                self.eat(TokenType::Break)?;
+                Ok(Stmt::Break)
             }
-            TokenType::Quit => {
-                panic!("quit");
-            }
+            TokenType::Quit => Err("quit".to_string()),
             TokenType::Return => {
-                self.eat(TokenType::Return);
+                self.eat(TokenType::Return)?;
                 if self.current_token.token_type == TokenType::Lparen {
-                    self.eat(TokenType::Lparen);
-                    let expr = self.parse_expression();
-                    self.eat(TokenType::Rparen);
-                    Stmt::Return(Some(expr))
+                    self.eat(TokenType::Lparen)?;
+                    let expr = self.parse_expression()?;
+                    self.eat(TokenType::Rparen)?;
+                    Ok(Stmt::Return(Some(expr)))
                 } else {
                     // GNU extension: return without parentheses
                     let nt = self.current_token.token_type;
@@ -752,101 +783,101 @@ impl Parser {
                         && nt != TokenType::Rbrace
                         && nt != TokenType::Eof
                     {
-                        let expr = self.parse_expression();
-                        Stmt::Return(Some(expr))
+                        let expr = self.parse_expression()?;
+                        Ok(Stmt::Return(Some(expr)))
                     } else {
-                        Stmt::Return(None)
+                        Ok(Stmt::Return(None))
                     }
                 }
             }
             TokenType::For => {
-                self.eat(TokenType::For);
-                self.eat(TokenType::Lparen);
-                let init = self.parse_expression();
-                self.eat(TokenType::Semicolon);
-                let cond = self.parse_relational_expression();
-                self.eat(TokenType::Semicolon);
-                let post = self.parse_expression();
-                self.eat(TokenType::Rparen);
-                let body = self.parse_statement();
-                Stmt::For(init, cond, post, Box::new(body))
+                self.eat(TokenType::For)?;
+                self.eat(TokenType::Lparen)?;
+                let init = self.parse_expression()?;
+                self.eat(TokenType::Semicolon)?;
+                let cond = self.parse_relational_expression()?;
+                self.eat(TokenType::Semicolon)?;
+                let post = self.parse_expression()?;
+                self.eat(TokenType::Rparen)?;
+                let body = self.parse_statement()?;
+                Ok(Stmt::For(init, cond, post, Box::new(body)))
             }
             TokenType::If => {
-                self.eat(TokenType::If);
-                self.eat(TokenType::Lparen);
-                let cond = self.parse_relational_expression();
-                self.eat(TokenType::Rparen);
-                let body = self.parse_statement();
-                Stmt::If(cond, Box::new(body))
+                self.eat(TokenType::If)?;
+                self.eat(TokenType::Lparen)?;
+                let cond = self.parse_relational_expression()?;
+                self.eat(TokenType::Rparen)?;
+                let body = self.parse_statement()?;
+                Ok(Stmt::If(cond, Box::new(body)))
             }
             TokenType::While => {
-                self.eat(TokenType::While);
-                self.eat(TokenType::Lparen);
-                let cond = self.parse_relational_expression();
-                self.eat(TokenType::Rparen);
-                let body = self.parse_statement();
-                Stmt::While(cond, Box::new(body))
+                self.eat(TokenType::While)?;
+                self.eat(TokenType::Lparen)?;
+                let cond = self.parse_relational_expression()?;
+                self.eat(TokenType::Rparen)?;
+                let body = self.parse_statement()?;
+                Ok(Stmt::While(cond, Box::new(body)))
             }
             TokenType::Lbrace => {
-                self.eat(TokenType::Lbrace);
-                let stmts = self.parse_statement_list();
-                self.eat(TokenType::Rbrace);
-                Stmt::Block(stmts)
+                self.eat(TokenType::Lbrace)?;
+                let stmts = self.parse_statement_list()?;
+                self.eat(TokenType::Rbrace)?;
+                Ok(Stmt::Block(stmts))
             }
-            _ => Stmt::Expr(self.parse_relational_expression()),
+            _ => Ok(Stmt::Expr(self.parse_relational_expression()?)),
         }
     }
 
     /// Parses a function definition `define f(x) { ... }`.
-    fn parse_function(&mut self) -> Stmt {
-        self.eat(TokenType::Define);
+    fn parse_function(&mut self) -> Result<Stmt, String> {
+        self.eat(TokenType::Define)?;
         if self.current_token.token_type != TokenType::Letter {
-            self.error("expected function name (letter)");
+            return self.error("expected function name (letter)");
         }
         let name = self.current_token.value.clone();
-        self.eat(TokenType::Letter);
+        self.eat(TokenType::Letter)?;
 
-        self.eat(TokenType::Lparen);
-        let params = self.parse_opt_define_list();
-        self.eat(TokenType::Rparen);
+        self.eat(TokenType::Lparen)?;
+        let params = self.parse_opt_define_list()?;
+        self.eat(TokenType::Rparen)?;
 
-        self.eat(TokenType::Lbrace);
-        self.skip_newlines();
+        self.eat(TokenType::Lbrace)?;
+        self.skip_newlines()?;
 
-        let autos = self.parse_opt_auto_define_list();
-        let body = self.parse_statement_list();
-        self.eat(TokenType::Rbrace);
+        let autos = self.parse_opt_auto_define_list()?;
+        let body = self.parse_statement_list()?;
+        self.eat(TokenType::Rbrace)?;
 
-        Stmt::FunctionDef(FunctionDef {
+        Ok(Stmt::FunctionDef(FunctionDef {
             name,
             params,
             autos,
             body,
-        })
+        }))
     }
 
     /// Parses optional parameters/autos define list.
-    fn parse_opt_define_list(&mut self) -> Vec<Param> {
+    fn parse_opt_define_list(&mut self) -> Result<Vec<Param>, String> {
         if self.current_token.token_type == TokenType::Rparen {
-            Vec::new()
+            Ok(Vec::new())
         } else {
             self.parse_define_list()
         }
     }
 
     /// Parses a define list of parameters or auto variables.
-    fn parse_define_list(&mut self) -> Vec<Param> {
+    fn parse_define_list(&mut self) -> Result<Vec<Param>, String> {
         let mut lst = Vec::new();
         loop {
             if self.current_token.token_type != TokenType::Letter {
-                self.error("expected parameter name (letter)");
+                return self.error("expected parameter name (letter)");
             }
             let pname = self.current_token.value.clone();
-            self.eat(TokenType::Letter);
+            self.eat(TokenType::Letter)?;
             let mut is_arr = false;
             if self.current_token.token_type == TokenType::Lbracket {
-                self.eat(TokenType::Lbracket);
-                self.eat(TokenType::Rbracket);
+                self.eat(TokenType::Lbracket)?;
+                self.eat(TokenType::Rbracket)?;
                 is_arr = true;
             }
             lst.push(Param {
@@ -855,53 +886,53 @@ impl Parser {
             });
 
             if self.current_token.token_type == TokenType::Comma {
-                self.eat(TokenType::Comma);
+                self.eat(TokenType::Comma)?;
             } else {
                 break;
             }
         }
-        lst
+        Ok(lst)
     }
 
     /// Parses auto list declarations `auto a, b[]`.
-    fn parse_opt_auto_define_list(&mut self) -> Vec<Param> {
+    fn parse_opt_auto_define_list(&mut self) -> Result<Vec<Param>, String> {
         if self.current_token.token_type != TokenType::Auto {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        self.eat(TokenType::Auto);
-        let lst = self.parse_define_list();
+        self.eat(TokenType::Auto)?;
+        let lst = self.parse_define_list()?;
         let t = self.current_token.token_type;
         if t == TokenType::Newline {
-            self.eat(TokenType::Newline);
+            self.eat(TokenType::Newline)?;
         } else if t == TokenType::Semicolon {
-            self.eat(TokenType::Semicolon);
+            self.eat(TokenType::Semicolon)?;
         } else {
-            self.error("expected newline or semicolon after auto declaration");
+            return self.error("expected newline or semicolon after auto declaration");
         }
-        lst
+        Ok(lst)
     }
 
     /// Parses expressions, including relational ones.
-    fn parse_relational_expression(&mut self) -> Expr {
-        let left = self.parse_expression();
+    fn parse_relational_expression(&mut self) -> Result<Expr, String> {
+        let left = self.parse_expression()?;
         if self.current_token.token_type == TokenType::RelOp {
             let op = self.current_token.value.clone();
-            self.eat(TokenType::RelOp);
-            let right = self.parse_expression();
-            Expr::RelationalOp(op, Box::new(left), Box::new(right))
+            self.eat(TokenType::RelOp)?;
+            let right = self.parse_expression()?;
+            Ok(Expr::RelationalOp(op, Box::new(left), Box::new(right)))
         } else {
-            left
+            Ok(left)
         }
     }
 
     /// Parses arithmetic expressions.
-    fn parse_expression(&mut self) -> Expr {
+    fn parse_expression(&mut self) -> Result<Expr, String> {
         self.parse_expr_precedence(0)
     }
 
     /// Implements Precedence Climbing algorithm.
-    fn parse_expr_precedence(&mut self, min_prec: i8) -> Expr {
-        let mut left = self.parse_prefix();
+    fn parse_expr_precedence(&mut self, min_prec: i8) -> Result<Expr, String> {
+        let mut left = self.parse_prefix()?;
         loop {
             let (op_prec, op_class, next_min_prec) = self.get_infix_info(&self.current_token);
             if op_prec < min_prec {
@@ -909,9 +940,9 @@ impl Parser {
             }
 
             let op_val = self.current_token.value.clone();
-            self.eat(self.current_token.token_type);
+            self.eat(self.current_token.token_type)?;
 
-            let right = self.parse_expr_precedence(next_min_prec);
+            let right = self.parse_expr_precedence(next_min_prec)?;
 
             left = if op_class == "ASSIGN" {
                 Expr::AssignOp(op_val, Box::new(left), Box::new(right))
@@ -919,7 +950,7 @@ impl Parser {
                 Expr::BinaryOp(op_val, Box::new(left), Box::new(right))
             };
         }
-        left
+        Ok(left)
     }
 
     /// Retrieves precedence info for binary and assignment operators.
@@ -936,105 +967,105 @@ impl Parser {
     }
 
     /// Parses prefixes (unary operators).
-    fn parse_prefix(&mut self) -> Expr {
+    fn parse_prefix(&mut self) -> Result<Expr, String> {
         let t = self.current_token.token_type;
         if t == TokenType::Minus {
-            self.eat(TokenType::Minus);
-            let expr = self.parse_expr_precedence(5);
-            Expr::UnaryOp('-', Box::new(expr))
+            self.eat(TokenType::Minus)?;
+            let expr = self.parse_expr_precedence(5)?;
+            Ok(Expr::UnaryOp('-', Box::new(expr)))
         } else if t == TokenType::IncrDecr {
             let op = self.current_token.value.clone();
-            self.eat(TokenType::IncrDecr);
-            let target = self.parse_named_expression();
-            Expr::UpdateOp(op, true, Box::new(target))
+            self.eat(TokenType::IncrDecr)?;
+            let target = self.parse_named_expression()?;
+            Ok(Expr::UpdateOp(op, true, Box::new(target)))
         } else {
             self.parse_primary()
         }
     }
 
     /// Parses primary expressions (literals, variables, built-ins, calls).
-    fn parse_primary(&mut self) -> Expr {
+    fn parse_primary(&mut self) -> Result<Expr, String> {
         let t = self.current_token.token_type;
         match t {
             TokenType::Number => {
                 let val = self.current_token.value.clone();
-                self.eat(TokenType::Number);
-                Expr::Number(val)
+                self.eat(TokenType::Number)?;
+                Ok(Expr::Number(val))
             }
             TokenType::Lparen => {
-                self.eat(TokenType::Lparen);
-                let expr = self.parse_expression();
-                self.eat(TokenType::Rparen);
-                expr
+                self.eat(TokenType::Lparen)?;
+                let expr = self.parse_expression()?;
+                self.eat(TokenType::Rparen)?;
+                Ok(expr)
             }
             TokenType::Length => {
-                self.eat(TokenType::Length);
-                self.eat(TokenType::Lparen);
-                let expr = self.parse_expression();
-                self.eat(TokenType::Rparen);
-                Expr::LengthCall(Box::new(expr))
+                self.eat(TokenType::Length)?;
+                self.eat(TokenType::Lparen)?;
+                let expr = self.parse_expression()?;
+                self.eat(TokenType::Rparen)?;
+                Ok(Expr::LengthCall(Box::new(expr)))
             }
             TokenType::Sqrt => {
-                self.eat(TokenType::Sqrt);
-                self.eat(TokenType::Lparen);
-                let expr = self.parse_expression();
-                self.eat(TokenType::Rparen);
-                Expr::SqrtCall(Box::new(expr))
+                self.eat(TokenType::Sqrt)?;
+                self.eat(TokenType::Lparen)?;
+                let expr = self.parse_expression()?;
+                self.eat(TokenType::Rparen)?;
+                Ok(Expr::SqrtCall(Box::new(expr)))
             }
-            TokenType::Scale if self.peek_token_type(0) == TokenType::Lparen => {
-                self.eat(TokenType::Scale);
-                self.eat(TokenType::Lparen);
-                let expr = self.parse_expression();
-                self.eat(TokenType::Rparen);
-                Expr::ScaleCall(Box::new(expr))
+            TokenType::Scale if self.peek_token_type(0)? == TokenType::Lparen => {
+                self.eat(TokenType::Scale)?;
+                self.eat(TokenType::Lparen)?;
+                let expr = self.parse_expression()?;
+                self.eat(TokenType::Rparen)?;
+                Ok(Expr::ScaleCall(Box::new(expr)))
             }
-            TokenType::Letter if self.peek_token_type(0) == TokenType::Lparen => {
+            TokenType::Letter if self.peek_token_type(0)? == TokenType::Lparen => {
                 let name = self.current_token.value.clone();
-                self.eat(TokenType::Letter);
-                self.eat(TokenType::Lparen);
-                let args = self.parse_opt_argument_list();
-                self.eat(TokenType::Rparen);
-                Expr::Call(name, args)
+                self.eat(TokenType::Letter)?;
+                self.eat(TokenType::Lparen)?;
+                let args = self.parse_opt_argument_list()?;
+                self.eat(TokenType::Rparen)?;
+                Ok(Expr::Call(name, args))
             }
             _ => {
-                let target = self.parse_named_expression();
+                let target = self.parse_named_expression()?;
                 if self.current_token.token_type == TokenType::IncrDecr {
                     let op = self.current_token.value.clone();
-                    self.eat(TokenType::IncrDecr);
-                    Expr::UpdateOp(op, false, Box::new(target))
+                    self.eat(TokenType::IncrDecr)?;
+                    Ok(Expr::UpdateOp(op, false, Box::new(target)))
                 } else {
-                    target
+                    Ok(target)
                 }
             }
         }
     }
 
     /// Parses variables, arrays, or register accesses.
-    fn parse_named_expression(&mut self) -> Expr {
+    fn parse_named_expression(&mut self) -> Result<Expr, String> {
         let t = self.current_token.token_type;
         match t {
             TokenType::Scale => {
-                self.eat(TokenType::Scale);
-                Expr::RegisterAccess("scale".to_string())
+                self.eat(TokenType::Scale)?;
+                Ok(Expr::RegisterAccess("scale".to_string()))
             }
             TokenType::Ibase => {
-                self.eat(TokenType::Ibase);
-                Expr::RegisterAccess("ibase".to_string())
+                self.eat(TokenType::Ibase)?;
+                Ok(Expr::RegisterAccess("ibase".to_string()))
             }
             TokenType::Obase => {
-                self.eat(TokenType::Obase);
-                Expr::RegisterAccess("obase".to_string())
+                self.eat(TokenType::Obase)?;
+                Ok(Expr::RegisterAccess("obase".to_string()))
             }
             TokenType::Letter => {
                 let name = self.current_token.value.clone();
-                self.eat(TokenType::Letter);
+                self.eat(TokenType::Letter)?;
                 if self.current_token.token_type == TokenType::Lbracket {
-                    self.eat(TokenType::Lbracket);
-                    let idx = self.parse_expression();
-                    self.eat(TokenType::Rbracket);
-                    Expr::ArrayAccess(name, Box::new(idx))
+                    self.eat(TokenType::Lbracket)?;
+                    let idx = self.parse_expression()?;
+                    self.eat(TokenType::Rbracket)?;
+                    Ok(Expr::ArrayAccess(name, Box::new(idx)))
                 } else {
-                    Expr::Variable(name)
+                    Ok(Expr::Variable(name))
                 }
             }
             _ => self.error(&format!("expected named expression, got {:?}", t)),
@@ -1042,38 +1073,38 @@ impl Parser {
     }
 
     /// Parses optional function call argument list.
-    fn parse_opt_argument_list(&mut self) -> Vec<ExprOrArray> {
+    fn parse_opt_argument_list(&mut self) -> Result<Vec<ExprOrArray>, String> {
         if self.current_token.token_type == TokenType::Rparen {
-            Vec::new()
+            Ok(Vec::new())
         } else {
             self.parse_argument_list()
         }
     }
 
     /// Parses function call argument list.
-    fn parse_argument_list(&mut self) -> Vec<ExprOrArray> {
+    fn parse_argument_list(&mut self) -> Result<Vec<ExprOrArray>, String> {
         let mut args = Vec::new();
         loop {
             if self.current_token.token_type == TokenType::Letter
-                && self.peek_token_type(0) == TokenType::Lbracket
-                && self.peek_token_type(1) == TokenType::Rbracket
+                && self.peek_token_type(0)? == TokenType::Lbracket
+                && self.peek_token_type(1)? == TokenType::Rbracket
             {
                 let name = self.current_token.value.clone();
-                self.eat(TokenType::Letter);
-                self.eat(TokenType::Lbracket);
-                self.eat(TokenType::Rbracket);
+                self.eat(TokenType::Letter)?;
+                self.eat(TokenType::Lbracket)?;
+                self.eat(TokenType::Rbracket)?;
                 args.push(ExprOrArray::ArrayArg(name));
             } else {
-                args.push(ExprOrArray::Expr(self.parse_expression()));
+                args.push(ExprOrArray::Expr(self.parse_expression()?));
             }
 
             if self.current_token.token_type == TokenType::Comma {
-                self.eat(TokenType::Comma);
+                self.eat(TokenType::Comma)?;
             } else {
                 break;
             }
         }
-        args
+        Ok(args)
     }
 }
 
@@ -1505,5 +1536,22 @@ mod tests {
         let tok_num_bs_x = lexer_num_bs_x.get_next_token();
         assert_eq!(tok_num_bs_x.token_type, TokenType::Number);
         assert_eq!(tok_num_bs_x.value, "123");
+    }
+
+    #[test]
+    fn test_fallible_parser_and_lexer() {
+        let mut lexer_err = Lexer::new("@");
+        assert!(lexer_err.try_get_next_token().is_err());
+
+        let mut lexer_peek_err = Lexer::new("1 @");
+        assert!(lexer_peek_err.try_peek_token(1).is_err());
+
+        assert!(Parser::try_new(Lexer::new("/* unterminated")).is_err());
+
+        let mut parser_syntax = Parser::try_new(Lexer::new("1 + * 2\n")).unwrap();
+        assert!(parser_syntax.try_parse_program().is_err());
+
+        let mut parser_quit = Parser::try_new(Lexer::new("quit\n")).unwrap();
+        assert_eq!(parser_quit.try_parse_program(), Err("quit".to_string()));
     }
 }

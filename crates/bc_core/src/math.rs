@@ -102,10 +102,10 @@ impl BCNum {
         Self::new(coeff, sr)
     }
 
-    /// Divides self by other under scale.
-    pub fn div(&self, other: &Self, global_scale: usize) -> Self {
+    /// Divides self by other under scale, returning Err on division by zero.
+    pub fn try_div(&self, other: &Self, global_scale: usize) -> Result<Self, &'static str> {
         if other.coeff.is_zero() {
-            panic!("division by zero");
+            return Err("division by zero");
         }
         let (sr, shift) = verified_div_scale_and_shift(self.scale, other.scale, global_scale);
         let coeff = if shift >= 0 {
@@ -115,20 +115,32 @@ impl BCNum {
             let den = &other.coeff * BigInt::from(10).pow((-shift) as u32);
             &self.coeff / den
         };
-        Self::new(coeff, sr)
+        Ok(Self::new(coeff, sr))
+    }
+
+    /// Divides self by other under scale.
+    pub fn div(&self, other: &Self, global_scale: usize) -> Self {
+        self.try_div(other, global_scale)
+            .unwrap_or_else(|msg| panic!("{}", msg))
+    }
+
+    /// Computes self % other under scale, returning Err on division by zero.
+    pub fn try_mod_op(&self, other: &Self, global_scale: usize) -> Result<Self, &'static str> {
+        let q = self.try_div(other, global_scale)?;
+        let prod_coeff = &q.coeff * &other.coeff;
+        let prod_scale = q.scale + other.scale;
+        let prod = Self::new(prod_coeff, prod_scale);
+        Ok(self.sub(&prod))
     }
 
     /// Computes self % other under scale.
     pub fn mod_op(&self, other: &Self, global_scale: usize) -> Self {
-        let q = self.div(other, global_scale);
-        let prod_coeff = &q.coeff * &other.coeff;
-        let prod_scale = q.scale + other.scale;
-        let prod = Self::new(prod_coeff, prod_scale);
-        self.sub(&prod)
+        self.try_mod_op(other, global_scale)
+            .unwrap_or_else(|msg| panic!("{}", msg))
     }
 
-    /// Raises self to the power of other under scale.
-    pub fn pow(&self, other: &Self, global_scale: usize) -> Self {
+    /// Raises self to the power of other under scale, returning Err on division by zero.
+    pub fn try_pow(&self, other: &Self, global_scale: usize) -> Result<Self, &'static str> {
         let b_val = if other.scale > 0 {
             &other.coeff / BigInt::from(10).pow(other.scale as u32)
         } else {
@@ -152,7 +164,7 @@ impl BCNum {
             }
             let (sr, diff) = verified_pow_scale_and_shift(res_scale, self.scale, global_scale);
             let coeff = res_coeff / BigInt::from(10).pow(diff as u32);
-            Self::new(coeff, sr)
+            Ok(Self::new(coeff, sr))
         } else {
             let b_abs = -b_val;
             let mut res_coeff = BigInt::from(1);
@@ -170,19 +182,31 @@ impl BCNum {
                 temp_b /= 2;
             }
             let exact_pow = Self::new(res_coeff, res_scale);
-            Self::new(BigInt::from(1), 0).div(&exact_pow, global_scale)
+            Self::new(BigInt::from(1), 0).try_div(&exact_pow, global_scale)
         }
     }
 
-    /// Computes the square root of self under scale.
-    pub fn sqrt(&self, global_scale: usize) -> Self {
+    /// Raises self to the power of other under scale.
+    pub fn pow(&self, other: &Self, global_scale: usize) -> Self {
+        self.try_pow(other, global_scale)
+            .unwrap_or_else(|msg| panic!("{}", msg))
+    }
+
+    /// Computes the square root of self under scale, returning Err on negative input.
+    pub fn try_sqrt(&self, global_scale: usize) -> Result<Self, &'static str> {
         if self.coeff < BigInt::zero() {
-            panic!("square root of negative number");
+            return Err("square root of negative number");
         }
         let (sr, shift) = verified_sqrt_scale_and_shift(self.scale, global_scale);
         let num = &self.coeff * BigInt::from(10).pow(shift as u32);
         let coeff = num.sqrt();
-        Self::new(coeff, sr)
+        Ok(Self::new(coeff, sr))
+    }
+
+    /// Computes the square root of self under scale.
+    pub fn sqrt(&self, global_scale: usize) -> Self {
+        self.try_sqrt(global_scale)
+            .unwrap_or_else(|msg| panic!("{}", msg))
     }
 
     /// Computes the total number of significant decimal digits.
@@ -1404,5 +1428,30 @@ mod tests {
         assert_eq!(verified_cli_classify_arg(b"test.bc"), CLI_ARG_FILE);
         assert_eq!(verified_cli_initial_scale(true), 20);
         assert_eq!(verified_cli_initial_scale(false), 0);
+    }
+
+    #[test]
+    fn test_fallible_math_operations() {
+        let zero = BCNum::zero();
+        let ten = BCNum::from_string("10", 10);
+        let neg = BCNum::new(BigInt::from(-4), 0);
+
+        assert_eq!(ten.try_div(&zero, 0), Err("division by zero"));
+        assert_eq!(ten.try_mod_op(&zero, 0), Err("division by zero"));
+        assert_eq!(zero.try_pow(&neg, 0), Err("division by zero"));
+        assert_eq!(neg.try_sqrt(0), Err("square root of negative number"));
+
+        assert_eq!(
+            ten.try_div(&BCNum::from_string("2", 10), 0),
+            Ok(BCNum::from_string("5", 10))
+        );
+        assert_eq!(
+            ten.try_mod_op(&BCNum::from_string("3", 10), 0),
+            Ok(BCNum::from_string("1", 10))
+        );
+        assert_eq!(
+            BCNum::from_string("9", 10).try_sqrt(0),
+            Ok(BCNum::from_string("3", 10))
+        );
     }
 }
