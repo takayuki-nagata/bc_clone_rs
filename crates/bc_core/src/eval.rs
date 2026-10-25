@@ -19,8 +19,9 @@ use crate::math::BCNum;
 use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Stmt};
 use crate::verified_kernels::{
     verified_clamp_ibase, verified_clamp_obase, verified_hex_char_val,
-    verified_loop_post_body_action, verified_relational_scale_shifts,
-    verified_should_abort_execution, verified_wrapped_stdout_step,
+    verified_ibase_warning_and_clamp, verified_loop_post_body_action,
+    verified_relational_scale_shifts, verified_should_abort_execution,
+    verified_wrapped_stdout_step,
 };
 
 /// Abstract output writer trait compatible with both no_std and std environments.
@@ -303,18 +304,19 @@ impl Evaluator {
                                 reg_val = BigInt::from(v);
                             }
                             "ibase" => {
-                                if reg_val_usize < 2 {
+                                let (v, warn_kind) =
+                                    verified_ibase_warning_and_clamp(reg_val_usize);
+                                if warn_kind < 0 {
                                     let _ = writeln!(
                                         self.stderr_writer,
                                         "Runtime warning (func=(main), adr=3): ibase too small, set to 2"
                                     );
-                                } else if reg_val_usize > 16 {
+                                } else if warn_kind > 0 {
                                     let _ = writeln!(
                                         self.stderr_writer,
                                         "Runtime warning (func=(main), adr=3): ibase too large, set to 16"
                                     );
                                 }
-                                let v = verified_clamp_ibase(reg_val_usize);
                                 self.ibase = v;
                                 reg_val = BigInt::from(v);
                             }

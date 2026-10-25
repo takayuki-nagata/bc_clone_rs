@@ -8,10 +8,10 @@
 
 use crate::verified_kernels::{
     verified_add_sub_scales, verified_alphanumeric_char_val, verified_bcnum_length,
-    verified_bessel_negative_order_parity, verified_div_scale_and_shift,
-    verified_mul_scale_and_shift, verified_multi_digit_obase_pad_zeros,
-    verified_pow_scale_and_shift, verified_sqrt_scale_and_shift,
-    verified_transcendental_guard_prec,
+    verified_bessel_negative_order_parity, verified_decimal_scale_shift,
+    verified_div_scale_and_shift, verified_mul_scale_and_shift,
+    verified_multi_digit_obase_pad_zeros, verified_pow_scale_and_shift,
+    verified_sqrt_scale_and_shift, verified_transcendental_guard_prec,
 };
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -356,21 +356,21 @@ impl Decimal {
     }
 
     fn from_bc_num(num: &BCNum, prec: usize) -> Self {
-        let diff = prec as i64 - num.scale as i64;
-        let value = if diff >= 0 {
-            &num.coeff * BigInt::from(10).pow(diff as u32)
+        let (shift, should_mul) = verified_decimal_scale_shift(num.scale, prec);
+        let value = if should_mul {
+            &num.coeff * BigInt::from(10).pow(shift as u32)
         } else {
-            &num.coeff / BigInt::from(10).pow((-diff) as u32)
+            &num.coeff / BigInt::from(10).pow(shift as u32)
         };
         Self { value, prec }
     }
 
     fn to_bc_num(&self, target_scale: usize) -> BCNum {
-        let diff = target_scale as i64 - self.prec as i64;
-        let coeff = if diff >= 0 {
-            &self.value * BigInt::from(10).pow(diff as u32)
+        let (shift, should_mul) = verified_decimal_scale_shift(self.prec, target_scale);
+        let coeff = if should_mul {
+            &self.value * BigInt::from(10).pow(shift as u32)
         } else {
-            &self.value / BigInt::from(10).pow((-diff) as u32)
+            &self.value / BigInt::from(10).pow(shift as u32)
         };
         BCNum::new(coeff, target_scale)
     }
@@ -800,13 +800,13 @@ pub fn bc_atan(x: &BCNum, global_scale: usize) -> BCNum {
 
 /// Math natural logarithm function.
 pub fn bc_ln(x: &BCNum, global_scale: usize) -> BCNum {
-    if x.coeff <= BigInt::zero() {
+    let prec = verified_transcendental_guard_prec(x.scale, global_scale, 0);
+    let dec_x = Decimal::from_bc_num(x, prec);
+    if dec_x.value <= BigInt::zero() {
         let coeff = BigInt::parse_bytes(b"-99999999999999999999", 10).unwrap()
             * BigInt::from(10).pow(global_scale as u32);
         return BCNum::new(coeff, global_scale);
     }
-    let prec = verified_transcendental_guard_prec(x.scale, global_scale, 0);
-    let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_ln(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
 }
@@ -1368,5 +1368,41 @@ mod tests {
         assert_eq!(verified_zephyr_classify_char(0x80), 0);
         assert_eq!(verified_lexer_advance_step(5, 10, false), (6, 10));
         assert_eq!(verified_lexer_advance_step(5, 10, true), (6, 11));
+        assert_eq!(verified_decimal_scale_shift(2, 5), (3, true));
+        assert_eq!(verified_decimal_scale_shift(3, 3), (0, true));
+        assert_eq!(verified_decimal_scale_shift(5, 2), (3, false));
+        assert_eq!(verified_ibase_warning_and_clamp(0), (2, -1));
+        assert_eq!(verified_ibase_warning_and_clamp(1), (2, -1));
+        assert_eq!(verified_ibase_warning_and_clamp(2), (2, 0));
+        assert_eq!(verified_ibase_warning_and_clamp(10), (10, 0));
+        assert_eq!(verified_ibase_warning_and_clamp(16), (16, 0));
+        assert_eq!(verified_ibase_warning_and_clamp(17), (16, 1));
+        assert_eq!(verified_pratt_infix_info(0), (-1, false, 0));
+        assert_eq!(verified_pratt_infix_info(TOK_ASSIGN_OP), (1, true, 1));
+        assert_eq!(verified_pratt_infix_info(TOK_PLUS_MINUS), (2, false, 3));
+        assert_eq!(verified_pratt_infix_info(TOK_MUL_OP), (3, false, 4));
+        assert_eq!(verified_pratt_infix_info(TOK_EXP_OP), (4, true, 4));
+        assert_eq!(verified_pratt_infix_info(5), (-1, false, 0));
+        assert_eq!(verified_lexer_peek_char_index(5, 2, 2), (true, 4));
+        assert_eq!(verified_lexer_peek_char_index(5, 2, 3), (false, 0));
+        assert_eq!(verified_lexer_peek_char_index(5, 2, 4), (false, 0));
+        assert!(!verified_is_ident_continue(96)); // '`'
+        assert!(verified_is_ident_continue(97)); // 'a'
+        assert!(verified_is_ident_continue(122)); // 'z'
+        assert!(!verified_is_ident_continue(123)); // '{'
+        assert!(!verified_is_ident_continue(47)); // '/'
+        assert!(verified_is_ident_continue(48)); // '0'
+        assert!(verified_is_ident_continue(57)); // '9'
+        assert!(!verified_is_ident_continue(58)); // ':'
+        assert!(!verified_is_ident_continue(94)); // '^'
+        assert!(verified_is_ident_continue(95)); // '_'
+        assert_eq!(verified_cli_classify_arg(b"-l"), CLI_ARG_OPT_L);
+        assert_eq!(verified_cli_classify_arg(b"-"), CLI_ARG_OPT_INVALID);
+        assert_eq!(verified_cli_classify_arg(b"-q"), CLI_ARG_OPT_INVALID);
+        assert_eq!(verified_cli_classify_arg(b"-ll"), CLI_ARG_OPT_INVALID);
+        assert_eq!(verified_cli_classify_arg(b""), CLI_ARG_FILE);
+        assert_eq!(verified_cli_classify_arg(b"test.bc"), CLI_ARG_FILE);
+        assert_eq!(verified_cli_initial_scale(true), 20);
+        assert_eq!(verified_cli_initial_scale(false), 0);
     }
 }

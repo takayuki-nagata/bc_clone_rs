@@ -76,6 +76,13 @@ macro_rules! dual_verified {
 dual_verified! {
     pub const MAX_VERIFIED_SCALE: usize = 1_000_000_000;
     pub const POSIX_WRAP_COL_LIMIT: usize = 68;
+    pub const TOK_ASSIGN_OP: u8 = 1;
+    pub const TOK_PLUS_MINUS: u8 = 2;
+    pub const TOK_MUL_OP: u8 = 3;
+    pub const TOK_EXP_OP: u8 = 4;
+    pub const CLI_ARG_OPT_L: u8 = 1;
+    pub const CLI_ARG_OPT_INVALID: u8 = 2;
+    pub const CLI_ARG_FILE: u8 = 3;
     /// Verified alphanumeric digit parser (`math.rs:BCNum::from_string`).
     ///
     /// Proves that any ASCII byte maps to a bounded value in $0..=35$, with exact mappings
@@ -596,6 +603,157 @@ dual_verified! {
             3
         } else if b >= 32 && b <= 126 {
             4
+        } else {
+            0
+        }
+    }
+
+    /// Verified unsigned decimal shift and direction `(shift_digits, should_multiply)`
+    /// for fixed-point scale conversions (`math.rs:Decimal::from_bc_num` / `Decimal::to_bc_num`).
+    pub fn verified_decimal_scale_shift(
+        src_scale: usize,
+        dst_scale: usize,
+    ) -> (res: (usize, bool))
+        ensures [
+            dst_scale >= src_scale ==> (res.1 && res.0 == dst_scale - src_scale && src_scale + res.0 == dst_scale),
+            dst_scale < src_scale ==> (!res.1 && res.0 == src_scale - dst_scale && dst_scale + res.0 == src_scale),
+        ]
+    {
+        if dst_scale >= src_scale {
+            (dst_scale - src_scale, true)
+        } else {
+            (src_scale - dst_scale, false)
+        }
+    }
+
+    /// Verified `ibase` register clamping with warning classification (`eval.rs`).
+    ///
+    /// Returns `(clamped_ibase, warning_kind)` where `warning_kind` is:
+    /// - `-1`: `reg_val < 2` ("ibase too small, set to 2")
+    /// - `1`: `reg_val > 16` ("ibase too large, set to 16")
+    /// - `0`: `2 <= reg_val <= 16` (no warning)
+    pub fn verified_ibase_warning_and_clamp(reg_val: usize) -> (res: (usize, i8))
+        ensures [
+            2 <= res.0 && res.0 <= 16,
+            reg_val < 2 <==> (res.1 == -1 && res.0 == 2),
+            reg_val > 16 <==> (res.1 == 1 && res.0 == 16),
+            (2 <= reg_val && reg_val <= 16) <==> (res.1 == 0 && res.0 == reg_val),
+        ]
+    {
+        if reg_val < 2 {
+            (2, -1)
+        } else if reg_val > 16 {
+            (16, 1)
+        } else {
+            (reg_val, 0)
+        }
+    }
+
+    /// Verified Pratt parser infix operator precedence, associativity, and `next_min_prec`
+    /// (`parser.rs:Parser::get_infix_info`).
+    ///
+    /// Returns `(op_prec, right_assoc, next_min_prec)`.
+    pub fn verified_pratt_infix_info(tok_kind: u8) -> (res: (i8, bool, i8))
+        ensures [
+            tok_kind == TOK_ASSIGN_OP ==> (res.0 == 1 && res.1 && res.2 == 1),
+            tok_kind == TOK_PLUS_MINUS ==> (res.0 == 2 && !res.1 && res.2 == 3),
+            tok_kind == TOK_MUL_OP ==> (res.0 == 3 && !res.1 && res.2 == 4),
+            tok_kind == TOK_EXP_OP ==> (res.0 == 4 && res.1 && res.2 == 4),
+            (tok_kind < 1 || tok_kind > 4) ==> (res.0 == -1 && !res.1 && res.2 == 0),
+            res.0 >= 1 ==> (if res.1 { res.2 == res.0 } else { res.2 == res.0 + 1 && res.2 > res.0 }),
+        ]
+    {
+        let (op_prec, right_assoc): (i8, bool) = if tok_kind == TOK_ASSIGN_OP {
+            (1, true)
+        } else if tok_kind == TOK_PLUS_MINUS {
+            (2, false)
+        } else if tok_kind == TOK_MUL_OP {
+            (3, false)
+        } else if tok_kind == TOK_EXP_OP {
+            (4, true)
+        } else {
+            (-1, false)
+        };
+
+        let next_min_prec: i8 = if op_prec < 0 {
+            0
+        } else {
+            verified_pratt_next_min_prec(op_prec, right_assoc)
+        };
+
+        (op_prec, right_assoc, next_min_prec)
+    }
+
+    /// Verified bounds-safe lookahead index calculation for `Lexer::peek_char` (`parser.rs`).
+    ///
+    /// Returns `(in_bounds, valid_idx)`.
+    pub fn verified_lexer_peek_char_index(
+        text_len: usize,
+        pos: usize,
+        offset: usize,
+    ) -> (res: (bool, usize))
+        requires [
+            pos <= text_len,
+            text_len <= MAX_VERIFIED_SCALE,
+            offset <= MAX_VERIFIED_SCALE,
+        ]
+        ensures [
+            (pos + offset < text_len) ==> (res.0 && res.1 == pos + offset && res.1 < text_len),
+            (pos + offset >= text_len) ==> (!res.0 && res.1 == 0),
+        ]
+    {
+        let idx = pos + offset;
+        if idx < text_len {
+            (true, idx)
+        } else {
+            (false, 0)
+        }
+    }
+
+    /// Verified identifier continuation character check (`a..=z`, `0..=9`, or `_`) (`parser.rs`).
+    pub fn verified_is_ident_continue(b: u32) -> (res: bool)
+        ensures [
+            res == ((97 <= b && b <= 122) || (48 <= b && b <= 57) || b == 95),
+        ]
+    {
+        (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95
+    }
+
+    /// Verified CLI argument classification (`crates/bc_cli/src/main.rs:run_app`).
+    ///
+    /// Returns:
+    /// - `CLI_ARG_OPT_L` (`1`): `"-l"`
+    /// - `CLI_ARG_OPT_INVALID` (`2`): any other argument starting with `'-'`
+    /// - `CLI_ARG_FILE` (`3`): filename operand
+    pub fn verified_cli_classify_arg(bytes: &[u8]) -> (res: u8)
+        ensures [
+            (bytes@.len() == 2 && bytes@[0] == 45 && bytes@[1] == 108) <==> res == CLI_ARG_OPT_L,
+            (bytes@.len() >= 1 && bytes@[0] == 45 && !(bytes@.len() == 2 && bytes@[1] == 108))
+                <==> res == CLI_ARG_OPT_INVALID,
+            (bytes@.len() == 0 || bytes@[0] != 45) <==> res == CLI_ARG_FILE,
+        ]
+    {
+        let len = bytes.len();
+        if len >= 1 && bytes[0] == 45 {
+            if len == 2 && bytes[1] == 108 {
+                CLI_ARG_OPT_L
+            } else {
+                CLI_ARG_OPT_INVALID
+            }
+        } else {
+            CLI_ARG_FILE
+        }
+    }
+
+    /// Verified POSIX `bc` initial `scale` register value (`20` when `-l` is enabled, `0` otherwise).
+    pub fn verified_cli_initial_scale(math_enabled: bool) -> (res: usize)
+        ensures [
+            math_enabled ==> res == 20,
+            !math_enabled ==> res == 0,
+        ]
+    {
+        if math_enabled {
+            20
         } else {
             0
         }

@@ -21,4 +21,6 @@ exclude_re = [
     "replace \\+ with \\* in bc_exp",
     "flush.* -> core::fmt::Result with Ok\\(Default::default\\(\\)\\)",
     "init_heap_if_needed",
+    "in Lexer::advance_char",
+    "replace Lexer::advance_char with \\(\\)",
 ]

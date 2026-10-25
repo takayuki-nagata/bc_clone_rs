@@ -343,20 +343,22 @@ pub fn verified_wrapped_stdout_write_bytes(initial_col: usize, bytes: &[u8]) -> 
 
 /// Verified bounds-safe lookahead `Lexer::peek_char` (`crates/bc_core/src/parser.rs`).
 ///
-/// Proves absence of out-of-bounds slice indexing and arithmetic overflow when peeking ahead.
+/// Proves absence of out-of-bounds slice indexing and arithmetic overflow when peeking ahead,
+/// delegating index validation to `verified_lexer_peek_char_index` in `verified_kernels.rs`.
 pub fn verified_lexer_peek_byte(text: &[u8], pos: usize, offset: usize) -> (res: u8)
     requires
         pos <= text@.len(),
-        offset <= usize::MAX - pos,
+        text@.len() <= MAX_VERIFIED_SCALE,
+        offset <= MAX_VERIFIED_SCALE,
     ensures
         pos + offset >= text@.len() ==> res == 0u8,
         pos + offset < text@.len() ==> res == text@[pos + offset],
 {
-    let idx = pos + offset;
-    if idx >= text.len() {
-        0u8
-    } else {
+    let (in_bounds, idx) = verified_lexer_peek_char_index(text.len(), pos, offset);
+    if in_bounds {
         text[idx]
+    } else {
+        0u8
     }
 }
 
@@ -802,6 +804,34 @@ pub proof fn lemma_decimal_bcnum_roundtrip(num: SpecBCNum, prec: nat)
     ;
 }
 
+/// Verified roundtrip shift consistency between `verified_decimal_scale_shift` (`from_bc_num` -> `to_bc_num`)
+/// and `verified_transcendental_guard_prec` (`crates/bc_core/src/math.rs:358-376, 778-829`).
+///
+/// Proves that when `prec = verified_transcendental_guard_prec(x_scale, global_scale, extra_prec)`:
+/// 1. `from_bc_num` always scales UP (`should_mul_in == true`) by `prec - x_scale >= 15`.
+/// 2. `to_bc_num(global_scale)` always scales DOWN (`should_mul_out == false`) by `prec - global_scale >= 15`.
+pub fn verified_decimal_scale_shift_roundtrip(
+    x_scale: usize,
+    global_scale: usize,
+    extra_prec: usize,
+) -> (res: ((usize, bool), (usize, bool)))
+    requires
+        x_scale <= MAX_VERIFIED_SCALE,
+        global_scale <= MAX_VERIFIED_SCALE,
+        extra_prec <= MAX_VERIFIED_SCALE,
+    ensures
+        res.0.1,
+        res.0.0 >= 15,
+        !res.1.1,
+        res.1.0 >= 15,
+        x_scale + res.0.0 == global_scale + res.1.0,
+{
+    let prec = verified_transcendental_guard_prec(x_scale, global_scale, extra_prec);
+    let shift_in = verified_decimal_scale_shift(x_scale, prec);
+    let shift_out = verified_decimal_scale_shift(prec, global_scale);
+    (shift_in, shift_out)
+}
+
 /// Verified trigonometric argument reduction modulo $2\pi$ into $[-\pi, \pi]$
 /// (`crates/bc_core/src/math.rs:516-522, 564-570` in `decimal_sin` / `decimal_cos`).
 ///
@@ -1101,52 +1131,6 @@ pub fn verified_scope_guard_lifecycle(
 // ============================================================================
 // Target 8: `Parser` Pratt Precedence Climbing & `Lexer` Number Scanner
 // ============================================================================
-
-/// Operator token categories for Pratt parser precedence verification (`parser.rs:926-934`).
-pub const TOK_ASSIGN_OP: u8 = 1;
-pub const TOK_PLUS_MINUS: u8 = 2;
-pub const TOK_MUL_OP: u8 = 3;
-pub const TOK_EXP_OP: u8 = 4;
-
-/// Verified Pratt parser infix operator precedence, associativity, and `next_min_prec`
-/// (`crates/bc_core/src/parser.rs:902-934`).
-///
-/// Returns `(op_prec, right_assoc, next_min_prec)`.
-/// Proves:
-/// 1. Strict precedence hierarchy: `AssignOp (1) < Plus/Minus (2) < MulOp (3) < Exp (4) < UnaryMinus (5)`.
-/// 2. Left-associative operators (`+`, `-`, `*`, `/`, `%`) set `next_min_prec == op_prec + 1 > op_prec`,
-///    preventing same-precedence right recursion.
-/// 3. Right-associative operators (`=`, `^`) set `next_min_prec == op_prec`, allowing right-associative chaining.
-pub fn verified_pratt_infix_info(tok_kind: u8) -> (res: (i8, bool, i8))
-    ensures
-        tok_kind == TOK_ASSIGN_OP ==> (res.0 == 1 && res.1 && res.2 == 1),
-        tok_kind == TOK_PLUS_MINUS ==> (res.0 == 2 && !res.1 && res.2 == 3),
-        tok_kind == TOK_MUL_OP ==> (res.0 == 3 && !res.1 && res.2 == 4),
-        tok_kind == TOK_EXP_OP ==> (res.0 == 4 && res.1 && res.2 == 4),
-        (tok_kind < 1 || tok_kind > 4) ==> (res.0 == -1 && !res.1 && res.2 == 0),
-        // Associativity invariant for all valid infix operators:
-        res.0 >= 1 ==> (if res.1 { res.2 == res.0 } else { res.2 == res.0 + 1 && res.2 > res.0 }),
-{
-    let (op_prec, right_assoc): (i8, bool) = if tok_kind == TOK_ASSIGN_OP {
-        (1, true)
-    } else if tok_kind == TOK_PLUS_MINUS {
-        (2, false)
-    } else if tok_kind == TOK_MUL_OP {
-        (3, false)
-    } else if tok_kind == TOK_EXP_OP {
-        (4, true)
-    } else {
-        (-1, false)
-    };
-
-    let next_min_prec: i8 = if op_prec < 0 {
-        0
-    } else {
-        verified_pratt_next_min_prec(op_prec, right_assoc)
-    };
-
-    (op_prec, right_assoc, next_min_prec)
-}
 
 /// Helper predicate for valid bc numeric literal characters (`0..=9` or `A..=F`).
 pub open spec fn spec_is_bc_digit(b: u8) -> bool {
@@ -1730,11 +1714,6 @@ pub fn verified_taylor_series_convergence_loop(
     (steps, num)
 }
 
-/// CLI argument token categories for `run_app` (`crates/bc_cli/src/main.rs:310-328`).
-pub const CLI_ARG_OPT_L: u8 = 1;
-pub const CLI_ARG_OPT_INVALID: u8 = 2;
-pub const CLI_ARG_FILE: u8 = 3;
-
 /// Verified POSIX CLI option and file argument parser (`crates/bc_cli/src/main.rs:310-328`).
 ///
 /// Returns `(has_error, math_enabled, initial_scale, file_count)`.
@@ -1775,7 +1754,7 @@ pub fn verified_cli_parse_args(args: &[u8]) -> (res: (bool, bool, usize, usize))
         i = i + 1;
     }
 
-    let initial_scale: usize = if math_enabled { 20 } else { 0 };
+    let initial_scale: usize = verified_cli_initial_scale(math_enabled);
     (false, math_enabled, initial_scale, file_count)
 }
 

@@ -9,7 +9,10 @@ use core::fmt::Write as FmtWrite;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use bc_core::verified_kernels::verified_repl_block_completeness;
+use bc_core::verified_kernels::{
+    CLI_ARG_OPT_INVALID, CLI_ARG_OPT_L, verified_cli_classify_arg, verified_cli_initial_scale,
+    verified_repl_block_completeness,
+};
 use bc_core::{BcWriter, Evaluator, Lexer, Parser};
 
 /// Adapter converting any `std::io::Write + Send` into a `bc_core::BcWriter`.
@@ -311,9 +314,11 @@ where
     let mut files = Vec::new();
 
     for arg in args.iter().skip(1) {
-        if arg == "-l" {
+        let kind = verified_cli_classify_arg(arg.as_bytes());
+        if kind == CLI_ARG_OPT_L {
             math_enabled = true;
-        } else if let Some(opt) = arg.strip_prefix('-') {
+        } else if kind == CLI_ARG_OPT_INVALID {
+            let opt = &arg[1..];
             let mut err_writer = stderr_writer;
             let _ = writeln!(err_writer, "bc: invalid option -- '{}'", opt);
             return Err(1);
@@ -323,9 +328,7 @@ where
     }
 
     let mut evaluator = create_evaluator(math_enabled, stdout_writer, stderr_writer);
-    if math_enabled {
-        evaluator.scale = 20;
-    }
+    evaluator.scale = verified_cli_initial_scale(math_enabled);
 
     setup_ctrlc_handler();
 

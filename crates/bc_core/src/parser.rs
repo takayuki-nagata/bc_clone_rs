@@ -6,7 +6,9 @@
 //! operator precedence climbing and backslash-newline continuation.
 
 use crate::verified_kernels::{
-    verified_is_bc_digit, verified_lexer_peek_token_index, verified_pratt_next_min_prec,
+    TOK_ASSIGN_OP, TOK_EXP_OP, TOK_MUL_OP, TOK_PLUS_MINUS, verified_is_bc_digit,
+    verified_is_ident_continue, verified_lexer_advance_step, verified_lexer_peek_char_index,
+    verified_lexer_peek_token_index, verified_pratt_infix_info,
 };
 use alloc::boxed::Box;
 use alloc::format;
@@ -92,22 +94,18 @@ impl Lexer {
 
     /// Peeks a character ahead of the current position by the given offset.
     fn peek_char(&self, offset: usize) -> char {
-        let idx = self.pos + offset;
-        if idx >= self.text.len() {
-            '\0'
-        } else {
-            self.text[idx]
-        }
+        let (in_bounds, idx) = verified_lexer_peek_char_index(self.text.len(), self.pos, offset);
+        if in_bounds { self.text[idx] } else { '\0' }
     }
 
     /// Advances the position pointer by `steps`.
     fn advance_char(&mut self, steps: usize) {
         for _ in 0..steps {
             if self.pos < self.text.len() {
-                if self.text[self.pos] == '\n' {
-                    self.line += 1;
-                }
-                self.pos += 1;
+                let (next_pos, next_line) =
+                    verified_lexer_advance_step(self.pos, self.line, self.text[self.pos] == '\n');
+                self.pos = next_pos;
+                self.line = next_line;
             }
         }
     }
@@ -475,7 +473,7 @@ impl Lexer {
             self.advance_char(1);
             loop {
                 let peek = self.peek_char(0);
-                if peek.is_ascii_lowercase() || peek.is_ascii_digit() || peek == '_' {
+                if verified_is_ident_continue(peek as u32) {
                     letters.push(peek);
                     self.advance_char(1);
                 } else {
@@ -905,7 +903,7 @@ impl Parser {
     fn parse_expr_precedence(&mut self, min_prec: i8) -> Expr {
         let mut left = self.parse_prefix();
         loop {
-            let (op_prec, op_class, right_assoc) = self.get_infix_info(&self.current_token);
+            let (op_prec, op_class, next_min_prec) = self.get_infix_info(&self.current_token);
             if op_prec < min_prec {
                 break;
             }
@@ -913,7 +911,6 @@ impl Parser {
             let op_val = self.current_token.value.clone();
             self.eat(self.current_token.token_type);
 
-            let next_min_prec = verified_pratt_next_min_prec(op_prec, right_assoc);
             let right = self.parse_expr_precedence(next_min_prec);
 
             left = if op_class == "ASSIGN" {
@@ -926,14 +923,16 @@ impl Parser {
     }
 
     /// Retrieves precedence info for binary and assignment operators.
-    fn get_infix_info(&self, token: &Token) -> (i8, &'static str, bool) {
-        match token.token_type {
-            TokenType::AssignOp => (1, "ASSIGN", true),
-            TokenType::Plus | TokenType::Minus => (2, "BINARY", false),
-            TokenType::MulOp => (3, "BINARY", false),
-            TokenType::Exp => (4, "BINARY", true),
-            _ => (-1, "", false),
-        }
+    fn get_infix_info(&self, token: &Token) -> (i8, &'static str, i8) {
+        let (tok_kind, op_class) = match token.token_type {
+            TokenType::AssignOp => (TOK_ASSIGN_OP, "ASSIGN"),
+            TokenType::Plus | TokenType::Minus => (TOK_PLUS_MINUS, "BINARY"),
+            TokenType::MulOp => (TOK_MUL_OP, "BINARY"),
+            TokenType::Exp => (TOK_EXP_OP, "BINARY"),
+            _ => (0, ""),
+        };
+        let (op_prec, _right_assoc, next_min_prec) = verified_pratt_infix_info(tok_kind);
+        (op_prec, op_class, next_min_prec)
     }
 
     /// Parses prefixes (unary operators).
