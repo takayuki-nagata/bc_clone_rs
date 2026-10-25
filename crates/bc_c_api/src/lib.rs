@@ -683,4 +683,90 @@ mod tests {
 
         unsafe { bc_session_destroy(session) };
     }
+
+    #[test]
+    fn test_bc_c_api_invalid_utf8_exact_buffer_and_stderr_callbacks() {
+        // 1. Invalid UTF-8 C string handling across all 4 entry points (no UB or leak)
+        let invalid_utf8: [u8; 4] = [b'1', b'+', 0xFF, 0x00];
+        let invalid_ptr = invalid_utf8.as_ptr().cast::<c_char>();
+        let mut buf = [0 as c_char; 16];
+
+        assert_eq!(
+            unsafe { bc_eval(invalid_ptr, false, 0, buf.as_mut_ptr(), buf.len()) },
+            BcStatus::ErrExecution
+        );
+        assert_eq!(
+            unsafe { bc_eval_callback(invalid_ptr, false, 0, None, None, core::ptr::null_mut()) },
+            BcStatus::ErrExecution
+        );
+
+        let session = unsafe { bc_session_create(false) };
+        assert_eq!(
+            unsafe { bc_session_eval(session, invalid_ptr, buf.as_mut_ptr(), buf.len()) },
+            BcStatus::ErrExecution
+        );
+        assert_eq!(
+            unsafe {
+                bc_session_eval_callback(session, invalid_ptr, None, None, core::ptr::null_mut())
+            },
+            BcStatus::ErrExecution
+        );
+
+        // 2. Exact-fit buffer capacity ("7\n\0" requires exactly 3 bytes)
+        let code_exact = CString::new("3 + 4\n").unwrap();
+        let mut exact_buf = [0 as c_char; 3];
+        assert_eq!(
+            unsafe {
+                bc_eval(
+                    code_exact.as_ptr(),
+                    false,
+                    0,
+                    exact_buf.as_mut_ptr(),
+                    exact_buf.len(),
+                )
+            },
+            BcStatus::Ok
+        );
+        let exact_str = unsafe { CStr::from_ptr(exact_buf.as_ptr()).to_str().unwrap() };
+        assert_eq!(exact_str, "7\n");
+
+        let mut exact_sess_buf = [0 as c_char; 3];
+        assert_eq!(
+            unsafe {
+                bc_session_eval(
+                    session,
+                    code_exact.as_ptr(),
+                    exact_sess_buf.as_mut_ptr(),
+                    exact_sess_buf.len(),
+                )
+            },
+            BcStatus::Ok
+        );
+        let exact_sess_str = unsafe { CStr::from_ptr(exact_sess_buf.as_ptr()).to_str().unwrap() };
+        assert_eq!(exact_sess_str, "7\n");
+
+        // 3. stderr_cb invocation on ibase warning in bc_session_eval_callback
+        let mut err_collected = String::new();
+        unsafe extern "C" fn err_cb(chunk: *const c_char, user_data: *mut c_void) {
+            unsafe {
+                let target = &mut *(user_data as *mut String);
+                let s = CStr::from_ptr(chunk).to_str().unwrap();
+                target.push_str(s);
+            }
+        }
+        let warn_code = CString::new("ibase = 99\n").unwrap();
+        let warn_status = unsafe {
+            bc_session_eval_callback(
+                session,
+                warn_code.as_ptr(),
+                None,
+                Some(err_cb),
+                &mut err_collected as *mut String as *mut c_void,
+            )
+        };
+        assert_eq!(warn_status, BcStatus::Ok);
+        assert!(err_collected.contains("ibase too large"));
+
+        unsafe { bc_session_destroy(session) };
+    }
 }

@@ -16,3 +16,6 @@ std = []
 bc_core = { path = "../bc_core" }
 embedded-alloc = "0.6"
 critical-section = { version = "1.2", features = ["restore-state-none"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(miri)'] }
