@@ -205,28 +205,60 @@ pub const TEST_CASES: &[TestCase] = &[
         scale: 0,
         expected: "30",
     },
+    TestCase {
+        name: "Error Recovery (Div by Zero)",
+        code: "1 / 0\n",
+        math_enabled: false,
+        scale: 0,
+        expected: "Runtime error: division by zero",
+    },
 ];
 
-///// Evaluates a single test case and returns true if actual output matches expected.
+/// Evaluates `code` on `ev` without panicking, writing diagnostics to `ev.stderr_writer`.
+pub fn eval_bc_non_panicking(code: &str, ev: &mut Evaluator) {
+    let lexer = Lexer::new(code);
+    let mut parser = match Parser::try_new(lexer) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = writeln!(ev.stderr_writer, "{}", e);
+            return;
+        }
+    };
+    let stmts = match parser.try_parse_program() {
+        Ok(s) => s,
+        Err(e) => {
+            if e == "quit" {
+                ev.quit_flag = true;
+                return;
+            }
+            let _ = writeln!(ev.stderr_writer, "{}", e);
+            return;
+        }
+    };
+    for stmt in &stmts {
+        if let Err(e) = ev.try_execute(stmt) {
+            let _ = writeln!(ev.stderr_writer, "Runtime error: {}", e);
+            break;
+        }
+        if ev.quit_flag {
+            break;
+        }
+    }
+    let _ = ev.stdout_writer.flush();
+}
+
+/// Evaluates a single test case and returns true if actual output matches expected.
 pub fn run_single_test(tc: &TestCase) -> bool {
     let out_buf = SharedBuffer::default();
-    let err_buf = SharedBuffer::default();
 
     let mut ev = Evaluator::new(
         tc.math_enabled,
         Box::new(out_buf.clone()),
-        Box::new(err_buf),
+        Box::new(out_buf.clone()),
     );
     ev.scale = tc.scale;
 
-    let lexer = Lexer::new(tc.code);
-    let mut parser = Parser::new(lexer);
-    let stmts = parser.parse_program();
-
-    for stmt in &stmts {
-        ev.execute(stmt);
-    }
-    let _ = ev.stdout_writer.flush();
+    eval_bc_non_panicking(tc.code, &mut ev);
 
     let captured = out_buf.0.borrow().clone();
     captured.trim() == tc.expected
@@ -259,13 +291,7 @@ pub fn run_test_suite(cases: &[TestCase]) -> bool {
         Box::new(ZephyrConsoleWriter),
         Box::new(ZephyrConsoleWriter),
     );
-    let lexer = Lexer::new("2^16\n");
-    let mut parser = Parser::new(lexer);
-    let stmts = parser.parse_program();
-    for stmt in &stmts {
-        ev_cb.execute(stmt);
-    }
-    let _ = ev_cb.stdout_writer.flush();
+    eval_bc_non_panicking("2^16\n", &mut ev_cb);
 
     zephyr_println!("-------------------------------------------------");
     if all_passed {
@@ -331,18 +357,22 @@ pub fn run_repl_with<G, P, S, W>(
                 print_str("\r\n");
                 if !line_buf.is_empty() {
                     line_buf.push('\n');
-                    let lexer = Lexer::new(&line_buf);
-                    let mut parser = Parser::new(lexer);
-                    let stmts = parser.parse_program();
-                    for stmt in &stmts {
-                        evaluator.execute(stmt);
-                    }
-                    let _ = evaluator.stdout_writer.flush();
+                    eval_bc_non_panicking(&line_buf, &mut evaluator);
 
                     let out = out_buf.0.borrow().clone();
-                    print_str(&out);
-                    out_buf.0.borrow_mut().clear();
+                    if !out.is_empty() {
+                        print_str(&out);
+                        out_buf.0.borrow_mut().clear();
+                    }
+                    let err = err_buf.0.borrow().clone();
+                    if !err.is_empty() {
+                        print_str(&err);
+                        err_buf.0.borrow_mut().clear();
+                    }
                     line_buf.clear();
+                    if evaluator.quit_flag {
+                        break;
+                    }
                 }
                 print_str("bc> ");
             }
@@ -617,5 +647,31 @@ mod tests {
         run_repl();
         let put = String::from_utf8(MOCK_PUT_CHARS.lock().unwrap().clone()).unwrap();
         assert!(put.contains("2"));
+    }
+
+    #[test]
+    fn test_repl_error_recovery_and_quit() {
+        let script = b"@\n1 + * 2\n1 / 0\n3 + 4\nquit\n";
+        let mut idx = 0usize;
+        let mut out = String::new();
+        run_repl_with(
+            || {
+                if idx < script.len() {
+                    let b = script[idx] as i32;
+                    idx += 1;
+                    b
+                } else {
+                    -2
+                }
+            },
+            |_| {},
+            |s| out.push_str(s),
+            |_| {},
+            None,
+        );
+        assert!(out.contains("Lexical error"));
+        assert!(out.contains("Parser error"));
+        assert!(out.contains("Runtime error: division by zero"));
+        assert!(out.contains("7\n"));
     }
 }

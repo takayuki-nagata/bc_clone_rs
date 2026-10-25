@@ -128,6 +128,41 @@ impl BcWriter for CallbackWriter {
     }
 }
 
+/// Evaluates `code_str` against `ev` without panicking, returning `BcStatus::Ok` or `BcStatus::ErrExecution`.
+fn eval_into_evaluator(code_str: &str, ev: &mut Evaluator) -> BcStatus {
+    let lexer = Lexer::new(code_str);
+    let mut parser = match Parser::try_new(lexer) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = writeln!(ev.stderr_writer, "{}", e);
+            return BcStatus::ErrExecution;
+        }
+    };
+    let stmts = match parser.try_parse_program() {
+        Ok(s) => s,
+        Err(e) => {
+            if e == "quit" {
+                return BcStatus::Ok;
+            }
+            let _ = writeln!(ev.stderr_writer, "{}", e);
+            return BcStatus::ErrExecution;
+        }
+    };
+
+    for stmt in &stmts {
+        if let Err(e) = ev.try_execute(stmt) {
+            let _ = writeln!(ev.stderr_writer, "Runtime error: {}", e);
+            let _ = ev.stdout_writer.flush();
+            return BcStatus::ErrExecution;
+        }
+        if ev.quit_flag {
+            break;
+        }
+    }
+    let _ = ev.stdout_writer.flush();
+    BcStatus::Ok
+}
+
 /// Evaluates a bc expression or script string and writes the output into a buffer.
 ///
 /// # Safety
@@ -163,18 +198,30 @@ pub unsafe extern "C" fn bc_eval(
     let mut ev = Evaluator::new(
         math_enabled,
         Box::new(out_shared.clone()),
-        Box::new(err_shared),
+        Box::new(err_shared.clone()),
     );
     ev.scale = default_scale as usize;
 
-    let lexer = Lexer::new(code_str);
-    let mut parser = Parser::new(lexer);
-    let stmts = parser.parse_program();
-
-    for stmt in &stmts {
-        ev.execute(stmt);
+    let status = eval_into_evaluator(code_str, &mut ev);
+    if status != BcStatus::Ok {
+        let err_captured = err_shared.0.borrow().clone();
+        let err_bytes = err_captured.as_bytes();
+        if verified_c_ffi_check_buf_capacity(err_bytes.len(), buf_size) {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    err_bytes.as_ptr(),
+                    out_buf.cast::<u8>(),
+                    err_bytes.len(),
+                );
+                *out_buf.add(err_bytes.len()) = 0;
+            }
+        } else {
+            unsafe {
+                *out_buf = 0;
+            }
+        }
+        return status;
     }
-    let _ = ev.stdout_writer.flush();
 
     let captured = out_shared.0.borrow().clone();
     let bytes = captured.as_bytes();
@@ -227,16 +274,7 @@ pub unsafe extern "C" fn bc_eval_callback(
     let mut evaluator = Evaluator::new(math_enabled, cb_writer_out, cb_writer_err);
     evaluator.scale = default_scale as usize;
 
-    let lexer = Lexer::new(code_str);
-    let mut parser = Parser::new(lexer);
-    let stmts = parser.parse_program();
-
-    for stmt in &stmts {
-        evaluator.execute(stmt);
-    }
-    let _ = evaluator.stdout_writer.flush();
-
-    BcStatus::Ok
+    eval_into_evaluator(code_str, &mut evaluator)
 }
 
 /// Opaque session struct for stateful bc evaluation.
@@ -311,14 +349,26 @@ pub unsafe extern "C" fn bc_session_eval(
         code_with_nl.push('\n');
     }
 
-    let lexer = Lexer::new(&code_with_nl);
-    let mut parser = Parser::new(lexer);
-    let stmts = parser.parse_program();
-
-    for stmt in &stmts {
-        sess.evaluator.execute(stmt);
+    let status = eval_into_evaluator(&code_with_nl, &mut sess.evaluator);
+    if status != BcStatus::Ok {
+        let err_captured = sess.err_shared.0.borrow().clone();
+        let err_bytes = err_captured.as_bytes();
+        if verified_c_ffi_check_buf_capacity(err_bytes.len(), buf_size) {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    err_bytes.as_ptr(),
+                    out_buf.cast::<u8>(),
+                    err_bytes.len(),
+                );
+                *out_buf.add(err_bytes.len()) = 0;
+            }
+        } else {
+            unsafe {
+                *out_buf = 0;
+            }
+        }
+        return status;
     }
-    let _ = sess.evaluator.stdout_writer.flush();
 
     let captured = sess.out_shared.0.borrow().clone();
     let bytes = captured.as_bytes();
@@ -369,14 +419,7 @@ pub unsafe extern "C" fn bc_session_eval_callback(
         code_with_nl.push('\n');
     }
 
-    let lexer = Lexer::new(&code_with_nl);
-    let mut parser = Parser::new(lexer);
-    let stmts = parser.parse_program();
-
-    for stmt in &stmts {
-        sess.evaluator.execute(stmt);
-    }
-    let _ = sess.evaluator.stdout_writer.flush();
+    let status = eval_into_evaluator(&code_with_nl, &mut sess.evaluator);
 
     if let (Some(callback), Ok(c_str)) =
         (stdout_cb, CString::new(sess.out_shared.0.borrow().clone()))
@@ -395,7 +438,7 @@ pub unsafe extern "C" fn bc_session_eval_callback(
         }
     }
 
-    BcStatus::Ok
+    status
 }
 
 /// Resets the session state.
@@ -766,6 +809,144 @@ mod tests {
         };
         assert_eq!(warn_status, BcStatus::Ok);
         assert!(err_collected.contains("ibase too large"));
+
+        unsafe { bc_session_destroy(session) };
+    }
+
+    #[test]
+    fn test_bc_c_api_syntax_and_runtime_error_recovery_and_stress() {
+        let mut buf = [0 as c_char; 128];
+        let mut tiny_buf = [0 as c_char; 4];
+
+        // 1. bc_eval error cases: division by zero, negative sqrt, syntax error, lexical error, undefined fn, quit
+        let div_zero = CString::new("1 / 0\n").unwrap();
+        assert_eq!(
+            unsafe { bc_eval(div_zero.as_ptr(), false, 0, buf.as_mut_ptr(), buf.len()) },
+            BcStatus::ErrExecution
+        );
+        let err_msg = unsafe { CStr::from_ptr(buf.as_ptr()).to_str().unwrap() };
+        assert!(err_msg.contains("Runtime error: division by zero"));
+
+        // Small buffer fallback on error (*out_buf = 0)
+        assert_eq!(
+            unsafe {
+                bc_eval(
+                    div_zero.as_ptr(),
+                    false,
+                    0,
+                    tiny_buf.as_mut_ptr(),
+                    tiny_buf.len(),
+                )
+            },
+            BcStatus::ErrExecution
+        );
+        assert_eq!(tiny_buf[0], 0);
+
+        let lex_err = CString::new("@\n").unwrap();
+        assert_eq!(
+            unsafe { bc_eval(lex_err.as_ptr(), false, 0, buf.as_mut_ptr(), buf.len()) },
+            BcStatus::ErrExecution
+        );
+        let lex_msg = unsafe { CStr::from_ptr(buf.as_ptr()).to_str().unwrap() };
+        assert!(lex_msg.contains("Lexical error"));
+
+        let syn_err = CString::new("1 + * 2\n").unwrap();
+        assert_eq!(
+            unsafe { bc_eval(syn_err.as_ptr(), false, 0, buf.as_mut_ptr(), buf.len()) },
+            BcStatus::ErrExecution
+        );
+        let syn_msg = unsafe { CStr::from_ptr(buf.as_ptr()).to_str().unwrap() };
+        assert!(syn_msg.contains("Parser error"));
+
+        let quit_code = CString::new("quit\n").unwrap();
+        assert_eq!(
+            unsafe { bc_eval(quit_code.as_ptr(), false, 0, buf.as_mut_ptr(), buf.len()) },
+            BcStatus::Ok
+        );
+
+        // 2. bc_eval_callback error reporting via stderr_cb
+        unsafe extern "C" fn err_cb(chunk: *const c_char, user_data: *mut c_void) {
+            unsafe {
+                let target = &mut *(user_data as *mut String);
+                let s = CStr::from_ptr(chunk).to_str().unwrap();
+                target.push_str(s);
+            }
+        }
+        let mut cb_err = String::new();
+        let neg_sqrt = CString::new("sqrt(-1)\n").unwrap();
+        assert_eq!(
+            unsafe {
+                bc_eval_callback(
+                    neg_sqrt.as_ptr(),
+                    false,
+                    0,
+                    None,
+                    Some(err_cb),
+                    &mut cb_err as *mut String as *mut c_void,
+                )
+            },
+            BcStatus::ErrExecution
+        );
+        assert!(cb_err.contains("square root of negative number"));
+
+        // 3. Session ScopeGuard recovery and 100-iteration error stress test
+        let session = unsafe { bc_session_create(false) };
+        let setup =
+            CString::new("x = 55\ndefine f(x) { auto z; x = 999; z = 1 / 0; return (z); }\n")
+                .unwrap();
+        assert_eq!(
+            unsafe { bc_session_eval(session, setup.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+            BcStatus::Ok
+        );
+
+        let call_f = CString::new("f(10)\n").unwrap();
+        assert_eq!(
+            unsafe { bc_session_eval(session, call_f.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+            BcStatus::ErrExecution
+        );
+        // Tiny buffer on session error
+        assert_eq!(
+            unsafe {
+                bc_session_eval(
+                    session,
+                    call_f.as_ptr(),
+                    tiny_buf.as_mut_ptr(),
+                    tiny_buf.len(),
+                )
+            },
+            BcStatus::ErrExecution
+        );
+        assert_eq!(tiny_buf[0], 0);
+
+        // Verify x is still 55 after failed function call
+        let query_x = CString::new("x\n").unwrap();
+        assert_eq!(
+            unsafe { bc_session_eval(session, query_x.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+            BcStatus::Ok
+        );
+        let x_str = unsafe { CStr::from_ptr(buf.as_ptr()).to_str().unwrap() };
+        assert_eq!(x_str.trim(), "55");
+
+        // 100-iteration error stress test to prove zero heap leak
+        for _ in 0..50 {
+            assert_eq!(
+                unsafe { bc_session_eval(session, syn_err.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+                BcStatus::ErrExecution
+            );
+            assert_eq!(
+                unsafe { bc_session_eval(session, call_f.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+                BcStatus::ErrExecution
+            );
+        }
+
+        // Session still works after 100 consecutive errors
+        let final_check = CString::new("x + 5\n").unwrap();
+        assert_eq!(
+            unsafe { bc_session_eval(session, final_check.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+            BcStatus::Ok
+        );
+        let final_str = unsafe { CStr::from_ptr(buf.as_ptr()).to_str().unwrap() };
+        assert_eq!(final_str.trim(), "60");
 
         unsafe { bc_session_destroy(session) };
     }

@@ -57,17 +57,40 @@ impl BcWriter for SharedBuffer {
 /// Evaluates a bc program string on baremetal RISC-V and returns the captured output string.
 fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> String {
     let out_buf = SharedBuffer::default();
-    let err_buf = SharedBuffer::default();
 
-    let mut evaluator = Evaluator::new(math_enabled, Box::new(out_buf.clone()), Box::new(err_buf));
+    let mut evaluator = Evaluator::new(
+        math_enabled,
+        Box::new(out_buf.clone()),
+        Box::new(out_buf.clone()),
+    );
     evaluator.scale = default_scale;
 
     let lexer = Lexer::new(code);
-    let mut parser = Parser::new(lexer);
-    let stmts = parser.parse_program();
+    let mut parser = match Parser::try_new(lexer) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = writeln!(evaluator.stderr_writer, "{}", e);
+            return out_buf.0.borrow().clone();
+        }
+    };
+    let stmts = match parser.try_parse_program() {
+        Ok(s) => s,
+        Err(e) => {
+            if e != "quit" {
+                let _ = writeln!(evaluator.stderr_writer, "{}", e);
+            }
+            return out_buf.0.borrow().clone();
+        }
+    };
 
     for stmt in &stmts {
-        evaluator.execute(stmt);
+        if let Err(e) = evaluator.try_execute(stmt) {
+            let _ = writeln!(evaluator.stderr_writer, "Runtime error: {}", e);
+            break;
+        }
+        if evaluator.quit_flag {
+            break;
+        }
     }
     let _ = evaluator.stdout_writer.flush();
 
@@ -154,6 +177,13 @@ fn main() -> ! {
             false,
             0,
             "30",
+        ),
+        (
+            "Error Recovery (Div by Zero)",
+            "1 / 0\n",
+            false,
+            0,
+            "Runtime error: division by zero",
         ),
     ];
 

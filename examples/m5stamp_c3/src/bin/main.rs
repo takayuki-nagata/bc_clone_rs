@@ -9,6 +9,7 @@ use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
+use bc_core::verified_kernels::verified_zephyr_classify_char;
 use bc_core::{BcWriter, Evaluator, Lexer, Parser};
 use core::cell::RefCell;
 use core::fmt::Write;
@@ -66,25 +67,50 @@ impl BcWriter for SerialWriter {
     }
 }
 
+fn eval_bc_non_panicking(code: &str, ev: &mut Evaluator) {
+    let lexer = Lexer::new(code);
+    let mut parser = match Parser::try_new(lexer) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = writeln!(ev.stderr_writer, "{}", e);
+            return;
+        }
+    };
+    let stmts = match parser.try_parse_program() {
+        Ok(s) => s,
+        Err(e) => {
+            if e == "quit" {
+                ev.quit_flag = true;
+                return;
+            }
+            let _ = writeln!(ev.stderr_writer, "{}", e);
+            return;
+        }
+    };
+
+    for stmt in &stmts {
+        if let Err(e) = ev.try_execute(stmt) {
+            let _ = writeln!(ev.stderr_writer, "Runtime error: {}", e);
+            break;
+        }
+        if ev.quit_flag {
+            break;
+        }
+    }
+    let _ = ev.stdout_writer.flush();
+}
+
 fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> String {
     let out_buf = SharedBuffer::default();
-    let err_buf = SharedBuffer::default();
 
     let mut ev = Evaluator::new(
         math_enabled,
         Box::new(out_buf.clone()),
-        Box::new(err_buf.clone()),
+        Box::new(out_buf.clone()),
     );
     ev.scale = default_scale;
 
-    let lexer = Lexer::new(code);
-    let mut parser = Parser::new(lexer);
-    let stmts = parser.parse_program();
-
-    for stmt in &stmts {
-        ev.execute(stmt);
-    }
-    let _ = ev.stdout_writer.flush();
+    eval_bc_non_panicking(code, &mut ev);
 
     out_buf.0.borrow().clone()
 }
@@ -96,7 +122,7 @@ fn run_self_tests() -> bool {
     println!("[ESP32-C3] Initialized successfully @ 160MHz.");
     println!("[ESP32-C3] 128KB SRAM Heap allocated for bc_core.\n");
 
-    let test_cases: [(&str, &str, bool, usize, &str); 10] = [
+    let test_cases: [(&str, &str, bool, usize, &str); 11] = [
         (
             "Basic Arithmetic & Precedence",
             "1 + 2 * 3 - 4 / 2\n",
@@ -161,6 +187,13 @@ fn run_self_tests() -> bool {
             0,
             "30",
         ),
+        (
+            "Error Recovery (Div by Zero)",
+            "1 / 0\n",
+            false,
+            0,
+            "Runtime error: division by zero",
+        ),
     ];
 
     let mut all_passed = true;
@@ -224,48 +257,39 @@ fn main() -> ! {
         }
         let byte = rx_byte[0];
 
-            match byte {
-                b'\r' | b'\n' => {
-                    print!("\r\n");
-                    if !line_buf.is_empty() {
-                        if let Ok(input_str) = core::str::from_utf8(&line_buf) {
-                            let mut code_to_eval = String::from(input_str);
-                            code_to_eval.push('\n');
+        match verified_zephyr_classify_char(byte) {
+            1 => {
+                print!("\r\n");
+                if !line_buf.is_empty() {
+                    if let Ok(input_str) = core::str::from_utf8(&line_buf) {
+                        let mut code_to_eval = String::from(input_str);
+                        code_to_eval.push('\n');
 
-                            let lexer = Lexer::new(&code_to_eval);
-                            let mut parser = Parser::new(lexer);
-                            let stmts = parser.parse_program();
-
-                            for stmt in &stmts {
-                                evaluator.execute(stmt);
-                            }
-                            let _ = evaluator.stdout_writer.flush();
-                        }
-                        line_buf.clear();
+                        eval_bc_non_panicking(&code_to_eval, &mut evaluator);
+                        evaluator.quit_flag = false;
                     }
-                    print!("bc> ");
-                }
-                0x08 | 0x7F if !line_buf.is_empty() => {
-                    // Backspace / Delete
-                    line_buf.pop();
-                    print!("\x08 \x08");
-                }
-                0x08 | 0x7F => {
-                    // Backspace with empty buffer: do nothing
-                }
-                0x03 => {
-                    // Ctrl+C: Cancel current line
                     line_buf.clear();
-                    print!("^C\r\nbc> ");
                 }
-                0x20..=0x7E => {
-                    // Printable ASCII characters
-                    line_buf.push(byte);
-                    print!("{}", byte as char);
-                }
-                _ => {
-                    // Ignore other control characters
-                }
+                print!("bc> ");
             }
+            2 if !line_buf.is_empty() => {
+                // Backspace / Delete
+                line_buf.pop();
+                print!("\x08 \x08");
+            }
+            3 => {
+                // Ctrl+C: Cancel current line
+                line_buf.clear();
+                print!("^C\r\nbc> ");
+            }
+            4 => {
+                // Printable ASCII characters
+                line_buf.push(byte);
+                print!("{}", byte as char);
+            }
+            _ => {
+                // Ignore other control characters or backspace on empty buffer
+            }
+        }
     }
 }
