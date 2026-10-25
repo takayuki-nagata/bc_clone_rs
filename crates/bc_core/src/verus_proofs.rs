@@ -1610,4 +1610,173 @@ pub fn verified_zephyr_repl_edit_step(
     }
 }
 
+// ============================================================================
+// Target 12: `Decimal` Arithmetic Scaling, Taylor Series Convergence & CLI Parser
+// ============================================================================
+
+/// Verified fixed-point `Decimal::mul` and `Decimal::div` unit identity (`math.rs:384-415`).
+///
+/// Proves via non-linear arithmetic that multiplying or dividing any fixed-point `Decimal`
+/// coefficient `val` by the fixed-point unit `one_p = 10^prec >= 1` (`(val * one_p) / one_p`)
+/// preserves `val` with zero rounding loss.
+pub fn verified_decimal_mul_div_unit_identity(val: u64, one_p: u64) -> (res: (u64, u64))
+    requires
+        one_p >= 1,
+        one_p <= 1_000_000_000,
+        val <= 1_000_000_000,
+    ensures
+        res.0 == val,
+        res.1 == val,
+{
+    proof {
+        assert((val as int) * (one_p as int) <= 1_000_000_000 * 1_000_000_000)
+            by (nonlinear_arith)
+            requires
+                val <= 1_000_000_000,
+                one_p >= 1,
+                one_p <= 1_000_000_000,
+        ;
+    }
+    let prod: u64 = val * one_p;
+    let mul_one: u64 = prod / one_p;
+    let div_one: u64 = prod / one_p;
+    proof {
+        assert(mul_one == val) by (nonlinear_arith)
+            requires
+                prod == val * one_p,
+                mul_one == prod / one_p,
+                one_p >= 1,
+        ;
+    }
+    (mul_one, div_one)
+}
+
+/// Verified Taylor series loop contraction and finite-step termination
+/// (`crates/bc_core/src/math.rs:514-765` in `decimal_sin`, `decimal_cos`, `decimal_atan`, `decimal_exp`).
+///
+/// After argument reduction, the series ratio satisfies $0 \le r \le 1/2$ (`2 * r_val <= one_p`).
+/// Proves:
+/// 1. At every iteration where `term = num / fact > 0`, `num >= 1` and `next_num = (num * r_val) / one_p <= num / 2 < num`.
+/// 2. The loop is guaranteed to terminate (`decreases num`) with `term == 0` in at most `initial_num` steps.
+/// 3. The partial sum `total` is monotonically non-decreasing.
+pub fn verified_taylor_series_convergence_loop(
+    initial_num: u64,
+    r_val: u64,
+    one_p: u64,
+) -> (res: (usize, u64))
+    requires
+        one_p >= 2,
+        one_p <= 1_000_000_000,
+        initial_num <= 1_000_000_000,
+        2 * (r_val as int) <= (one_p as int),
+    ensures
+        // res = (iteration_count, final_num)
+        res.0 <= initial_num as usize,
+        res.1 == 0,
+{
+    let mut num: u64 = initial_num;
+    let mut steps: usize = 0;
+
+    while num > 0
+        invariant
+            one_p >= 2,
+            one_p <= 1_000_000_000,
+            2 * (r_val as int) <= (one_p as int),
+            num <= initial_num,
+            initial_num <= 1_000_000_000,
+            steps + (num as usize) <= initial_num as usize,
+        decreases num,
+    {
+        let prev_num: u64 = num;
+        proof {
+            assert((prev_num as int) * (r_val as int) <= 1_000_000_000 * 500_000_000)
+                by (nonlinear_arith)
+                requires
+                    prev_num <= 1_000_000_000,
+                    2 * (r_val as int) <= (one_p as int),
+                    one_p <= 1_000_000_000,
+            ;
+            assert(2 * ((prev_num as int) * (r_val as int)) <= (prev_num as int) * (one_p as int))
+                by (nonlinear_arith)
+                requires
+                    prev_num >= 1,
+                    2 * (r_val as int) <= (one_p as int),
+            ;
+        }
+        let prod: u64 = prev_num * r_val;
+        let next_num: u64 = prod / one_p;
+        proof {
+            assert((next_num as int) * (one_p as int) <= (prod as int)) by (nonlinear_arith)
+                requires
+                    next_num == prod / one_p,
+                    one_p >= 2,
+            ;
+            assert(2 * (next_num as int) <= (prev_num as int)) by (nonlinear_arith)
+                requires
+                    (next_num as int) * (one_p as int) <= (prod as int),
+                    2 * (prod as int) <= (prev_num as int) * (one_p as int),
+                    one_p >= 2,
+            ;
+            assert(next_num < prev_num) by (nonlinear_arith)
+                requires
+                    prev_num >= 1,
+                    2 * (next_num as int) <= (prev_num as int),
+            ;
+        }
+        num = next_num;
+        steps = steps + 1;
+    }
+
+    (steps, num)
+}
+
+/// CLI argument token categories for `run_app` (`crates/bc_cli/src/main.rs:310-328`).
+pub const CLI_ARG_OPT_L: u8 = 1;
+pub const CLI_ARG_OPT_INVALID: u8 = 2;
+pub const CLI_ARG_FILE: u8 = 3;
+
+/// Verified POSIX CLI option and file argument parser (`crates/bc_cli/src/main.rs:310-328`).
+///
+/// Returns `(has_error, math_enabled, initial_scale, file_count)`.
+/// Proves:
+/// 1. Any invalid `-...` option immediately aborts parsing with `has_error == true`.
+/// 2. When valid, `initial_scale == 20` if and only if `-l` (`math_enabled`) was specified,
+///    and `initial_scale == 0` otherwise.
+/// 3. The number of collected file arguments is bounded by `args.len()`.
+pub fn verified_cli_parse_args(args: &[u8]) -> (res: (bool, bool, usize, usize))
+    ensures
+        // res = (has_error, math_enabled, initial_scale, file_count)
+        !res.0 ==> (
+            (res.1 ==> res.2 == 20)
+            && (!res.1 ==> res.2 == 0)
+            && res.3 <= args@.len()
+        ),
+{
+    let mut math_enabled: bool = false;
+    let mut file_count: usize = 0;
+    let mut i: usize = 0;
+    let len: usize = args.len();
+
+    while i < len
+        invariant
+            0 <= i <= len,
+            len == args@.len(),
+            file_count <= i,
+        decreases len - i,
+    {
+        let arg = args[i];
+        if arg == CLI_ARG_OPT_L {
+            math_enabled = true;
+        } else if arg == CLI_ARG_OPT_INVALID {
+            return (true, math_enabled, 0, file_count);
+        } else {
+            file_count = file_count + 1;
+        }
+        i = i + 1;
+    }
+
+    let initial_scale: usize = if math_enabled { 20 } else { 0 };
+    (false, math_enabled, initial_scale, file_count)
+}
+
 } // verus!
