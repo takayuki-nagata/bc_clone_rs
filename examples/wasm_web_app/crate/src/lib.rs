@@ -3,6 +3,8 @@
 #![no_std]
 
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 use alloc::boxed::Box;
 use alloc::rc::Rc;
@@ -30,6 +32,37 @@ impl BcWriter for SharedBuffer {
     }
 }
 
+fn eval_into_wasm(code: &str, ev: &mut Evaluator) {
+    let lexer = Lexer::new(code);
+    let mut parser = match Parser::try_new(lexer) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = writeln!(ev.stderr_writer, "{}", e);
+            return;
+        }
+    };
+    let stmts = match parser.try_parse_program() {
+        Ok(s) => s,
+        Err(e) => {
+            if e != "quit" {
+                let _ = writeln!(ev.stderr_writer, "{}", e);
+            }
+            return;
+        }
+    };
+
+    for stmt in &stmts {
+        if let Err(e) = ev.try_execute(stmt) {
+            let _ = writeln!(ev.stderr_writer, "Runtime error: {}", e);
+            break;
+        }
+        if ev.quit_flag {
+            break;
+        }
+    }
+    let _ = ev.stdout_writer.flush();
+}
+
 /// One-shot evaluation function for simple calculations.
 #[wasm_bindgen]
 pub fn eval_bc(code: &str, math_enabled: bool, default_scale: u32) -> String {
@@ -43,14 +76,7 @@ pub fn eval_bc(code: &str, math_enabled: bool, default_scale: u32) -> String {
     );
     ev.scale = default_scale as usize;
 
-    let lexer = Lexer::new(code);
-    let mut parser = Parser::new(lexer);
-    let stmts = parser.parse_program();
-
-    for stmt in &stmts {
-        ev.execute(stmt);
-    }
-    let _ = ev.stdout_writer.flush();
+    eval_into_wasm(code, &mut ev);
 
     let err = err_buf.0.borrow().clone();
     if !err.is_empty() {
@@ -99,14 +125,8 @@ impl BcSession {
             code_with_nl.push('\n');
         }
 
-        let lexer = Lexer::new(&code_with_nl);
-        let mut parser = Parser::new(lexer);
-        let stmts = parser.parse_program();
-
-        for stmt in &stmts {
-            self.evaluator.execute(stmt);
-        }
-        let _ = self.evaluator.stdout_writer.flush();
+        eval_into_wasm(&code_with_nl, &mut self.evaluator);
+        self.evaluator.quit_flag = false;
 
         let err = self.err_buf.0.borrow().clone();
         if !err.is_empty() {
@@ -136,5 +156,60 @@ impl BcSession {
     /// Gets the current scale precision.
     pub fn get_scale(&self) -> u32 {
         self.evaluator.scale as u32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_eval_bc_basic_and_mathlib() {
+        assert_eq!(eval_bc("2^10\n", false, 0).trim(), "1024");
+        assert_eq!(eval_bc("4 * a(1)\n", true, 10).trim(), "3.1415926532");
+        assert_eq!(eval_bc("quit\n", false, 0), "");
+    }
+
+    #[test]
+    fn test_eval_bc_error_recovery() {
+        assert!(eval_bc("@\n", false, 0).contains("Lexical error"));
+        assert!(eval_bc("1 + * 2\n", false, 0).contains("Parser error"));
+        assert!(eval_bc("1 / 0\n", false, 0).contains("Runtime error: division by zero"));
+        assert!(
+            eval_bc("sqrt(-1)\n", false, 0)
+                .contains("Runtime error: square root of negative number")
+        );
+        assert!(eval_bc("unknown_fn(1)\n", false, 0).contains("Runtime error: undefined function"));
+    }
+
+    #[test]
+    fn test_bc_session_lifecycle_and_error_recovery() {
+        let mut sess = BcSession::new(true);
+        assert_eq!(sess.get_scale(), 0);
+        sess.set_scale(4);
+        assert_eq!(sess.get_scale(), 4);
+
+        assert_eq!(sess.eval("x = 20; x / 3").trim(), "6.6666");
+
+        // Error recovery inside function call preserves session variable x = 20
+        assert_eq!(
+            sess.eval("define bad(x) { auto y; x = 999; y = 1 / 0; return (y); }"),
+            ""
+        );
+        assert!(
+            sess.eval("bad(5)")
+                .contains("Runtime error: division by zero")
+        );
+        assert_eq!(sess.eval("x").trim(), "20");
+
+        // Syntax error recovery and quit
+        assert!(sess.eval("1 + * 2").contains("Parser error"));
+        assert_eq!(sess.eval("quit"), "");
+        assert_eq!(sess.eval("x + 2").trim(), "22");
+
+        // Reset clears variables and scale
+        sess.reset(false);
+        assert_eq!(sess.get_scale(), 0);
+        assert_eq!(sess.eval("x").trim(), "0");
     }
 }

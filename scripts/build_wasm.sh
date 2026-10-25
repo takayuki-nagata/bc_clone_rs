@@ -10,7 +10,16 @@ PKG_DIR="${REPO_ROOT}/examples/wasm_web_app/pkg"
 
 echo "=== Building bc_clone WebAssembly (wasm32) module ==="
 
-# 1. Clippy Linter Check
+# 1. Host Linter & Unit Tests
+cargo clippy \
+    --manifest-path "${CRATE_DIR}/Cargo.toml" \
+    --all-targets \
+    -- -D warnings
+
+cargo test \
+    --manifest-path "${CRATE_DIR}/Cargo.toml"
+
+# 2. Wasm32 Clippy Linter Check
 cargo clippy \
     --manifest-path "${CRATE_DIR}/Cargo.toml" \
     --target wasm32-unknown-unknown \
