@@ -8,10 +8,17 @@ timeout_multiplier = 2.0
 # Command used to run tests
 test_tool = "cargo"
 
+# Exclude formal verification proof-only files compiled only under `cargo kani` or `verus`
+exclude_globs = [
+    "crates/bc_core/src/kani_proofs.rs",
+    "crates/bc_core/src/verus_proofs.rs",
+]
+
 # Exclude semantically equivalent mutants:
 # 1. Over-precision guard calculation mutants in transcendental functions (bc_exp, bc_sin, bc_cos, bc_atan, bc_ln)
 # 2. Trait default / no-op flush methods returning Ok(())
 # 3. no_std embedded-only heap initialization in C-API (executed only on embedded targets, not during host cargo test)
+# 4. Kani bounded model checking harnesses (`#[cfg(kani)] mod kani_proofs`, executed via `cargo kani`)
 exclude_re = [
     "replace / with \\* in bc_exp",
     "replace \\+ with \\* in bc_sin",
@@ -23,4 +30,5 @@ exclude_re = [
     "init_heap_if_needed",
     "in Lexer::advance_char",
     "replace Lexer::advance_char with \\(\\)",
+    "kani_proofs::",
 ]

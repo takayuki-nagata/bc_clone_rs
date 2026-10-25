@@ -23,7 +23,10 @@ A production-grade, POSIX-compliant arbitrary-precision calculator implemented i
   - Bessel function of integer order (`j(n, x)`)
 - **Arbitrary Base Conversions**: Arbitrary input base (`ibase`) up to 16, and arbitrary output base (`obase`) up to any integer base.
 - **Robust Interactive REPL**: Interactive mode with 70-character POSIX line wrapping, multi-line brace and backslash-newline accumulation, SIGINT (Ctrl+C) handling, and input base range warnings.
-- **Formally Verified Core (`Verus` SMT Prover)**: 31 core arithmetic, scaling, lexing, parsing, scoping, CLI, C-FFI, and RTOS kernels (`crates/bc_core/src/verified_kernels.rs`) are directly coupled between production `#![no_std]` code and Z3 SMT formal verification (`crates/bc_core/src/verus_proofs.rs`, `149 verified, 0 errors`).
+- **3-Layer Formal & Dynamic Verification (`Verus` + `Kani` + `Miri`)**:
+  - **Verus SMT Prover**: 31 core arithmetic, scaling, lexing, parsing, scoping, CLI, C-FFI, and RTOS kernels (`crates/bc_core/src/verified_kernels.rs`) are directly coupled between production `#![no_std]` code and Z3 SMT formal verification (`crates/bc_core/src/verus_proofs.rs`, `149 verified, 0 errors`).
+  - **Kani Bounded Model Checker**: 14 bit-precise CBMC proof harnesses across `bc_core`, `bc_c_api`, and `bc_clone` cross-verify all 31 kernels, C-FFI raw pointer writes, and CLI slice indexing against machine-word overflows and out-of-bounds panics across symbolic inputs (`scripts/run_kani_verification.sh`).
+  - **Miri UB & Memory-Leak Verifier**: Executes all 98 unit tests across `bc_c_api`, `bc_core`, `bc_zephyr`, and `bc_clone` at full mathematical precision under strict provenance and symbolic alignment checking (`scripts/run_miri_tests.sh`), guaranteeing zero Undefined Behavior, Tree Borrows compliance, and zero memory leaks across FFI sessions and panic unwinding.
 - **High-Quality Standards**: 100% warning-free under `cargo clippy -- -D warnings`, fully formatted via `cargo fmt`, 98.4%+ line coverage (`cargo llvm-cov`), 0 surviving mutants (`cargo mutants`), and thoroughly documented with `rustdoc`.
 
 ## Performance & Benchmarks
@@ -231,6 +234,25 @@ To run the Verus formal verification suite locally:
 bash scripts/run_verus_verification.sh
 ```
 
+### Bounded Model Checking (Kani) & Undefined Behavior Verification (Miri)
+
+To complement Verus's unbounded mathematical proofs with bit-precise machine-word model checking and dynamic memory/FFI safety verification:
+
+- **Kani Bounded Model Checking (`scripts/run_kani_verification.sh`)**: Verifies 14 symbolic proof harnesses (`#[kani::proof]`) across `bc_core` (`crates/bc_core/src/kani_proofs.rs`), `bc_c_api`, and `bc_clone` using CBMC/CaDiCaL. Proves the absence of bit-level arithmetic overflows, slice/UTF-8 boundary panics, and C-FFI buffer overruns across all symbolic input bit patterns.
+- **Miri Undefined Behavior & Leak Verification (`scripts/run_miri_tests.sh`)**: Runs all 98 unit tests across `bc_c_api`, `bc_core`, `bc_zephyr`, and `bc_clone` under `cargo +nightly miri test` with `-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check`, verifying `unsafe extern "C"` FFI pointers, `BcSession` (`Box::into_raw` / `Box::from_raw`) lifecycles, `num-bigint` heap allocations, and `ScopeGuard` panic unwinding at full mathematical precision.
+
+To run Kani bounded model checking locally:
+
+```bash
+bash scripts/run_kani_verification.sh
+```
+
+To run Miri UB and memory-safety verification locally:
+
+```bash
+bash scripts/run_miri_tests.sh
+```
+
 ### Coverage Measurement
 
 We target maximum test coverage using `cargo-llvm-cov`. To run the tests and generate a code coverage report:
@@ -274,7 +296,7 @@ cargo mutants
 ## CI/CD Pipeline
 
 The project includes two GitHub Actions workflows:
-- **CI Workflow (`.github/workflows/ci.yml`)**: Automatically checks formatting, lints with clippy (host and bare-metal `riscv32` targets), runs all unit/integration tests, executes POSIX and GNU reference test suites, runs bare-metal QEMU RISC-V 32 and Zephyr RTOS tests, runs Verus SMT formal verification (`149 verified, 0 errors`), enforces a 98%+ line coverage gate (`cargo llvm-cov`), executes diff-based mutation testing (`cargo mutants --in-diff`), and runs security audit checks on every push and pull request.
+- **CI Workflow (`.github/workflows/ci.yml`)**: Automatically checks formatting, lints with clippy (host and bare-metal `riscv32` targets), runs all unit/integration tests, executes POSIX and GNU reference test suites, runs bare-metal QEMU RISC-V 32 and Zephyr RTOS tests, runs Verus SMT formal verification (`149 verified, 0 errors`), runs Kani bounded model checking (`14 harnesses`), runs Miri UB and memory-leak verification, enforces a 98%+ line coverage gate (`cargo llvm-cov`), executes diff-based mutation testing (`cargo mutants --in-diff`), and runs security audit checks on every push and pull request.
 - **Release Workflow (`.github/workflows/release.yml`)**: Cross-compiles optimized binaries for Linux, macOS, and Windows and attaches them to a new GitHub Release automatically whenever a version tag (e.g. `v1.0.0`) is pushed.
 
 ## License

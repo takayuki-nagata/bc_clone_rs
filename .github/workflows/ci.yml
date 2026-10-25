@@ -102,6 +102,12 @@ jobs:
       - name: Run Verus Formal Verification (bc_core)
         run: bash scripts/run_verus_verification.sh
 
+      - name: Run Kani Bounded Model Checking Verification
+        run: bash scripts/run_kani_verification.sh
+
+      - name: Run Miri Undefined Behavior & Memory-Safety Verification
+        run: bash scripts/run_miri_tests.sh
+
 
       - name: Install cargo-audit
 
