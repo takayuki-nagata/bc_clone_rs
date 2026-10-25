@@ -23,7 +23,8 @@ A production-grade, POSIX-compliant arbitrary-precision calculator implemented i
   - Bessel function of integer order (`j(n, x)`)
 - **Arbitrary Base Conversions**: Arbitrary input base (`ibase`) up to 16, and arbitrary output base (`obase`) up to any integer base.
 - **Robust Interactive REPL**: Interactive mode with 70-character POSIX line wrapping, multi-line brace and backslash-newline accumulation, SIGINT (Ctrl+C) handling, and input base range warnings.
-- **High-Quality Standards**: 100% warning-free under `cargo clippy -- -D warnings`, fully formatted via `cargo fmt`, and thoroughly documented with `rustdoc`.
+- **Formally Verified Core (`Verus` SMT Prover)**: 31 core arithmetic, scaling, lexing, parsing, scoping, CLI, C-FFI, and RTOS kernels (`crates/bc_core/src/verified_kernels.rs`) are directly coupled between production `#![no_std]` code and Z3 SMT formal verification (`crates/bc_core/src/verus_proofs.rs`, `149 verified, 0 errors`).
+- **High-Quality Standards**: 100% warning-free under `cargo clippy -- -D warnings`, fully formatted via `cargo fmt`, 98.4%+ line coverage (`cargo llvm-cov`), 0 surviving mutants (`cargo mutants`), and thoroughly documented with `rustdoc`.
 
 ## Performance & Benchmarks
 
@@ -124,7 +125,7 @@ cargo clippy -- -D warnings
 
 ### Running Tests
 
-We implement unit tests (78 tests embedded in modules), E2E differential integration tests (26 tests in `tests/integration_tests.rs`), official GNU `bc` 1.08.2 reference test suite validation (`scripts/run_gnu_reference_tests.sh`), and POSIX IEEE Std 1003.1 compliance test suite validation (`scripts/run_posix_compliance_tests.sh`).
+We implement unit and integration tests (123 tests across all workspace crates), E2E differential integration tests (26 test suites in `crates/bc_cli/tests/integration_tests.rs`), official GNU `bc` 1.08.2 reference test suite validation (`scripts/run_gnu_reference_tests.sh`), and POSIX IEEE Std 1003.1 compliance test suite validation (`scripts/run_posix_compliance_tests.sh`).
 
 To run standard unit and integration tests:
 
@@ -205,7 +206,30 @@ bash scripts/serve_wasm.sh
 # Open http://localhost:8080/www/ in your browser
 ```
 
+### Formal Verification (Verus)
 
+`bc_clone_rs` uses the [Verus](https://github.com/verus-lang/verus) deductive verification tool (backed by the Z3 SMT solver) to mathematically prove the absence of integer overflows, slice out-of-bounds panics, division-by-zero in internal transforms, non-termination in power/series loops, and violations of POSIX `bc` scale/formatting invariants.
+
+- **Single Source of Truth (`crates/bc_core/src/verified_kernels.rs`)**: 31 pure functions and state machines are defined once via `dual_verified!` and `dual_verified_repl_scanner!`. Under Verus (`#[cfg(verus_keep_ghost)]`), they expand inside `verus! { ... }` with full `requires`, `ensures`, `invariant`, and `decreases` contracts; under standard Cargo builds (`#[cfg(not(verus_keep_ghost))]`), the exact same function bodies compile as zero-overhead `#[inline]` `#![no_std]` Rust functions called directly across `bc_core`, `bc_cli`, `bc_c_api`, and `bc_zephyr`.
+- **High-Order Proof Suite (`crates/bc_core/src/verus_proofs.rs`)**: Contains Ghost mathematical models (`SpecBCNum`, `SpecDecimal`), inductive lemmas (`proof fn`), and 12 verification target areas (`149 verified, 0 errors`), including:
+  1. POSIX `bc` scale rules & fixed-point arithmetic (`add`, `sub`, `mul`, `div`, `sqrt`, `mod`)
+  2. Non-decimal `obase` fractional digit loop termination & minimality ($\text{obase}^k \ge 10^{\text{scale}}$)
+  3. POSIX 70-character line wrapping (`WrappedStdout` $\text{col} \le 68$) & `Lexer` lookahead/advance bounds safety
+  4. Binary exponentiation (`BCNum::pow`) $\mathcal{O}(\log b)$ loop termination & scale invariants
+  5. Base conversion (`ibase`/`obase`) digit bounds, hex LUT indexing safety, and multi-digit zero-padding width
+  6. Transcendental math (`Decimal`) roundtrip losslessness & `sin`/`cos`/`exp` argument reduction
+  7. `Evaluator` cross-scale relational total order, register clamping (`ibase`/`obase`), and `ScopeGuard` dynamic stack restoration theorem
+  8. `Parser` Pratt precedence climbing hierarchy & `Lexer` number/identifier scanning invariants
+  9. `BCNum::length` & `atan` / `ln` (Cayley transform) / `bessel` mathematical identities
+  10. `Evaluator` prefix/postfix `++`/`--` semantics & `break`/`return`/`quit` control-flow short-circuiting
+  11. CLI REPL block completeness scanner, C-FFI NUL buffer capacity safety, and Zephyr RTOS line editor
+  12. `Decimal` fixed-point unit identities, Taylor series convergence termination, and POSIX CLI option parser
+
+To run the Verus formal verification suite locally:
+
+```bash
+bash scripts/run_verus_verification.sh
+```
 
 ### Coverage Measurement
 
@@ -250,7 +274,7 @@ cargo mutants
 ## CI/CD Pipeline
 
 The project includes two GitHub Actions workflows:
-- **CI Workflow (`.github/workflows/ci.yml`)**: Automatically checks formatting, lints with clippy, runs all unit/integration tests, measures code coverage, executes diff-based mutation testing (`cargo mutants --in-diff`), and runs audit checks on every push and pull request.
+- **CI Workflow (`.github/workflows/ci.yml`)**: Automatically checks formatting, lints with clippy (host and bare-metal `riscv32` targets), runs all unit/integration tests, executes POSIX and GNU reference test suites, runs bare-metal QEMU RISC-V 32 and Zephyr RTOS tests, runs Verus SMT formal verification (`149 verified, 0 errors`), enforces a 98%+ line coverage gate (`cargo llvm-cov`), executes diff-based mutation testing (`cargo mutants --in-diff`), and runs security audit checks on every push and pull request.
 - **Release Workflow (`.github/workflows/release.yml`)**: Cross-compiles optimized binaries for Linux, macOS, and Windows and attaches them to a new GitHub Release automatically whenever a version tag (e.g. `v1.0.0`) is pushed.
 
 ## License
