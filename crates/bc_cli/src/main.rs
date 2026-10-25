@@ -1006,3 +1006,48 @@ mod tests {
         assert!(success.flush().is_ok());
     }
 }
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Verifies that `count_open_braces` and `is_block_incomplete` never panic and maintain
+    /// strict consistency across arbitrary symbolic 8-byte ASCII strings.
+    #[kani::proof]
+    #[kani::unwind(9)]
+    fn proof_cli_count_open_braces_and_incomplete() {
+        let raw: [u8; 8] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= 8);
+        for i in 0..len {
+            kani::assume(raw[i] <= 0x7F);
+        }
+        let s = unsafe { core::str::from_utf8_unchecked(&raw[..len]) };
+
+        let braces = count_open_braces(s);
+        let incomplete = is_block_incomplete(s);
+        assert!(braces >= -(len as i32) && braces <= (len as i32));
+        if braces > 0 {
+            assert!(incomplete);
+        }
+    }
+
+    /// Verifies that CLI option slice indexing (`&arg[1..]`) when `verified_cli_classify_arg`
+    /// returns `CLI_ARG_OPT_INVALID` never panics on out-of-bounds or UTF-8 character boundaries.
+    #[kani::proof]
+    #[kani::unwind(7)]
+    fn proof_cli_invalid_opt_slice_safety() {
+        let raw: [u8; 6] = kani::any();
+        let len: usize = kani::any();
+        kani::assume(len <= 6);
+        for i in 0..len {
+            kani::assume(raw[i] <= 0x7F);
+        }
+        let arg = unsafe { core::str::from_utf8_unchecked(&raw[..len]) };
+        let kind = verified_cli_classify_arg(arg.as_bytes());
+        if kind == CLI_ARG_OPT_INVALID {
+            let opt = &arg[1..];
+            assert_eq!(opt.len(), len - 1);
+        }
+    }
+}

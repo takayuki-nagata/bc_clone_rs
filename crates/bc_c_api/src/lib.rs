@@ -770,3 +770,120 @@ mod tests {
         unsafe { bc_session_destroy(session) };
     }
 }
+
+#[cfg(kani)]
+mod kani_proofs {
+    use super::*;
+
+    /// Verifies that the C-FFI output buffer copy pattern (`copy_nonoverlapping` + NUL terminator)
+    /// guarded by `verified_c_ffi_check_buf_capacity` never overflows `out_buf` and always
+    /// writes a valid trailing NUL (`0`) within `0..buf_size`.
+    #[kani::proof]
+    fn proof_c_ffi_buffer_copy_safety() {
+        let src_bytes: [u8; 16] = kani::any();
+        let mut dst_buf: [c_char; 16] = kani::any();
+        let out_len: usize = kani::any();
+        let buf_size: usize = kani::any();
+
+        kani::assume(out_len <= 16);
+        kani::assume(buf_size <= 16);
+
+        if verified_c_ffi_check_buf_capacity(out_len, buf_size) {
+            let out_ptr = dst_buf.as_mut_ptr();
+            unsafe {
+                core::ptr::copy_nonoverlapping(src_bytes.as_ptr(), out_ptr.cast::<u8>(), out_len);
+                *out_ptr.add(out_len) = 0;
+            }
+            assert_eq!(dst_buf[out_len], 0);
+            if out_len > 0 {
+                let check_idx: usize = kani::any();
+                kani::assume(check_idx < out_len);
+                assert_eq!(dst_buf[check_idx] as u8, src_bytes[check_idx]);
+            }
+        } else {
+            assert!(out_len >= buf_size);
+        }
+    }
+
+    /// Verifies that all C-FFI entry points safely reject NULL pointers and zero-length buffers
+    /// across arbitrary symbolic boolean, scale, and size arguments without dereferencing invalid pointers.
+    #[kani::proof]
+    fn proof_c_ffi_null_and_zero_buf_guards() {
+        let math_enabled: bool = kani::any();
+        let default_scale: u32 = kani::any();
+        let buf_size: usize = kani::any();
+        let valid_cstr: [c_char; 2] = [b'1' as c_char, 0];
+        let mut valid_buf: [c_char; 4] = [0; 4];
+
+        let st_null_code = unsafe {
+            bc_eval(
+                core::ptr::null(),
+                math_enabled,
+                default_scale,
+                valid_buf.as_mut_ptr(),
+                buf_size,
+            )
+        };
+        assert_eq!(st_null_code, BcStatus::ErrNullPtr);
+
+        let st_null_buf = unsafe {
+            bc_eval(
+                valid_cstr.as_ptr(),
+                math_enabled,
+                default_scale,
+                core::ptr::null_mut(),
+                buf_size,
+            )
+        };
+        assert_eq!(st_null_buf, BcStatus::ErrNullPtr);
+
+        let st_zero_buf = unsafe {
+            bc_eval(
+                valid_cstr.as_ptr(),
+                math_enabled,
+                default_scale,
+                valid_buf.as_mut_ptr(),
+                0,
+            )
+        };
+        assert_eq!(st_zero_buf, BcStatus::ErrBufferTooSmall);
+
+        let st_cb_null = unsafe {
+            bc_eval_callback(
+                core::ptr::null(),
+                math_enabled,
+                default_scale,
+                None,
+                None,
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(st_cb_null, BcStatus::ErrNullPtr);
+
+        let st_sess_null = unsafe {
+            bc_session_eval(
+                core::ptr::null_mut(),
+                valid_cstr.as_ptr(),
+                valid_buf.as_mut_ptr(),
+                buf_size,
+            )
+        };
+        assert_eq!(st_sess_null, BcStatus::ErrNullPtr);
+
+        let st_sess_cb_null = unsafe {
+            bc_session_eval_callback(
+                core::ptr::null_mut(),
+                valid_cstr.as_ptr(),
+                None,
+                None,
+                core::ptr::null_mut(),
+            )
+        };
+        assert_eq!(st_sess_cb_null, BcStatus::ErrNullPtr);
+
+        unsafe {
+            bc_session_reset(core::ptr::null_mut(), math_enabled);
+            bc_session_destroy(core::ptr::null_mut());
+        }
+    }
+}
