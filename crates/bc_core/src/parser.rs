@@ -1553,5 +1553,31 @@ mod tests {
 
         let mut parser_quit = Parser::try_new(Lexer::new("quit\n")).unwrap();
         assert_eq!(parser_quit.try_parse_program(), Err("quit".to_string()));
+
+        // Verify statement & primary expression variants in try_parse_program
+        let mut parser_variants = Parser::try_new(Lexer::new(
+            "\"hello\"\nbreak\nif (1) x = 2\nlength(123)\nscale(1.23)\nobase = 16\nscale = 4\n",
+        ))
+        .unwrap();
+        let stmts = parser_variants.try_parse_program().unwrap();
+        assert_eq!(stmts.len(), 7);
+        assert_eq!(
+            stmts[0],
+            Stmt::Block(vec![Stmt::StringLiteral("hello".to_string())])
+        );
+        assert_eq!(stmts[1], Stmt::Block(vec![Stmt::Break]));
+        assert!(matches!(&stmts[2], Stmt::Block(v) if matches!(&v[0], Stmt::If(_, _))));
+        assert!(
+            matches!(&stmts[3], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::LengthCall(_))))
+        );
+        assert!(
+            matches!(&stmts[4], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::ScaleCall(_))))
+        );
+        assert!(
+            matches!(&stmts[5], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::AssignOp(_, t, _)) if **t == Expr::RegisterAccess("obase".to_string())))
+        );
+        assert!(
+            matches!(&stmts[6], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::AssignOp(_, t, _)) if **t == Expr::RegisterAccess("scale".to_string())))
+        );
     }
 }

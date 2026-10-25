@@ -13,7 +13,7 @@ A production-grade, POSIX-compliant arbitrary-precision calculator implemented i
 ## Features
 
 - **POSIX-Compliant Math with GNU Extensions**: Fully supports dynamic scoping, registers, variable/array stacks, and functions matching standard `bc` specifications, as well as popular GNU `bc` extensions (bare `return`, assignment operators `+=`, `-=`, etc., and array parameter passing `f(a[])`).
-- **`#![no_std]` + `alloc` Core Engine**: The core calculator engine (`bc_core`) is fully decoupled from the OS and standard library (`std`), supporting embedded systems, bare-metal RISC-V 32 (`riscv32imac-unknown-none-elf`, `riscv32imc-unknown-none-elf`), WebAssembly (`wasm32-unknown-unknown`), and RTOS (Zephyr / ESP32-C3).
+- **`#![no_std]` + `alloc` Core Engine with Fallible Execution API**: The core calculator engine (`bc_core`) is fully decoupled from the OS and standard library (`std`), exposing non-panicking `Result`-based APIs (`try_new`, `try_parse_program`, `try_execute`, `try_evaluate`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`) alongside standard wrappers. This guarantees safe syntax/runtime error recovery without unwinding across C-FFI (`bc_c_api`), embedded RTOS (`bc_zephyr`), bare-metal RISC-V 32 (`bc_qemu_riscv32`, `examples/m5stamp_c3`), and WebAssembly (`wasm32-unknown-unknown`).
 - **Arbitrary-Precision Arithmetic**: Implements high-performance arbitrary-precision decimal operations on top of `num-bigint` without external C library dependencies.
 - **Transcendental Library**: Supports the standard math library functions (`-l` flag):
   - Sine (`s(x)`) and Cosine (`c(x)`)
@@ -23,11 +23,12 @@ A production-grade, POSIX-compliant arbitrary-precision calculator implemented i
   - Bessel function of integer order (`j(n, x)`)
 - **Arbitrary Base Conversions**: Arbitrary input base (`ibase`) up to 16, and arbitrary output base (`obase`) up to any integer base.
 - **Robust Interactive REPL**: Interactive mode with 70-character POSIX line wrapping, multi-line brace and backslash-newline accumulation, SIGINT (Ctrl+C) handling, and input base range warnings.
-- **3-Layer Formal & Dynamic Verification (`Verus` + `Kani` + `Miri`)**:
+- **3-Layer Formal & Dynamic Verification (`Verus` + `Kani` + `Miri`) & Property-Based Testing (`proptest`)**:
   - **Verus SMT Prover**: 31 core arithmetic, scaling, lexing, parsing, scoping, CLI, C-FFI, and RTOS kernels (`crates/bc_core/src/verified_kernels.rs`) are directly coupled between production `#![no_std]` code and Z3 SMT formal verification (`crates/bc_core/src/verus_proofs.rs`, `149 verified, 0 errors`).
   - **Kani Bounded Model Checker**: 14 bit-precise CBMC proof harnesses across `bc_core`, `bc_c_api`, and `bc_clone` cross-verify all 31 kernels, C-FFI raw pointer writes, and CLI slice indexing against machine-word overflows and out-of-bounds panics across symbolic inputs (`scripts/run_kani_verification.sh`).
-  - **Miri UB & Memory-Leak Verifier**: Executes all 98 unit tests across `bc_c_api`, `bc_core`, `bc_zephyr`, and `bc_clone` at full mathematical precision under strict provenance and symbolic alignment checking (`scripts/run_miri_tests.sh`), guaranteeing zero Undefined Behavior, Tree Borrows compliance, and zero memory leaks across FFI sessions and panic unwinding.
-- **High-Quality Standards**: 100% warning-free under `cargo clippy -- -D warnings`, fully formatted via `cargo fmt`, 98.4%+ line coverage (`cargo llvm-cov`), 0 surviving mutants (`cargo mutants`), and thoroughly documented with `rustdoc`.
+  - **Miri UB & Memory-Leak Verifier**: Executes all 103 unit tests across `bc_c_api`, `bc_core`, `bc_zephyr`, and `bc_clone` at full mathematical precision under strict provenance and symbolic alignment checking (`scripts/run_miri_tests.sh`), guaranteeing zero Undefined Behavior, Tree Borrows compliance, and zero memory leaks across FFI sessions, fallible error recovery, and panic unwinding.
+  - **Property-Based Testing (`proptest`)**: Verifies multi-limb `BigInt` / `BCNum` algebraic laws, base-conversion roundtrips, transcendental mathematical identities, and fallible parser/evaluator resilience across randomized inputs (`crates/bc_core/tests/proptest_suite.rs`).
+- **High-Quality Standards**: 100% warning-free under `cargo clippy -- -D warnings`, fully formatted via `cargo fmt`, 98.2%+ line coverage (`cargo llvm-cov`), 0 surviving mutants (`cargo mutants`), and thoroughly documented with `rustdoc`.
 
 ## Performance & Benchmarks
 
@@ -128,7 +129,7 @@ cargo clippy -- -D warnings
 
 ### Running Tests
 
-We implement unit and integration tests (123 tests across all workspace crates), E2E differential integration tests (26 test suites in `crates/bc_cli/tests/integration_tests.rs`), official GNU `bc` 1.08.2 reference test suite validation (`scripts/run_gnu_reference_tests.sh`), and POSIX IEEE Std 1003.1 compliance test suite validation (`scripts/run_posix_compliance_tests.sh`).
+We implement unit, property-based (`proptest`), and integration tests (135 tests across all workspace crates and `bc_wasm`), E2E differential integration tests (26 test suites in `crates/bc_cli/tests/integration_tests.rs`), official GNU `bc` 1.08.2 reference test suite validation (`scripts/run_gnu_reference_tests.sh`), and POSIX IEEE Std 1003.1 compliance test suite validation (`scripts/run_posix_compliance_tests.sh`).
 
 To run standard unit and integration tests:
 
@@ -239,7 +240,7 @@ bash scripts/run_verus_verification.sh
 To complement Verus's unbounded mathematical proofs with bit-precise machine-word model checking and dynamic memory/FFI safety verification:
 
 - **Kani Bounded Model Checking (`scripts/run_kani_verification.sh`)**: Verifies 14 symbolic proof harnesses (`#[kani::proof]`) across `bc_core` (`crates/bc_core/src/kani_proofs.rs`), `bc_c_api`, and `bc_clone` using CBMC/CaDiCaL. Proves the absence of bit-level arithmetic overflows, slice/UTF-8 boundary panics, and C-FFI buffer overruns across all symbolic input bit patterns.
-- **Miri Undefined Behavior & Leak Verification (`scripts/run_miri_tests.sh`)**: Runs all 98 unit tests across `bc_c_api`, `bc_core`, `bc_zephyr`, and `bc_clone` under `cargo +nightly miri test` with `-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check`, verifying `unsafe extern "C"` FFI pointers, `BcSession` (`Box::into_raw` / `Box::from_raw`) lifecycles, `num-bigint` heap allocations, and `ScopeGuard` panic unwinding at full mathematical precision.
+- **Miri Undefined Behavior & Leak Verification (`scripts/run_miri_tests.sh`)**: Runs all 103 unit tests across `bc_c_api`, `bc_core`, `bc_zephyr`, and `bc_clone` under `cargo +nightly miri test` with `-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check`, verifying `unsafe extern "C"` FFI pointers, `BcSession` (`Box::into_raw` / `Box::from_raw`) lifecycles, `num-bigint` heap allocations, and `ScopeGuard` dynamic scope restoration across both fallible returns and panic unwinding at full mathematical precision.
 
 To run Kani bounded model checking locally:
 

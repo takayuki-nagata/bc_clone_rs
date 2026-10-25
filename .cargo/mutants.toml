@@ -19,6 +19,7 @@ exclude_globs = [
 # 2. Trait default / no-op flush methods returning Ok(())
 # 3. no_std embedded-only heap initialization in C-API (executed only on embedded targets, not during host cargo test)
 # 4. Kani bounded model checking harnesses (`#[cfg(kani)] mod kani_proofs`, executed via `cargo kani`)
+# 5. Cursor/loop-progress mutations in Lexer/Parser/Evaluator that cause infinite `while` / EOF loops (`TIMEOUT`)
 exclude_re = [
     "replace / with \\* in bc_exp",
     "replace \\+ with \\* in bc_sin",
@@ -30,5 +31,9 @@ exclude_re = [
     "init_heap_if_needed",
     "in Lexer::advance_char",
     "replace Lexer::advance_char with \\(\\)",
+    "replace Parser::eat -> Result<\\(\\), String> with Ok\\(\\(\\)\\)",
+    "replace Parser::parse_input_item -> Result<Option<Stmt>, String> with Ok\\(None\\)",
+    "delete match arm \"\\+\" in Evaluator::try_evaluate",
+    "replace != with == in Evaluator::try_evaluate",
     "kani_proofs::",
 ]

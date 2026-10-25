@@ -1453,5 +1453,6 @@ mod tests {
             BCNum::from_string("9", 10).try_sqrt(0),
             Ok(BCNum::from_string("3", 10))
         );
+        assert_eq!(zero.try_sqrt(0), Ok(BCNum::zero()));
     }
 }

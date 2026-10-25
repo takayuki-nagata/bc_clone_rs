@@ -1887,5 +1887,30 @@ mod tests {
             ev.try_execute(&stmts_sqrt[0]),
             Err("square root of negative number".to_string())
         );
+
+        // Verify binary operators (-, %, ^) and math library functions (s, c, a, l, e, j) via try_evaluate
+        ev.scale = 4;
+        let eval_expr = |ev: &mut Evaluator, src: &str| -> BCNum {
+            let mut p = Parser::try_new(Lexer::new(src)).unwrap();
+            let stmts = p.try_parse_program().unwrap();
+            let inner = match &stmts[0] {
+                Stmt::Block(b) => &b[0],
+                other => other,
+            };
+            if let Stmt::Expr(e) = inner {
+                ev.try_evaluate(e).unwrap()
+            } else {
+                panic!("expected Stmt::Expr");
+            }
+        };
+        assert_eq!(eval_expr(&mut ev, "10 - 3\n").coeff, BigInt::from(7));
+        assert_eq!(eval_expr(&mut ev, "10 % 3\n").coeff, BigInt::from(1));
+        assert_eq!(eval_expr(&mut ev, "2 ^ 3\n").coeff, BigInt::from(8));
+        assert!(eval_expr(&mut ev, "s(1)\n").coeff > BigInt::from(0));
+        assert_eq!(eval_expr(&mut ev, "c(0)\n").coeff, BigInt::from(10000));
+        assert!(eval_expr(&mut ev, "a(1)\n").coeff > BigInt::from(0));
+        assert!(eval_expr(&mut ev, "l(2)\n").coeff > BigInt::from(0));
+        assert_eq!(eval_expr(&mut ev, "e(0)\n").coeff, BigInt::from(10000));
+        assert_eq!(eval_expr(&mut ev, "j(0, 0)\n").coeff, BigInt::from(10000));
     }
 }

@@ -32,6 +32,7 @@ jobs:
       - name: Run Clippy Linter
         run: |
           cargo clippy --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --all-targets -- -D warnings
+          cargo clippy --manifest-path examples/wasm_web_app/crate/Cargo.toml --all-targets -- -D warnings
           cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings
           cargo clippy --package bc_qemu_riscv32 --target riscv32imc-unknown-none-elf -- -D warnings
           cargo clippy --package bc_c_api --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings
