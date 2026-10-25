@@ -375,12 +375,12 @@ dual_verified! {
     }
 
     /// Verified check for valid bc numeric literal characters (`0..=9` or `A..=F`) (`parser.rs`).
-    pub fn verified_is_bc_digit(b: u8) -> (res: bool)
+    pub fn verified_is_bc_digit(b: u32) -> (res: bool)
         ensures [
-            res == ((b'0' <= b && b <= b'9') || (b'A' <= b && b <= b'F')),
+            res == ((48 <= b && b <= 57) || (65 <= b && b <= 70)),
         ]
     {
-        (b >= b'0' && b <= b'9') || (b >= b'A' && b <= b'F')
+        (b >= 48 && b <= 57) || (b >= 65 && b <= 70)
     }
 
     /// Verified `Lexer::peek_token` buffer index clamping (`parser.rs`).
@@ -418,4 +418,130 @@ dual_verified! {
             op_prec + 1
         }
     }
+}
+
+#[cfg(verus_keep_ghost)]
+macro_rules! dual_verified_repl_scanner {
+    (
+        $(#[$meta:meta])*
+        pub fn $name:ident($arg:ident : $arg_ty:ty) -> ($ret_name:ident : $ret_ty:ty)
+            requires [ $($req:tt)* ]
+            ensures [ $($ens:tt)* ]
+            locals [ $($loc_tt:tt)* ]
+            while ($cond:expr)
+                invariant [ $($inv:tt)* ]
+                decreases ($dec:expr)
+            $loop_body:block
+            return $ret_expr:expr;
+    ) => {
+        verus! {
+            $(#[$meta])*
+            pub fn $name($arg : $arg_ty) -> ($ret_name : $ret_ty)
+                requires $($req)*
+                ensures $($ens)*
+            {
+                $($loc_tt)*
+                while $cond
+                    invariant $($inv)*
+                    decreases $dec
+                $loop_body
+                $ret_expr
+            }
+        }
+    };
+}
+
+#[cfg(not(verus_keep_ghost))]
+macro_rules! dual_verified_repl_scanner {
+    (
+        $(#[$meta:meta])*
+        pub fn $name:ident($arg:ident : $arg_ty:ty) -> ($ret_name:ident : $ret_ty:ty)
+            requires [ $($req:tt)* ]
+            ensures [ $($ens:tt)* ]
+            locals [ $($loc_tt:tt)* ]
+            while ($cond:expr)
+                invariant [ $($inv:tt)* ]
+                decreases ($dec:expr)
+            $loop_body:block
+            return $ret_expr:expr;
+    ) => {
+        $(#[$meta])*
+        #[inline]
+        #[allow(clippy::assign_op_pattern)]
+        pub fn $name($arg : $arg_ty) -> $ret_ty {
+            $($loc_tt)*
+            while $cond $loop_body
+            $ret_expr
+        }
+    };
+}
+
+dual_verified_repl_scanner! {
+    /// Verified CLI REPL `count_open_braces` & `is_block_incomplete` state machine
+    /// (`crates/bc_cli/src/main.rs`).
+    ///
+    /// Scans an arbitrary byte slice tracking `/* ... */` comments, `"..."` strings
+    /// (including `\\\n` and `\\\r\n` continuations), and `{` / `}` brace nesting depth.
+    pub fn verified_repl_block_completeness(text: &[u8]) -> (res: (i32, bool))
+        requires [
+            text@.len() <= 1_000_000_000,
+        ]
+        ensures [
+            // res = (open_brace_count, is_incomplete)
+            -(text@.len() as int) <= (res.0 as int) && (res.0 as int) <= (text@.len() as int),
+            res.0 > 0 ==> res.1,
+        ]
+        locals [
+            let mut count: i32 = 0;
+            let mut in_comment: bool = false;
+            let mut in_string: bool = false;
+            let mut i: usize = 0;
+            let len: usize = text.len();
+        ]
+        while (i < len)
+            invariant [
+                0 <= i <= len,
+                len == text@.len(),
+                len <= 1_000_000_000,
+                !(in_comment && in_string),
+                -(i as int) <= (count as int) && (count as int) <= (i as int),
+            ]
+            decreases (len - i)
+        {
+            let c = text[i];
+            if in_comment {
+                if c == b'*' && len - i >= 2 && text[i + 1] == b'/' {
+                    in_comment = false;
+                    i = i + 2;
+                } else {
+                    i = i + 1;
+                }
+            } else if in_string {
+                if c == b'"' {
+                    in_string = false;
+                    i = i + 1;
+                } else if c == b'\\' && len - i >= 2 && text[i + 1] == b'\n' {
+                    i = i + 2;
+                } else if c == b'\\' && len - i >= 3 && text[i + 1] == b'\r' && text[i + 2] == b'\n' {
+                    i = i + 3;
+                } else {
+                    i = i + 1;
+                }
+            } else if c == b'/' && len - i >= 2 && text[i + 1] == b'*' {
+                in_comment = true;
+                i = i + 2;
+            } else if c == b'"' {
+                in_string = true;
+                i = i + 1;
+            } else if c == b'{' {
+                count = count + 1;
+                i = i + 1;
+            } else if c == b'}' {
+                count = count - 1;
+                i = i + 1;
+            } else {
+                i = i + 1;
+            }
+        }
+        return (count, count > 0 || in_comment || in_string);
 }

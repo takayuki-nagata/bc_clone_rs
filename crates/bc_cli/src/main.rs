@@ -9,6 +9,7 @@ use core::fmt::Write as FmtWrite;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use bc_core::verified_kernels::verified_repl_block_completeness;
 use bc_core::{BcWriter, Evaluator, Lexer, Parser};
 
 /// Adapter converting any `std::io::Write + Send` into a `bc_core::BcWriter`.
@@ -76,104 +77,12 @@ pub fn setup_ctrlc_handler() {
 
 /// Counts the number of open braces outside of strings and comments.
 pub fn count_open_braces(text: &str) -> i32 {
-    let mut count = 0;
-    let mut in_string = false;
-    let mut in_comment = false;
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if in_comment {
-            if c == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
-                in_comment = false;
-                i += 2;
-                continue;
-            }
-            i += 1;
-        } else if in_string {
-            if c == '"' {
-                in_string = false;
-            } else if c == '\\' && i + 1 < chars.len() {
-                if chars[i + 1] == '\n' {
-                    i += 2;
-                    continue;
-                } else if chars[i + 1] == '\r' && i + 2 < chars.len() && chars[i + 2] == '\n' {
-                    i += 3;
-                    continue;
-                }
-            }
-            i += 1;
-        } else {
-            if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
-                in_comment = true;
-                i += 2;
-                continue;
-            }
-            if c == '"' {
-                in_string = true;
-                i += 1;
-                continue;
-            }
-            if c == '{' {
-                count += 1;
-            } else if c == '}' {
-                count -= 1;
-            }
-            i += 1;
-        }
-    }
-    count
+    verified_repl_block_completeness(text.as_bytes()).0
 }
 
 /// Checks if the block is incomplete (e.g. has open braces, or is inside an unterminated comment or string).
 pub fn is_block_incomplete(text: &str) -> bool {
-    let mut count = 0;
-    let mut in_string = false;
-    let mut in_comment = false;
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if in_comment {
-            if c == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
-                in_comment = false;
-                i += 2;
-                continue;
-            }
-            i += 1;
-        } else if in_string {
-            if c == '"' {
-                in_string = false;
-            } else if c == '\\' && i + 1 < chars.len() {
-                if chars[i + 1] == '\n' {
-                    i += 2;
-                    continue;
-                } else if chars[i + 1] == '\r' && i + 2 < chars.len() && chars[i + 2] == '\n' {
-                    i += 3;
-                    continue;
-                }
-            }
-            i += 1;
-        } else {
-            if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
-                in_comment = true;
-                i += 2;
-                continue;
-            }
-            if c == '"' {
-                in_string = true;
-                i += 1;
-                continue;
-            }
-            if c == '{' {
-                count += 1;
-            } else if c == '}' {
-                count -= 1;
-            }
-            i += 1;
-        }
-    }
-    count > 0 || in_comment || in_string
+    verified_repl_block_completeness(text.as_bytes()).1
 }
 
 /// Formats and logs panic payloads onto evaluator's stderr writer.

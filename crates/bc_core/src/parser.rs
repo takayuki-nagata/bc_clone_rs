@@ -5,6 +5,9 @@
 //! Conforms to standard POSIX bc lexical and syntax grammar rules, supporting
 //! operator precedence climbing and backslash-newline continuation.
 
+use crate::verified_kernels::{
+    verified_is_bc_digit, verified_lexer_peek_token_index, verified_pratt_next_min_prec,
+};
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -438,7 +441,7 @@ impl Lexer {
             };
         }
 
-        let is_digit = |ch: char| -> bool { ch.is_ascii_digit() || ('A'..='F').contains(&ch) };
+        let is_digit = |ch: char| -> bool { verified_is_bc_digit(ch as u32) };
 
         if is_digit(c) || (c == '.' && is_digit(self.peek_char(1))) {
             let mut val_chars = Vec::new();
@@ -527,7 +530,7 @@ impl Lexer {
                 break;
             }
         }
-        let idx = core::cmp::min(offset, self.buffer.len() - 1);
+        let idx = verified_lexer_peek_token_index(self.buffer.len(), offset);
         &self.buffer[idx]
     }
 }
@@ -910,7 +913,7 @@ impl Parser {
             let op_val = self.current_token.value.clone();
             self.eat(self.current_token.token_type);
 
-            let next_min_prec = if right_assoc { op_prec } else { op_prec + 1 };
+            let next_min_prec = verified_pratt_next_min_prec(op_prec, right_assoc);
             let right = self.parse_expr_precedence(next_min_prec);
 
             left = if op_class == "ASSIGN" {

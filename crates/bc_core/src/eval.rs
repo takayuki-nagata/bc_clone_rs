@@ -17,6 +17,10 @@ use num_traits::ToPrimitive;
 
 use crate::math::BCNum;
 use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Stmt};
+use crate::verified_kernels::{
+    verified_clamp_ibase, verified_clamp_obase, verified_hex_char_val,
+    verified_relational_scale_shifts, verified_wrapped_stdout_step,
+};
 
 /// Abstract output writer trait compatible with both no_std and std environments.
 pub trait BcWriter: FmtWrite + Send {
@@ -43,19 +47,19 @@ impl WrappedStdout {
     /// Writes a string to the output stream, handling wrapping if columns exceed 68.
     pub fn write_str(&mut self, s: &str) -> core::fmt::Result {
         for c in s.chars() {
-            if c == '\n' {
+            let is_newline = c == '\n';
+            let (next_col, should_wrap) = verified_wrapped_stdout_step(self.col, is_newline);
+            if is_newline {
                 self.writer.write_str("\n")?;
-                self.col = 0;
             } else {
-                if self.col >= 68 {
+                if should_wrap {
                     self.writer.write_str("\\\n")?;
-                    self.col = 0;
                 }
                 let mut buf = [0; 4];
                 let encoded = c.encode_utf8(&mut buf);
                 self.writer.write_str(encoded)?;
-                self.col += 1;
             }
+            self.col = next_col;
         }
         Ok(())
     }
@@ -205,16 +209,9 @@ impl Evaluator {
             Expr::RelationalOp(op, left, right) => {
                 let l = self.evaluate(left);
                 let r = self.evaluate(right);
-                let diff = l.scale as i64 - r.scale as i64;
-                let (coeff_l, coeff_r) = if diff > 0 {
-                    let factor = BigInt::from(10).pow(diff as u32);
-                    (l.coeff.clone(), &r.coeff * factor)
-                } else if diff < 0 {
-                    let factor = BigInt::from(10).pow((-diff) as u32);
-                    (&l.coeff * factor, r.coeff.clone())
-                } else {
-                    (l.coeff.clone(), r.coeff.clone())
-                };
+                let (shift_l, shift_r) = verified_relational_scale_shifts(l.scale, r.scale);
+                let coeff_l = &l.coeff * BigInt::from(10).pow(shift_l as u32);
+                let coeff_r = &r.coeff * BigInt::from(10).pow(shift_r as u32);
 
                 let res = match op.as_str() {
                     "==" => coeff_l == coeff_r,
@@ -240,18 +237,9 @@ impl Evaluator {
                     if let Expr::Number(num_val) = &**expr {
                         let cleaned = num_val.replace("\\\n", "");
                         if cleaned.len() == 1 {
-                            let c = cleaned.chars().next().unwrap();
+                            let b = cleaned.as_bytes()[0];
                             is_single_char = true;
-                            char_val = if c.is_ascii_digit() {
-                                (c as usize) - ('0' as usize)
-                            } else {
-                                let cu = c.to_ascii_uppercase();
-                                if ('A'..='F').contains(&cu) {
-                                    (cu as usize) - ('A' as usize) + 10
-                                } else {
-                                    0
-                                }
-                            };
+                            char_val = verified_hex_char_val(b);
                         }
                     }
                     if is_single_char {
@@ -314,28 +302,23 @@ impl Evaluator {
                                 reg_val = BigInt::from(v);
                             }
                             "ibase" => {
-                                let mut v = reg_val_usize;
-                                if v < 2 {
+                                if reg_val_usize < 2 {
                                     let _ = writeln!(
                                         self.stderr_writer,
                                         "Runtime warning (func=(main), adr=3): ibase too small, set to 2"
                                     );
-                                    v = 2;
-                                } else if v > 16 {
+                                } else if reg_val_usize > 16 {
                                     let _ = writeln!(
                                         self.stderr_writer,
                                         "Runtime warning (func=(main), adr=3): ibase too large, set to 16"
                                     );
-                                    v = 16;
                                 }
+                                let v = verified_clamp_ibase(reg_val_usize);
                                 self.ibase = v;
                                 reg_val = BigInt::from(v);
                             }
                             "obase" => {
-                                let mut v = reg_val_usize;
-                                if v < 2 {
-                                    v = 2;
-                                }
+                                let v = verified_clamp_obase(reg_val_usize);
                                 self.obase = v;
                                 reg_val = BigInt::from(v);
                             }
@@ -393,15 +376,12 @@ impl Evaluator {
                                 reg_val = BigInt::from(v);
                             }
                             "ibase" => {
-                                let v = reg_val_usize.clamp(2, 16);
+                                let v = verified_clamp_ibase(reg_val_usize);
                                 self.ibase = v;
                                 reg_val = BigInt::from(v);
                             }
                             "obase" => {
-                                let mut v = reg_val_usize;
-                                if v < 2 {
-                                    v = 2;
-                                }
+                                let v = verified_clamp_obase(reg_val_usize);
                                 self.obase = v;
                                 reg_val = BigInt::from(v);
                             }
@@ -1543,12 +1523,45 @@ mod tests {
             Box::new(Expr::Number("16".to_string())),
         )));
         assert_eq!(evaluator.ibase, 16);
+        assert!(stderr_buf.lock().unwrap().is_empty());
 
-        // 3. WrappedStdout flush
+        evaluator.execute(&Stmt::Expr(Expr::AssignOp(
+            "=".to_string(),
+            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::Number("2".to_string())),
+        )));
+        assert_eq!(evaluator.ibase, 2);
+        assert!(stderr_buf.lock().unwrap().is_empty());
+
+        // UpdateOp on ibase and obase registers
+        evaluator.ibase = 10;
+        let ibase_inc = evaluator.evaluate(&Expr::UpdateOp(
+            "++".to_string(),
+            true,
+            Box::new(Expr::RegisterAccess("ibase".to_string())),
+        ));
+        assert_eq!(ibase_inc.coeff, BigInt::from(11));
+        assert_eq!(evaluator.ibase, 11);
+
+        evaluator.obase = 10;
+        let obase_inc = evaluator.evaluate(&Expr::UpdateOp(
+            "++".to_string(),
+            true,
+            Box::new(Expr::RegisterAccess("obase".to_string())),
+        ));
+        assert_eq!(obase_inc.coeff, BigInt::from(11));
+        assert_eq!(evaluator.obase, 11);
+
+        // 3. WrappedStdout flush & 70-char wrapping
+        stdout_buf.lock().unwrap().clear();
         let mut wrapped = WrappedStdout::new(Box::new(TestWriter {
             buf: stdout_buf.clone(),
         }));
+        assert!(wrapped.write_str(&"1".repeat(70)).is_ok());
+        assert!(wrapped.write_str("\n").is_ok());
         assert!(wrapped.flush().is_ok());
+        let wrapped_out = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
+        assert_eq!(wrapped_out, format!("{}\\\n11\n", "1".repeat(68)));
     }
 
     #[test]

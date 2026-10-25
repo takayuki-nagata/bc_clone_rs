@@ -96,12 +96,7 @@ impl BCNum {
     /// Multiplies two BCNum values under scale.
     pub fn mul(&self, other: &Self, global_scale: usize) -> Self {
         let (sr, diff) = verified_mul_scale_and_shift(self.scale, other.scale, global_scale);
-        let exact_coeff = &self.coeff * &other.coeff;
-        let coeff = if diff > 0 {
-            exact_coeff / BigInt::from(10).pow(diff as u32)
-        } else {
-            exact_coeff
-        };
+        let coeff = (&self.coeff * &other.coeff) / BigInt::from(10).pow(diff as u32);
         Self::new(coeff, sr)
     }
 
@@ -937,6 +932,19 @@ mod tests {
         let diff = a.sub(&b);
         assert_eq!(diff.coeff, BigInt::from(-125));
         assert_eq!(diff.scale, 2);
+
+        let diff_rev = b.sub(&a);
+        assert_eq!(diff_rev.coeff, BigInt::from(125));
+        assert_eq!(diff_rev.scale, 2);
+
+        assert_eq!(
+            BCNum::from_string("123.45", 10).length().coeff,
+            BigInt::from(5)
+        );
+        assert_eq!(
+            BCNum::from_string("0.05", 10).length().coeff,
+            BigInt::from(2)
+        );
 
         let prod = a.mul(&b, 4);
         assert_eq!(prod.coeff, BigInt::from(3125));
