@@ -11,6 +11,8 @@ extern crate std;
 
 #[cfg(not(verus_keep_ghost))]
 pub mod eval;
+#[cfg(kani)]
+mod kani_proofs;
 #[cfg(not(verus_keep_ghost))]
 pub mod math;
 #[cfg(not(verus_keep_ghost))]
