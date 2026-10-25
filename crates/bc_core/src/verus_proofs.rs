@@ -6,6 +6,7 @@
 //! and compiled only under `#[cfg(verus_keep_ghost)]`, ensuring zero overhead or coverage impact
 //! on standard `#![no_std]` and embedded target builds.
 
+use crate::verified_kernels::*;
 use vstd::prelude::*;
 
 verus! {
@@ -13,10 +14,6 @@ verus! {
 // ============================================================================
 // Target 1: POSIX `bc` Scale Rules, Shift Calculations & Fixed-Point Arithmetic
 // ============================================================================
-
-/// Maximum verified scale bound to prevent `usize` / `i64` arithmetic overflow
-/// during scale and exponent shift calculations.
-pub const MAX_VERIFIED_SCALE: usize = 1_000_000_000;
 
 /// Mathematical specification of $10^n$ over arbitrary-precision natural numbers.
 pub open spec fn pow10(n: nat) -> int
@@ -111,23 +108,6 @@ pub proof fn lemma_bcnum_add_sub_properties(a: SpecBCNum, b: SpecBCNum)
     }
 }
 
-/// Verified POSIX scale and shift calculation for `BCNum::add` and `BCNum::sub`.
-///
-/// Mirrors `crates/bc_core/src/math.rs` (`BCNum::add` / `BCNum::sub`).
-pub fn verified_add_sub_scales(self_scale: usize, other_scale: usize) -> (res: (usize, usize, usize))
-    ensures
-        res.0 == if self_scale >= other_scale { self_scale } else { other_scale },
-        res.1 == res.0 - self_scale,
-        res.2 == res.0 - other_scale,
-        res.0 >= self_scale && res.0 >= other_scale,
-        (res.1 == 0 || res.2 == 0),
-{
-    let sr = if self_scale >= other_scale { self_scale } else { other_scale };
-    let shift_a = sr - self_scale;
-    let shift_b = sr - other_scale;
-    (sr, shift_a, shift_b)
-}
-
 /// POSIX specification for multiplication scale:
 /// $\min(a + b, \max(\text{global\_scale}, \max(a, b)))$.
 pub open spec fn spec_posix_mul_scale(a: nat, b: nat, global_scale: nat) -> nat {
@@ -140,87 +120,26 @@ pub open spec fn spec_posix_mul_scale(a: nat, b: nat, global_scale: nat) -> nat 
     }
 }
 
-/// Verified POSIX scale and truncation shift calculation for `BCNum::mul`.
-///
-/// POSIX IEEE Std 1003.1 mandates:
-/// `scale(a * b) = min(scale(a) + scale(b), max(scale, scale(a), scale(b)))`.
-/// Furthermore, proves that `exact_scale >= sr` always holds (i.e., `diff >= 0`),
-/// guaranteeing that multiplication never requires negative truncation shifts.
-pub fn verified_mul_scale_and_shift(
+/// Proof that the shared production kernel `verified_mul_scale_and_shift` in `verified_kernels.rs`
+/// conforms identically to `spec_posix_mul_scale`.
+pub fn verified_mul_scale_matches_posix_spec(
     self_scale: usize,
     other_scale: usize,
     global_scale: usize,
-) -> (res: (usize, usize, usize))
+) -> (res: (usize, usize))
     requires
         self_scale <= MAX_VERIFIED_SCALE,
         other_scale <= MAX_VERIFIED_SCALE,
         global_scale <= MAX_VERIFIED_SCALE,
     ensures
-        // res = (sr, exact_scale, truncation_diff)
-        res.1 == self_scale + other_scale,
-        res.0 <= res.1,
-        res.0 >= self_scale || res.0 >= other_scale,
-        res.2 == res.1 - res.0,
-        // Exact match with POSIX specification:
         res.0 as nat == spec_posix_mul_scale(
             self_scale as nat,
             other_scale as nat,
             global_scale as nat,
         ),
+        res.1 == (self_scale + other_scale) - res.0,
 {
-    let max_ab = if self_scale >= other_scale { self_scale } else { other_scale };
-    let max_all = if global_scale >= max_ab { global_scale } else { max_ab };
-    let exact_scale = self_scale + other_scale;
-    let sr = if exact_scale <= max_all { exact_scale } else { max_all };
-    let diff = exact_scale - sr;
-    (sr, exact_scale, diff)
-}
-
-/// Verified POSIX scale and signed decimal shift calculation for `BCNum::div`.
-///
-/// Mirrors `crates/bc_core/src/math.rs` (`BCNum::div`):
-/// `sr = global_scale`, `shift = other.scale - self.scale + sr`.
-pub fn verified_div_scale_and_shift(
-    self_scale: usize,
-    other_scale: usize,
-    global_scale: usize,
-) -> (res: (usize, i64))
-    requires
-        self_scale <= MAX_VERIFIED_SCALE,
-        other_scale <= MAX_VERIFIED_SCALE,
-        global_scale <= MAX_VERIFIED_SCALE,
-    ensures
-        res.0 == global_scale,
-        res.1 == (other_scale as int) - (self_scale as int) + (global_scale as int),
-{
-    let sr = global_scale;
-    let shift: i64 = (other_scale as i64) - (self_scale as i64) + (sr as i64);
-    (sr, shift)
-}
-
-/// Verified POSIX scale and radicand shift calculation for `BCNum::sqrt`.
-///
-/// Mirrors `crates/bc_core/src/math.rs` (`BCNum::sqrt`):
-/// `sr = max(self.scale, global_scale)`, `shift = 2 * sr - self.scale`.
-/// Proves that `2 * sr >= self.scale` always holds without underflow, and that
-/// shifting the radicand by `shift` yields an exact square scale `self.scale + shift == 2 * sr`.
-pub fn verified_sqrt_scale_and_shift(
-    self_scale: usize,
-    global_scale: usize,
-) -> (res: (usize, usize))
-    requires
-        self_scale <= MAX_VERIFIED_SCALE,
-        global_scale <= MAX_VERIFIED_SCALE,
-    ensures
-        res.0 == if self_scale >= global_scale { self_scale } else { global_scale },
-        res.0 >= self_scale,
-        res.0 >= global_scale,
-        res.1 == 2 * res.0 - self_scale,
-        self_scale + res.1 == 2 * res.0,
-{
-    let sr = if self_scale >= global_scale { self_scale } else { global_scale };
-    let shift = 2 * sr - self_scale;
-    (sr, shift)
+    verified_mul_scale_and_shift(self_scale, other_scale, global_scale)
 }
 
 /// Proof of POSIX `bc` modulo identity and truncation error bound:
@@ -385,33 +304,6 @@ pub fn verified_obase_frac_digits(obase: u64, target: u64, max_bound: u64) -> (r
 // Target 3: POSIX 70-Char Line Wrapping (`WrappedStdout`) & `Lexer` Safety
 // ============================================================================
 
-/// Maximum column index before POSIX `bc` emits a `\\\n` continuation (68 chars + `\` + `\n` = 70 chars).
-pub const POSIX_WRAP_COL_LIMIT: usize = 68;
-
-/// Verified single-character state transition for `WrappedStdout` (`crates/bc_core/src/eval.rs`).
-///
-/// Returns `(next_col, emitted_backslash_newline)`.
-/// Proves that if `col <= 68`, then `next_col <= 68` holds unconditionally, and whenever
-/// a line wrap (`\\\n`, 2 characters) is emitted, the line length including `\\\n` is at most 70.
-pub fn verified_wrapped_stdout_step(col: usize, is_newline: bool) -> (res: (usize, bool))
-    requires
-        col <= POSIX_WRAP_COL_LIMIT,
-    ensures
-        res.0 <= POSIX_WRAP_COL_LIMIT,
-        is_newline ==> (res.0 == 0 && !res.1),
-        (!is_newline && col < POSIX_WRAP_COL_LIMIT) ==> (res.0 == col + 1 && !res.1),
-        (!is_newline && col == POSIX_WRAP_COL_LIMIT) ==> (res.0 == 1 && res.1 && col + 2 <= 70),
-{
-    if is_newline {
-        (0, false)
-    } else if col >= POSIX_WRAP_COL_LIMIT {
-        // Emits "\\\n" (resets column to 0), then emits the character (col becomes 1)
-        (1, true)
-    } else {
-        (col + 1, false)
-    }
-}
-
 /// Verified multi-character stream processing loop for `WrappedStdout::write_str`.
 ///
 /// Proves that across an arbitrary input slice `bytes`, the column counter invariant
@@ -482,8 +374,9 @@ pub fn verified_lexer_advance_bytes(
 ) -> (res: (usize, usize))
     requires
         initial_pos <= text@.len(),
+        text@.len() <= 500_000_000,
         initial_line >= 1,
-        initial_line <= usize::MAX - text@.len(),
+        initial_line <= 500_000_000,
     ensures
         res.0 <= text@.len(),
         res.0 >= initial_pos,
@@ -504,8 +397,9 @@ pub fn verified_lexer_advance_bytes(
         invariant
             0 <= s <= steps,
             len == text@.len(),
+            len <= 500_000_000,
             initial_pos <= pos <= len,
-            initial_line <= usize::MAX - len,
+            initial_line <= 500_000_000,
             pos == if initial_pos + s <= len {
                 (initial_pos + s) as usize
             } else {
@@ -516,10 +410,9 @@ pub fn verified_lexer_advance_bytes(
         decreases steps - s,
     {
         if pos < len {
-            if text[pos] == b'\n' {
-                line = line + 1;
-            }
-            pos = pos + 1;
+            let (next_pos, next_line) = verified_lexer_advance_step(pos, line, text[pos] == b'\n');
+            pos = next_pos;
+            line = next_line;
         }
         s = s + 1;
     }
@@ -589,12 +482,9 @@ pub open spec fn spec_posix_pow_scale(a: nat, b: nat, global_scale: nat) -> nat 
     }
 }
 
-/// Verified POSIX scale and truncation shift calculation for `BCNum::pow` (positive exponent $b > 0$).
-///
-/// Mirrors `crates/bc_core/src/math.rs` (`BCNum::pow`):
-/// `sr = min(self.scale * b, max(global_scale, self.scale))`, `diff = self.scale * b - sr`.
-/// Proves that `self.scale * b >= sr` always holds (so `diff >= 0`).
-pub fn verified_pow_scale_and_shift(
+/// Proof that the shared production kernel `verified_pow_scale_and_shift` in `verified_kernels.rs`
+/// conforms identically to `spec_posix_pow_scale` when `res_scale == self_scale * b_val`.
+pub fn verified_pow_scale_matches_posix_spec(
     self_scale: usize,
     b_val: usize,
     global_scale: usize,
@@ -622,9 +512,7 @@ pub fn verified_pow_scale_and_shift(
         ;
     }
     let self_scale_b = self_scale * b_val;
-    let max_gs = if global_scale >= self_scale { global_scale } else { self_scale };
-    let sr = if self_scale_b <= max_gs { self_scale_b } else { max_gs };
-    let diff = self_scale_b - sr;
+    let (sr, diff) = verified_pow_scale_and_shift(self_scale_b, self_scale, global_scale);
     (sr, self_scale_b, diff)
 }
 
@@ -764,30 +652,6 @@ pub fn verified_pow_binary_loop(
 // Target 5: Base Conversion (`ibase`/`obase`) Digit Bounds, LUT Safety & Padding
 // ============================================================================
 
-/// Verified hexadecimal digit parser (`crates/bc_core/src/math.rs:45-56` & `eval.rs:245-254`).
-///
-/// Proves that any ASCII byte maps to a bounded value in $0..=15$, with exact mappings
-/// for `'0'..='9'`, `'A'..='F'`, and `'a'..='f'`.
-pub fn verified_hex_char_val(c: u8) -> (res: usize)
-    ensures
-        res <= 15,
-        (b'0' <= c && c <= b'9') ==> res == (c - b'0') as usize,
-        (b'A' <= c && c <= b'F') ==> res == (c - b'A') as usize + 10,
-        (b'a' <= c && c <= b'f') ==> res == (c - b'a') as usize + 10,
-        !((b'0' <= c && c <= b'9') || (b'A' <= c && c <= b'F') || (b'a' <= c && c <= b'f'))
-            ==> res == 0,
-{
-    if c >= b'0' && c <= b'9' {
-        (c - b'0') as usize
-    } else if c >= b'A' && c <= b'F' {
-        (c - b'A') as usize + 10
-    } else if c >= b'a' && c <= b'f' {
-        (c - b'a') as usize + 10
-    } else {
-        0
-    }
-}
-
 /// Verified fractional base conversion step and hexadecimal LUT indexing (`math.rs:306-318`).
 ///
 /// Given $0 \le \text{num} < \text{den}$ and $2 \le \text{obase} \le 16$:
@@ -870,7 +734,7 @@ pub fn verified_multi_digit_obase_padding(
         res.0 + rem_len == res.1,
 {
     let mut pad_count: usize = 0;
-    let target_pads: usize = digit_width - rem_len;
+    let target_pads: usize = verified_multi_digit_obase_pad_zeros(digit_width, rem_len);
 
     while pad_count < target_pads
         invariant
@@ -1119,64 +983,6 @@ pub proof fn lemma_bcnum_relational_total_order(a: SpecBCNum, b: SpecBCNum)
     assert(pow10(0) == 1);
 }
 
-/// Verified exponent shift calculation for relational operators (`eval.rs:208-217`).
-pub fn verified_relational_scale_shifts(l_scale: usize, r_scale: usize) -> (res: (usize, usize))
-    requires
-        l_scale <= MAX_VERIFIED_SCALE,
-        r_scale <= MAX_VERIFIED_SCALE,
-    ensures
-        // res = (shift_l, shift_r)
-        l_scale > r_scale ==> (res.0 == 0 && res.1 == l_scale - r_scale),
-        l_scale < r_scale ==> (res.0 == r_scale - l_scale && res.1 == 0),
-        l_scale == r_scale ==> (res.0 == 0 && res.1 == 0),
-        l_scale + res.0 == r_scale + res.1,
-{
-    let diff: i64 = (l_scale as i64) - (r_scale as i64);
-    if diff > 0 {
-        (0, (diff as usize))
-    } else if diff < 0 {
-        ((-diff) as usize, 0)
-    } else {
-        (0, 0)
-    }
-}
-
-/// Verified `ibase` register clamping and warning trigger (`eval.rs:316-333, 395-399`).
-///
-/// Proves that `ibase` is unconditionally constrained to $[2, 16]$ and reports whether
-/// a out-of-range warning was triggered.
-pub fn verified_clamp_ibase(reg_val: usize) -> (res: (usize, bool))
-    ensures
-        2 <= res.0 && res.0 <= 16,
-        (2 <= reg_val && reg_val <= 16) ==> (res.0 == reg_val && !res.1),
-        reg_val < 2 ==> (res.0 == 2 && res.1),
-        reg_val > 16 ==> (res.0 == 16 && res.1),
-{
-    if reg_val < 2 {
-        (2, true)
-    } else if reg_val > 16 {
-        (16, true)
-    } else {
-        (reg_val, false)
-    }
-}
-
-/// Verified `obase` register clamping (`eval.rs:334-341, 400-407`).
-///
-/// Proves that `obase` is unconditionally constrained to $\ge 2$.
-pub fn verified_clamp_obase(reg_val: usize) -> (res: usize)
-    ensures
-        res >= 2,
-        reg_val >= 2 ==> res == reg_val,
-        reg_val < 2 ==> res == 2,
-{
-    if reg_val < 2 {
-        2
-    } else {
-        reg_val
-    }
-}
-
 /// Verified dynamic scope frame push, mutation, and `ScopeGuard` drop restoration
 /// (`crates/bc_core/src/eval.rs:87-119, 454-497`).
 ///
@@ -1335,10 +1141,8 @@ pub fn verified_pratt_infix_info(tok_kind: u8) -> (res: (i8, bool, i8))
 
     let next_min_prec: i8 = if op_prec < 0 {
         0
-    } else if right_assoc {
-        op_prec
     } else {
-        op_prec + 1
+        verified_pratt_next_min_prec(op_prec, right_assoc)
     };
 
     (op_prec, right_assoc, next_min_prec)
@@ -1347,14 +1151,6 @@ pub fn verified_pratt_infix_info(tok_kind: u8) -> (res: (i8, bool, i8))
 /// Helper predicate for valid bc numeric literal characters (`0..=9` or `A..=F`).
 pub open spec fn spec_is_bc_digit(b: u8) -> bool {
     (b'0' <= b && b <= b'9') || (b'A' <= b && b <= b'F')
-}
-
-/// Executable check for valid bc numeric literal characters (`parser.rs:441`).
-pub fn verified_is_bc_digit(b: u8) -> (res: bool)
-    ensures
-        res == spec_is_bc_digit(b),
-{
-    (b >= b'0' && b <= b'9') || (b >= b'A' && b <= b'F')
 }
 
 /// Verified `Lexer` number token scanning loop (`crates/bc_core/src/parser.rs:443-468`).
@@ -1393,7 +1189,7 @@ pub fn verified_lexer_scan_number(
         decreases len - pos,
     {
         let cc = text[pos];
-        if verified_is_bc_digit(cc) {
+        if verified_is_bc_digit(cc as u32) {
             char_count = char_count + 1;
             pos = pos + 1;
         } else if cc == b'.' && !has_dot {
@@ -1413,59 +1209,9 @@ pub fn verified_lexer_scan_number(
     (pos, char_count, dot_count)
 }
 
-/// Verified `Lexer::peek_token` buffer index clamping (`crates/bc_core/src/parser.rs:521-532`).
-///
-/// Proves that as long as the lookahead buffer contains at least one token (e.g., `TokenType::Eof`),
-/// `min(offset, buffer_len - 1)` never underflows and always yields a valid in-bounds index `< buffer_len`.
-pub fn verified_lexer_peek_token_index(buffer_len: usize, offset: usize) -> (res: usize)
-    requires
-        buffer_len >= 1,
-    ensures
-        res < buffer_len,
-        offset < buffer_len ==> res == offset,
-        offset >= buffer_len ==> res == buffer_len - 1,
-{
-    let last_idx = buffer_len - 1;
-    if offset <= last_idx {
-        offset
-    } else {
-        last_idx
-    }
-}
-
 // ============================================================================
 // Target 9: `BCNum::length` & `atan` / `ln` / `bessel` Mathematical Identities
 // ============================================================================
-
-/// Verified POSIX `length(x)` significant digit count calculation (`math.rs:219-228`).
-///
-/// Proves that `length(x)` is unconditionally $\ge 1$ and $\ge \text{scale}(x)$, matching
-/// POSIX `bc` rules for both zero and non-zero integer parts.
-pub fn verified_bcnum_length(
-    int_part_is_zero: bool,
-    int_part_digits: usize,
-    scale: usize,
-) -> (res: usize)
-    requires
-        scale <= MAX_VERIFIED_SCALE,
-        int_part_digits <= MAX_VERIFIED_SCALE,
-        !int_part_is_zero ==> int_part_digits >= 1,
-    ensures
-        res >= 1,
-        res >= scale,
-        int_part_is_zero ==> res == (if scale >= 1 { scale } else { 1 }),
-        !int_part_is_zero ==> res == int_part_digits + scale,
-{
-    if int_part_is_zero {
-        if scale >= 1 {
-            scale
-        } else {
-            1
-        }
-    } else {
-        int_part_digits + scale
-    }
-}
 
 /// Verified arctangent reciprocal argument reduction $|x| > 1 \implies 1/x \in [0, 1)$
 /// (`crates/bc_core/src/math.rs:620-624` in `decimal_atan`).
@@ -1604,34 +1350,6 @@ pub fn verified_ln_cayley_transform(m_val: i64, one_val: i64) -> (res: (i64, i64
     (num_y, den_y, scaled_y)
 }
 
-/// Verified Bessel function negative-order parity identity $J_{-n}(x) = (-1)^n J_n(x)$
-/// (`crates/bc_core/src/math.rs:879-884` in `bc_bessel`).
-///
-/// Proves that `n_abs >= 0`, `sign` is strictly $\pm 1$, and negative odd orders flip sign
-/// while negative even and non-negative orders preserve sign $+1$.
-pub fn verified_bessel_negative_order_parity(n_i64: i64) -> (res: (i64, i64))
-    requires
-        n_i64 > i64::MIN,
-    ensures
-        // res = (n_abs, sign)
-        res.0 >= 0,
-        res.0 == if n_i64 < 0 { -(n_i64 as int) } else { n_i64 as int },
-        res.1 == 1 || res.1 == -1,
-        n_i64 >= 0 ==> res.1 == 1,
-        (n_i64 < 0 && (-(n_i64 as int)) % 2 == 1) ==> res.1 == -1,
-        (n_i64 < 0 && (-(n_i64 as int)) % 2 == 0) ==> res.1 == 1,
-{
-    if n_i64 < 0 {
-        let neg_n: i64 = -n_i64;
-        let neg_n_u64: u64 = neg_n as u64;
-        let rem: u64 = neg_n_u64 % 2;
-        let sign: i64 = if rem == 1 { -1 } else { 1 };
-        (neg_n, sign)
-    } else {
-        (n_i64, 1)
-    }
-}
-
 // ============================================================================
 // Target 10: `Evaluator` Prefix/Postfix `++`/`--` & Control-Flow Short-Circuiting
 // ============================================================================
@@ -1711,7 +1429,7 @@ pub fn verified_block_short_circuit(
         initial_return ==> res.2,
         initial_quit ==> res.3,
 {
-    if initial_break || initial_return || initial_quit {
+    if verified_should_abort_execution(initial_break, initial_return, initial_quit) {
         return (0, initial_break, initial_return, initial_quit);
     }
 
@@ -1722,7 +1440,7 @@ pub fn verified_block_short_circuit(
     let mut i: usize = 0;
     let len: usize = stmts.len();
 
-    while i < len && !break_flag && !return_flag && !quit_flag
+    while i < len && !verified_should_abort_execution(break_flag, return_flag, quit_flag)
         invariant
             0 <= i <= len,
             len == stmts@.len(),
@@ -1761,94 +1479,13 @@ pub fn verified_loop_flag_propagation(
         !res.1, // `break_flag` is always cleared after exiting or continuing the loop
         !break_flag ==> (res.2 == return_flag && res.3 == quit_flag),
 {
-    if break_flag {
-        (true, false, return_flag, quit_flag)
-    } else if return_flag || quit_flag {
-        (true, false, return_flag, quit_flag)
-    } else {
-        (false, false, false, false)
-    }
+    let (should_exit, next_break) = verified_loop_post_body_action(break_flag, return_flag, quit_flag);
+    (should_exit, next_break, return_flag, quit_flag)
 }
 
 // ============================================================================
 // Target 11: CLI REPL Block Scanner, C-FFI NUL Buffer Safety & Zephyr Editor
 // ============================================================================
-
-/// Verified CLI REPL `count_open_braces` & `is_block_incomplete` state machine
-/// (`crates/bc_cli/src/main.rs:78-177`).
-///
-/// Scans an arbitrary byte slice tracking `/* ... */` comments, `"..."` strings
-/// (including `\\\n` and `\\\r\n` continuations), and `{` / `}` brace nesting depth.
-/// Proves:
-/// 1. Mutual exclusion invariant: `!(in_comment && in_string)` holds at every step.
-/// 2. 100% bounds-safe slice indexing and loop termination (`decreases len - i`).
-/// 3. Brace depth is bounded by `-(len as int) <= count <= (len as int)`.
-/// 4. Exact block incompleteness criterion: `res.3 <==> (res.0 > 0 || res.1 || res.2)`.
-pub fn verified_repl_block_completeness(text: &[u8]) -> (res: (i64, bool, bool, bool))
-    requires
-        text@.len() <= 1_000_000_000,
-    ensures
-        // res = (open_brace_count, in_comment, in_string, is_incomplete)
-        !(res.1 && res.2),
-        -(text@.len() as int) <= res.0 && res.0 <= (text@.len() as int),
-        res.3 <==> (res.0 > 0 || res.1 || res.2),
-{
-    let mut count: i64 = 0;
-    let mut in_comment: bool = false;
-    let mut in_string: bool = false;
-    let mut i: usize = 0;
-    let len: usize = text.len();
-
-    while i < len
-        invariant
-            0 <= i <= len,
-            len == text@.len(),
-            len <= 1_000_000_000,
-            !(in_comment && in_string),
-            -(i as int) <= count && count <= (i as int),
-        decreases len - i,
-    {
-        let c = text[i];
-        if in_comment {
-            if c == b'*' && len - i >= 2 && text[i + 1] == b'/' {
-                in_comment = false;
-                i = i + 2;
-            } else {
-                i = i + 1;
-            }
-        } else if in_string {
-            if c == b'"' {
-                in_string = false;
-                i = i + 1;
-            } else if c == b'\\' && len - i >= 2 && text[i + 1] == b'\n' {
-                i = i + 2;
-            } else if c == b'\\' && len - i >= 3 && text[i + 1] == b'\r' && text[i + 2] == b'\n' {
-                i = i + 3;
-            } else {
-                i = i + 1;
-            }
-        } else {
-            if c == b'/' && len - i >= 2 && text[i + 1] == b'*' {
-                in_comment = true;
-                i = i + 2;
-            } else if c == b'"' {
-                in_string = true;
-                i = i + 1;
-            } else if c == b'{' {
-                count = count + 1;
-                i = i + 1;
-            } else if c == b'}' {
-                count = count - 1;
-                i = i + 1;
-            } else {
-                i = i + 1;
-            }
-        }
-    }
-
-    let is_incomplete: bool = count > 0 || in_comment || in_string;
-    (count, in_comment, in_string, is_incomplete)
-}
 
 /// Status constants matching `crates/bc_c_api/src/lib.rs` (`BcStatus`).
 pub const BC_STATUS_OK: u8 = 0;
@@ -1880,7 +1517,7 @@ pub fn verified_c_ffi_copy_nul_terminated(
             && final(out_buf)@[src@.len() as int] == 0u8
         ),
 {
-    if buf_size == 0 || src.len() >= buf_size {
+    if !verified_c_ffi_check_buf_capacity(src.len(), buf_size) {
         return BC_STATUS_ERR_BUFFER_TOO_SMALL;
     }
 
@@ -1953,18 +1590,19 @@ pub fn verified_zephyr_repl_edit_step(
             && final(line_buf)@[old(line_buf)@.len() as int] == b
         ),
 {
-    if b == b'\r' || b == b'\n' {
+    let kind = verified_zephyr_classify_char(b);
+    if kind == 1 {
         line_buf.clear();
         REPL_ACTION_EVAL_LINE
-    } else if b == 0x08 || b == 0x7F {
+    } else if kind == 2 {
         if line_buf.len() > 0 {
             let _ = line_buf.pop();
         }
         REPL_ACTION_BACKSPACE
-    } else if b == 0x03 {
+    } else if kind == 3 {
         line_buf.clear();
         REPL_ACTION_CTRL_C
-    } else if b >= 0x20 && b <= 0x7E {
+    } else if kind == 4 {
         line_buf.push(b);
         REPL_ACTION_APPEND_CHAR
     } else {

@@ -19,7 +19,8 @@ use crate::math::BCNum;
 use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Stmt};
 use crate::verified_kernels::{
     verified_clamp_ibase, verified_clamp_obase, verified_hex_char_val,
-    verified_relational_scale_shifts, verified_wrapped_stdout_step,
+    verified_loop_post_body_action, verified_relational_scale_shifts,
+    verified_should_abort_execution, verified_wrapped_stdout_step,
 };
 
 /// Abstract output writer trait compatible with both no_std and std environments.
@@ -516,7 +517,7 @@ impl Evaluator {
 
     /// Executes an AST statement node.
     pub fn execute(&mut self, node: &Stmt) {
-        if self.break_flag || self.return_flag || self.quit_flag {
+        if verified_should_abort_execution(self.break_flag, self.return_flag, self.quit_flag) {
             return;
         }
 
@@ -524,7 +525,11 @@ impl Evaluator {
             Stmt::Block(stmts) => {
                 for stmt in stmts {
                     self.execute(stmt);
-                    if self.break_flag || self.return_flag || self.quit_flag {
+                    if verified_should_abort_execution(
+                        self.break_flag,
+                        self.return_flag,
+                        self.quit_flag,
+                    ) {
                         break;
                     }
                 }
@@ -569,11 +574,13 @@ impl Evaluator {
                     break;
                 }
                 self.execute(body);
-                if self.break_flag {
-                    self.break_flag = false;
-                    break;
-                }
-                if self.return_flag || self.quit_flag {
+                let (should_break, next_break) = verified_loop_post_body_action(
+                    self.break_flag,
+                    self.return_flag,
+                    self.quit_flag,
+                );
+                self.break_flag = next_break;
+                if should_break {
                     break;
                 }
             },
@@ -585,11 +592,13 @@ impl Evaluator {
                         break;
                     }
                     self.execute(body);
-                    if self.break_flag {
-                        self.break_flag = false;
-                        break;
-                    }
-                    if self.return_flag || self.quit_flag {
+                    let (should_break, next_break) = verified_loop_post_body_action(
+                        self.break_flag,
+                        self.return_flag,
+                        self.quit_flag,
+                    );
+                    self.break_flag = next_break;
+                    if should_break {
                         break;
                     }
                     self.evaluate(post);

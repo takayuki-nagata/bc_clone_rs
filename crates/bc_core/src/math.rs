@@ -9,7 +9,9 @@
 use crate::verified_kernels::{
     verified_add_sub_scales, verified_alphanumeric_char_val, verified_bcnum_length,
     verified_bessel_negative_order_parity, verified_div_scale_and_shift,
-    verified_mul_scale_and_shift, verified_sqrt_scale_and_shift,
+    verified_mul_scale_and_shift, verified_multi_digit_obase_pad_zeros,
+    verified_pow_scale_and_shift, verified_sqrt_scale_and_shift,
+    verified_transcendental_guard_prec,
 };
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -133,15 +135,7 @@ impl BCNum {
             other.coeff.clone()
         };
 
-        if b_val.is_zero() {
-            return Self::new(BigInt::from(1), 0);
-        }
-
-        if b_val > BigInt::zero() {
-            let b_val_usize = b_val.to_usize().unwrap_or(usize::MAX);
-            let self_scale_b = self.scale.saturating_mul(b_val_usize);
-            let sr = core::cmp::min(self_scale_b, core::cmp::max(global_scale, self.scale));
-
+        if b_val >= BigInt::zero() {
             let mut res_coeff = BigInt::from(1);
             let mut res_scale = 0usize;
             let mut base_coeff = self.coeff.clone();
@@ -156,12 +150,8 @@ impl BCNum {
                 base_scale += base_scale;
                 temp_b /= 2;
             }
-            let diff = res_scale as i64 - sr as i64;
-            let coeff = if diff > 0 {
-                res_coeff / BigInt::from(10).pow(diff as u32)
-            } else {
-                res_coeff * BigInt::from(10).pow((-diff) as u32)
-            };
+            let (sr, diff) = verified_pow_scale_and_shift(res_scale, self.scale, global_scale);
+            let coeff = res_coeff / BigInt::from(10).pow(diff as u32);
             Self::new(coeff, sr)
         } else {
             let b_abs = -b_val;
@@ -247,7 +237,8 @@ impl BCNum {
                 while !temp.is_zero() {
                     let rem = (&temp % &ob).to_string();
                     let mut padded = String::new();
-                    for _ in 0..(digit_width - rem.len()) {
+                    let pad_zeros = verified_multi_digit_obase_pad_zeros(digit_width, rem.len());
+                    for _ in 0..pad_zeros {
                         padded.push('0');
                     }
                     padded.push_str(&rem);
@@ -304,7 +295,8 @@ impl BCNum {
                 for (i, &d) in frac_digits.iter().enumerate() {
                     let s = d.to_string();
                     let mut padded = String::new();
-                    for _ in 0..(digit_width - s.len()) {
+                    let pad_zeros = verified_multi_digit_obase_pad_zeros(digit_width, s.len());
+                    for _ in 0..pad_zeros {
                         padded.push('0');
                     }
                     padded.push_str(&s);
@@ -784,7 +776,7 @@ fn decimal_exp(x: &Decimal, prec: usize) -> Decimal {
 
 /// Math sine function.
 pub fn bc_sin(x: &BCNum, global_scale: usize) -> BCNum {
-    let prec = core::cmp::max(x.scale, global_scale) + 15;
+    let prec = verified_transcendental_guard_prec(x.scale, global_scale, 0);
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_sin(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
@@ -792,7 +784,7 @@ pub fn bc_sin(x: &BCNum, global_scale: usize) -> BCNum {
 
 /// Math cosine function.
 pub fn bc_cos(x: &BCNum, global_scale: usize) -> BCNum {
-    let prec = core::cmp::max(x.scale, global_scale) + 15;
+    let prec = verified_transcendental_guard_prec(x.scale, global_scale, 0);
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_cos(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
@@ -800,7 +792,7 @@ pub fn bc_cos(x: &BCNum, global_scale: usize) -> BCNum {
 
 /// Math arctangent function.
 pub fn bc_atan(x: &BCNum, global_scale: usize) -> BCNum {
-    let prec = core::cmp::max(x.scale, global_scale) + 15;
+    let prec = verified_transcendental_guard_prec(x.scale, global_scale, 0);
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_atan(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
@@ -813,7 +805,7 @@ pub fn bc_ln(x: &BCNum, global_scale: usize) -> BCNum {
             * BigInt::from(10).pow(global_scale as u32);
         return BCNum::new(coeff, global_scale);
     }
-    let prec = core::cmp::max(x.scale, global_scale) + 15;
+    let prec = verified_transcendental_guard_prec(x.scale, global_scale, 0);
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_ln(&dec_x, prec);
     dec_res.to_bc_num(global_scale)
@@ -830,7 +822,7 @@ pub fn bc_exp(x: &BCNum, global_scale: usize) -> BCNum {
     // e^x has approx (0.4343 * x) integer digits. Add int_approx / 2 extra guard precision
     // so large exponents retain all integer digits and fractional precision.
     let extra_prec = int_approx / 2;
-    let prec = core::cmp::max(x.scale, global_scale) + extra_prec + 15;
+    let prec = verified_transcendental_guard_prec(x.scale, global_scale, extra_prec);
 
     let dec_x = Decimal::from_bc_num(x, prec);
     let dec_res = decimal_exp(&dec_x, prec);
@@ -846,7 +838,7 @@ pub fn bc_bessel(n_num: &BCNum, x: &BCNum, global_scale: usize) -> BCNum {
         n_num.coeff.clone()
     };
     let n_i64 = n.to_i64().unwrap_or(0);
-    let prec = core::cmp::max(x.scale, global_scale) + 15;
+    let prec = verified_transcendental_guard_prec(x.scale, global_scale, 0);
     let dec_x = Decimal::from_bc_num(x, prec);
 
     if dec_x.is_zero() {
@@ -962,6 +954,14 @@ mod tests {
         let p = a.pow(&exp, 5);
         assert_eq!(p.coeff, BigInt::from(625));
         assert_eq!(p.scale, 2);
+
+        let p_zero = a.pow(&BCNum::zero(), 5);
+        assert_eq!(p_zero.coeff, BigInt::from(1));
+        assert_eq!(p_zero.scale, 0);
+
+        let p_trunc = BCNum::from_string("1.25", 10).pow(&exp, 1);
+        assert_eq!(p_trunc.coeff, BigInt::from(156));
+        assert_eq!(p_trunc.scale, 2);
 
         let neg_exp = BCNum::new(BigInt::from(-2), 0);
         let p_neg = a.pow(&neg_exp, 4);
@@ -1339,5 +1339,34 @@ mod tests {
         let num = BCNum::from_string("0.05", 10);
         let str_100 = num.format_obase(100);
         assert_eq!(str_100, ".05");
+    }
+
+    #[test]
+    fn test_verified_kernels_boundary_contracts() {
+        use crate::verified_kernels::*;
+        assert_eq!(verified_pow_scale_and_shift(6, 2, 4), (4, 2));
+        assert_eq!(verified_pow_scale_and_shift(3, 5, 2), (3, 0));
+        assert_eq!(verified_multi_digit_obase_pad_zeros(3, 1), 2);
+        assert_eq!(verified_multi_digit_obase_pad_zeros(2, 2), 0);
+        assert_eq!(verified_multi_digit_obase_pad_zeros(2, 3), 0);
+        assert_eq!(verified_transcendental_guard_prec(2, 4, 3), 22);
+        assert_eq!(verified_transcendental_guard_prec(5, 2, 0), 20);
+        assert_eq!(verified_transcendental_guard_prec(3, 3, 1), 19);
+        assert!(!verified_c_ffi_check_buf_capacity(0, 0));
+        assert!(verified_c_ffi_check_buf_capacity(0, 1));
+        assert!(!verified_c_ffi_check_buf_capacity(1, 1));
+        assert!(verified_c_ffi_check_buf_capacity(4, 5));
+        assert!(!verified_c_ffi_check_buf_capacity(5, 5));
+        assert_eq!(verified_zephyr_classify_char(b'\r'), 1);
+        assert_eq!(verified_zephyr_classify_char(b'\n'), 1);
+        assert_eq!(verified_zephyr_classify_char(0x08), 2);
+        assert_eq!(verified_zephyr_classify_char(0x7F), 2);
+        assert_eq!(verified_zephyr_classify_char(0x03), 3);
+        assert_eq!(verified_zephyr_classify_char(b' '), 4);
+        assert_eq!(verified_zephyr_classify_char(b'~'), 4);
+        assert_eq!(verified_zephyr_classify_char(0x1F), 0);
+        assert_eq!(verified_zephyr_classify_char(0x80), 0);
+        assert_eq!(verified_lexer_advance_step(5, 10, false), (6, 10));
+        assert_eq!(verified_lexer_advance_step(5, 10, true), (6, 11));
     }
 }

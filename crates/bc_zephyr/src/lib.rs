@@ -12,6 +12,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
+use bc_core::verified_kernels::verified_zephyr_classify_char;
 use bc_core::{BcWriter, Evaluator, Lexer, Parser};
 use core::cell::RefCell;
 use core::fmt::Write;
@@ -325,35 +326,39 @@ pub fn run_repl_with<G, P, S, W>(
         }
 
         let b = ch as u8;
-        if b == b'\r' || b == b'\n' {
-            print_str("\r\n");
-            if !line_buf.is_empty() {
-                line_buf.push('\n');
-                let lexer = Lexer::new(&line_buf);
-                let mut parser = Parser::new(lexer);
-                let stmts = parser.parse_program();
-                for stmt in &stmts {
-                    evaluator.execute(stmt);
-                }
-                let _ = evaluator.stdout_writer.flush();
+        match verified_zephyr_classify_char(b) {
+            1 => {
+                print_str("\r\n");
+                if !line_buf.is_empty() {
+                    line_buf.push('\n');
+                    let lexer = Lexer::new(&line_buf);
+                    let mut parser = Parser::new(lexer);
+                    let stmts = parser.parse_program();
+                    for stmt in &stmts {
+                        evaluator.execute(stmt);
+                    }
+                    let _ = evaluator.stdout_writer.flush();
 
-                let out = out_buf.0.borrow().clone();
-                print_str(&out);
-                out_buf.0.borrow_mut().clear();
-                line_buf.clear();
+                    let out = out_buf.0.borrow().clone();
+                    print_str(&out);
+                    out_buf.0.borrow_mut().clear();
+                    line_buf.clear();
+                }
+                print_str("bc> ");
             }
-            print_str("bc> ");
-        } else if b == 0x08 || b == 0x7F {
-            if !line_buf.is_empty() {
+            2 if !line_buf.is_empty() => {
                 line_buf.pop();
                 print_str("\x08 \x08");
             }
-        } else if b == 0x03 {
-            line_buf.clear();
-            print_str("^C\r\nbc> ");
-        } else if (0x20..=0x7E).contains(&b) {
-            line_buf.push(b as char);
-            putc(b as char);
+            3 => {
+                line_buf.clear();
+                print_str("^C\r\nbc> ");
+            }
+            4 => {
+                line_buf.push(b as char);
+                putc(b as char);
+            }
+            _ => {}
         }
     }
 }
@@ -404,6 +409,7 @@ mod tests {
     use std::sync::Mutex;
     use std::vec::Vec;
 
+    static TEST_MUTEX: Mutex<()> = Mutex::new(());
     static MOCK_CHARS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
     static MOCK_PUT_CHARS: Mutex<Vec<u8>> = Mutex::new(Vec::new());
     static MOCK_SLEPT: Mutex<u32> = Mutex::new(0);
@@ -431,6 +437,7 @@ mod tests {
 
     #[test]
     fn test_zephyr_console_writer() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         MOCK_PUT_CHARS.lock().unwrap().clear();
         let mut writer = ZephyrConsoleWriter;
         write!(writer, "test").unwrap();
@@ -444,6 +451,7 @@ mod tests {
 
     #[test]
     fn test_all_zephyr_cases() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         MOCK_PUT_CHARS.lock().unwrap().clear();
         assert!(run_self_tests());
         assert!(!MOCK_PUT_CHARS.lock().unwrap().is_empty());
@@ -451,6 +459,7 @@ mod tests {
 
     #[test]
     fn test_single_test_failure() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let fake_tc = TestCase {
             name: "Fake Failure Case",
             code: "1 + 1\n",
@@ -473,6 +482,7 @@ mod tests {
 
     #[test]
     fn test_zephyr_rust_main_qemu() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         MOCK_PUT_CHARS.lock().unwrap().clear();
         zephyr_rust_main(true);
         assert!(!MOCK_PUT_CHARS.lock().unwrap().is_empty());
@@ -480,6 +490,7 @@ mod tests {
 
     #[test]
     fn test_zephyr_rust_main_repl() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         MOCK_PUT_CHARS.lock().unwrap().clear();
         {
             let mut queue = MOCK_CHARS.lock().unwrap();
@@ -517,9 +528,10 @@ mod tests {
         let mut input = vec![
             0x08,
             0x7F,
-            b'x' as i32,
+            b'5' as i32,
+            b'9' as i32,
             0x08,
-            b'y' as i32,
+            b'7' as i32,
             0x7F,
             b'\n' as i32,
             -2,
@@ -537,7 +549,9 @@ mod tests {
             |_| {},
             None,
         );
-        assert!(out.contains("\x08 \x08"));
+        assert_eq!(out.matches("\x08 \x08").count(), 2);
+        assert!(out.contains("5\n"));
+        assert!(!out.contains("59"));
     }
 
     #[test]
@@ -571,6 +585,7 @@ mod tests {
             Some(20),
         );
 
+        assert!(output_str.borrow().contains("^C\r\nbc> "));
         assert!(output_str.borrow().contains("21"));
     }
 
@@ -592,6 +607,7 @@ mod tests {
 
     #[test]
     fn test_run_repl_direct() {
+        let _guard = TEST_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         MOCK_PUT_CHARS.lock().unwrap().clear();
         {
             let mut queue = MOCK_CHARS.lock().unwrap();

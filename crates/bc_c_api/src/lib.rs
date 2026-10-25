@@ -16,6 +16,7 @@ use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::rc::Rc;
 use alloc::string::String;
+use bc_core::verified_kernels::verified_c_ffi_check_buf_capacity;
 use bc_core::{BcWriter, Evaluator, Lexer, Parser};
 use core::cell::RefCell;
 use core::ffi::{CStr, c_char, c_void};
@@ -177,7 +178,7 @@ pub unsafe extern "C" fn bc_eval(
 
     let captured = out_shared.0.borrow().clone();
     let bytes = captured.as_bytes();
-    if bytes.len() + 1 > buf_size {
+    if !verified_c_ffi_check_buf_capacity(bytes.len(), buf_size) {
         return BcStatus::ErrBufferTooSmall;
     }
 
@@ -321,7 +322,7 @@ pub unsafe extern "C" fn bc_session_eval(
 
     let captured = sess.out_shared.0.borrow().clone();
     let bytes = captured.as_bytes();
-    if bytes.len() + 1 > buf_size {
+    if !verified_c_ffi_check_buf_capacity(bytes.len(), buf_size) {
         return BcStatus::ErrBufferTooSmall;
     }
 

@@ -62,7 +62,11 @@ macro_rules! dual_verified {
         $(
             $(#[$meta])*
             #[inline]
-            #[allow(clippy::manual_range_contains, clippy::manual_clamp)]
+            #[allow(
+                clippy::manual_range_contains,
+                clippy::manual_clamp,
+                clippy::implicit_saturating_sub
+            )]
             pub fn $name( $($arg : $arg_ty),* ) -> $ret_ty
             $body
         )+
@@ -165,6 +169,11 @@ dual_verified! {
             res.0 <= self_scale + other_scale,
             res.0 >= self_scale || res.0 >= other_scale,
             res.1 == (self_scale + other_scale) - res.0,
+            res.0 as int == (if self_scale + other_scale <= (if global_scale >= (if self_scale >= other_scale { self_scale } else { other_scale }) { global_scale } else { if self_scale >= other_scale { self_scale } else { other_scale } }) {
+                self_scale + other_scale
+            } else {
+                (if global_scale >= (if self_scale >= other_scale { self_scale } else { other_scale }) { global_scale } else { if self_scale >= other_scale { self_scale } else { other_scale } }) as int
+            }),
         ]
     {
         let max_ab = if self_scale >= other_scale {
@@ -416,6 +425,179 @@ dual_verified! {
             op_prec
         } else {
             op_prec + 1
+        }
+    }
+
+    /// Verified POSIX `pow` target scale `sr` and non-negative truncation shift `diff` (`math.rs:BCNum::pow`).
+    pub fn verified_pow_scale_and_shift(
+        res_scale: usize,
+        a_scale: usize,
+        global_scale: usize,
+    ) -> (res: (usize, usize))
+        requires [
+            res_scale <= MAX_VERIFIED_SCALE,
+            a_scale <= MAX_VERIFIED_SCALE,
+            global_scale <= MAX_VERIFIED_SCALE,
+        ]
+        ensures [
+            // res = (sr, diff)
+            res.0 <= res_scale,
+            res.0 <= if global_scale >= a_scale { global_scale } else { a_scale },
+            res.1 == res_scale - res.0,
+            res.0 + res.1 == res_scale,
+            res.0 == (if res_scale <= (if global_scale >= a_scale { global_scale } else { a_scale }) {
+                res_scale
+            } else {
+                if global_scale >= a_scale { global_scale } else { a_scale }
+            }),
+        ]
+    {
+        let max_g_a = if global_scale >= a_scale {
+            global_scale
+        } else {
+            a_scale
+        };
+        let sr = if res_scale <= max_g_a {
+            res_scale
+        } else {
+            max_g_a
+        };
+        let diff = res_scale - sr;
+        (sr, diff)
+    }
+
+    /// Verified zero-padding count for multi-digit `obase > 16` formatting (`math.rs:format_obase`).
+    pub fn verified_multi_digit_obase_pad_zeros(digit_width: usize, rem_len: usize) -> (res: usize)
+        ensures [
+            digit_width > rem_len ==> (res == digit_width - rem_len && res + rem_len == digit_width),
+            digit_width <= rem_len ==> res == 0,
+        ]
+    {
+        if digit_width > rem_len {
+            digit_width - rem_len
+        } else {
+            0
+        }
+    }
+
+    /// Verified internal guard precision calculation for transcendental functions (`math.rs`).
+    pub fn verified_transcendental_guard_prec(
+        x_scale: usize,
+        global_scale: usize,
+        extra_prec: usize,
+    ) -> (res: usize)
+        requires [
+            x_scale <= MAX_VERIFIED_SCALE,
+            global_scale <= MAX_VERIFIED_SCALE,
+            extra_prec <= MAX_VERIFIED_SCALE,
+        ]
+        ensures [
+            res >= 15,
+            res >= x_scale + extra_prec + 15,
+            res >= global_scale + extra_prec + 15,
+            res == (if x_scale >= global_scale { x_scale } else { global_scale }) + extra_prec + 15,
+        ]
+    {
+        let base_prec = if x_scale >= global_scale {
+            x_scale
+        } else {
+            global_scale
+        };
+        base_prec + extra_prec + 15
+    }
+
+    /// Verified control-flow short-circuit check (`eval.rs:Evaluator::execute`).
+    pub fn verified_should_abort_execution(
+        break_flag: bool,
+        return_flag: bool,
+        quit_flag: bool,
+    ) -> (res: bool)
+        ensures [
+            res == (break_flag || return_flag || quit_flag),
+        ]
+    {
+        break_flag || return_flag || quit_flag
+    }
+
+    /// Verified post-body loop flag transition for `while` and `for` loops (`eval.rs`).
+    ///
+    /// Returns `(should_exit_loop, next_break_flag)`.
+    pub fn verified_loop_post_body_action(
+        break_flag: bool,
+        return_flag: bool,
+        quit_flag: bool,
+    ) -> (res: (bool, bool))
+        ensures [
+            // res = (should_exit_loop, next_break_flag)
+            res.0 == (break_flag || return_flag || quit_flag),
+            !res.1,
+        ]
+    {
+        (break_flag || return_flag || quit_flag, false)
+    }
+
+    /// Verified single-character cursor and line advancement (`parser.rs:Lexer::advance_char`).
+    pub fn verified_lexer_advance_step(
+        pos: usize,
+        line: usize,
+        is_newline: bool,
+    ) -> (res: (usize, usize))
+        requires [
+            pos < 1_000_000_000,
+            line <= 1_000_000_000,
+        ]
+        ensures [
+            res.0 == pos + 1,
+            is_newline ==> res.1 == line + 1,
+            !is_newline ==> res.1 == line,
+        ]
+    {
+        let next_line = if is_newline { line + 1 } else { line };
+        (pos + 1, next_line)
+    }
+
+    /// Verified C-FFI output buffer capacity check (`crates/bc_c_api/src/lib.rs`).
+    ///
+    /// Proves that when `res == true`, `buf_size >= 1` and `output_len < buf_size`,
+    /// guaranteeing that copying `output_len` bytes and writing a trailing NUL (`0u8`)
+    /// at index `output_len` is strictly within `0..buf_size` without integer overflow.
+    pub fn verified_c_ffi_check_buf_capacity(output_len: usize, buf_size: usize) -> (res: bool)
+        ensures [
+            res == (output_len < buf_size),
+            res ==> (buf_size >= 1 && output_len <= buf_size - 1),
+        ]
+    {
+        output_len < buf_size
+    }
+
+    /// Verified character classification for the Zephyr RTOS interactive serial REPL
+    /// (`crates/bc_zephyr/src/lib.rs:run_repl_with`).
+    ///
+    /// Returns:
+    /// - `1`: Newline (`\r` or `\n`)
+    /// - `2`: Backspace / Delete (`0x08` or `0x7F`)
+    /// - `3`: Ctrl+C interrupt (`0x03`)
+    /// - `4`: Printable ASCII (`0x20..=0x7E`)
+    /// - `0`: Ignored control/non-ASCII byte
+    pub fn verified_zephyr_classify_char(b: u8) -> (res: u8)
+        ensures [
+            res <= 4,
+            (b == 13 || b == 10) <==> res == 1,
+            (b == 8 || b == 127) <==> res == 2,
+            (b == 3) <==> res == 3,
+            (32 <= b && b <= 126) <==> res == 4,
+        ]
+    {
+        if b == 13 || b == 10 {
+            1
+        } else if b == 8 || b == 127 {
+            2
+        } else if b == 3 {
+            3
+        } else if b >= 32 && b <= 126 {
+            4
+        } else {
+            0
         }
     }
 }
