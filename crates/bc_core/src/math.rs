@@ -1453,6 +1453,9 @@ mod tests {
         assert_eq!(verified_cli_classify_arg(b"-l"), CLI_ARG_OPT_L);
         assert_eq!(verified_cli_classify_arg(b"-"), CLI_ARG_OPT_INVALID);
         assert_eq!(verified_cli_classify_arg(b"-q"), CLI_ARG_OPT_INVALID);
+        assert_eq!(verified_cli_classify_arg(b"-s"), CLI_ARG_OPT_S);
+        assert_eq!(verified_cli_classify_arg(b"-w"), CLI_ARG_OPT_W);
+        assert_eq!(verified_cli_classify_arg(b"-ls"), CLI_ARG_OPT_INVALID);
         assert_eq!(verified_cli_classify_arg(b"-ll"), CLI_ARG_OPT_INVALID);
         assert_eq!(verified_cli_classify_arg(b""), CLI_ARG_FILE);
         assert_eq!(verified_cli_classify_arg(b"test.bc"), CLI_ARG_FILE);

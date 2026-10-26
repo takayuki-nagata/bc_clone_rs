@@ -92,6 +92,8 @@ dual_verified! {
     pub const CLI_ARG_OPT_L: u8 = 1;
     pub const CLI_ARG_OPT_INVALID: u8 = 2;
     pub const CLI_ARG_FILE: u8 = 3;
+    pub const CLI_ARG_OPT_S: u8 = 4;
+    pub const CLI_ARG_OPT_W: u8 = 5;
     /// Verified alphanumeric digit parser (`math.rs:BCNum::from_string`).
     ///
     /// Proves that any ASCII byte maps to a bounded value in $0..=35$, with exact mappings
@@ -713,12 +715,17 @@ dual_verified! {
     ///
     /// Returns:
     /// - `CLI_ARG_OPT_L` (`1`): `"-l"`
+    /// - `CLI_ARG_OPT_S` (`4`): `"-s"` (reject extensions)
+    /// - `CLI_ARG_OPT_W` (`5`): `"-w"` (warn about extensions)
     /// - `CLI_ARG_OPT_INVALID` (`2`): any other argument starting with `'-'`
     /// - `CLI_ARG_FILE` (`3`): filename operand
     pub fn verified_cli_classify_arg(bytes: &[u8]) -> (res: u8)
         ensures [
             (bytes@.len() == 2 && bytes@[0] == 45 && bytes@[1] == 108) <==> res == CLI_ARG_OPT_L,
-            (bytes@.len() >= 1 && bytes@[0] == 45 && !(bytes@.len() == 2 && bytes@[1] == 108))
+            (bytes@.len() == 2 && bytes@[0] == 45 && bytes@[1] == 115) <==> res == CLI_ARG_OPT_S,
+            (bytes@.len() == 2 && bytes@[0] == 45 && bytes@[1] == 119) <==> res == CLI_ARG_OPT_W,
+            (bytes@.len() >= 1 && bytes@[0] == 45
+                && !(bytes@.len() == 2 && (bytes@[1] == 108 || bytes@[1] == 115 || bytes@[1] == 119)))
                 <==> res == CLI_ARG_OPT_INVALID,
             (bytes@.len() == 0 || bytes@[0] != 45) <==> res == CLI_ARG_FILE,
         ]
@@ -727,6 +734,10 @@ dual_verified! {
         if len >= 1 && bytes[0] == 45 {
             if len == 2 && bytes[1] == 108 {
                 CLI_ARG_OPT_L
+            } else if len == 2 && bytes[1] == 115 {
+                CLI_ARG_OPT_S
+            } else if len == 2 && bytes[1] == 119 {
+                CLI_ARG_OPT_W
             } else {
                 CLI_ARG_OPT_INVALID
             }

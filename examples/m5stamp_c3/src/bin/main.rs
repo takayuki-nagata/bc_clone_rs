@@ -81,7 +81,7 @@ fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> Strin
         Box::new(out_buf.clone()),
         Box::new(out_buf.clone()),
     );
-    ev.scale = default_scale;
+    ev.set_scale(default_scale);
 
     eval_bc_non_panicking(code, &mut ev);
 

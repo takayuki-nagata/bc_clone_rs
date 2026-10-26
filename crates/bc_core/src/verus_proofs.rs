@@ -1746,6 +1746,8 @@ pub fn verified_cli_parse_args(args: &[u8]) -> (res: (bool, bool, usize, usize))
         let arg = args[i];
         if arg == CLI_ARG_OPT_L {
             math_enabled = true;
+        } else if arg == CLI_ARG_OPT_S || arg == CLI_ARG_OPT_W {
+            // Extension policy flags do not affect the initial scale or the file count.
         } else if arg == CLI_ARG_OPT_INVALID {
             return (true, math_enabled, 0, file_count);
         } else {

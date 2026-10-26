@@ -238,7 +238,7 @@ pub fn run_single_test(tc: &TestCase) -> bool {
         Box::new(out_buf.clone()),
         Box::new(out_buf.clone()),
     );
-    ev.scale = tc.scale;
+    ev.set_scale(tc.scale);
 
     eval_bc_non_panicking(tc.code, &mut ev);
 

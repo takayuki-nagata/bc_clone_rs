@@ -10,10 +10,12 @@ use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bc_core::verified_kernels::{
-    CLI_ARG_OPT_INVALID, CLI_ARG_OPT_L, verified_cli_classify_arg, verified_cli_initial_scale,
-    verified_repl_block_completeness,
+    CLI_ARG_OPT_INVALID, CLI_ARG_OPT_L, CLI_ARG_OPT_S, CLI_ARG_OPT_W, verified_cli_classify_arg,
+    verified_cli_initial_scale, verified_repl_block_completeness,
 };
-use bc_core::{BcWriter, Evaluator, RunSummary, STDIN_SOURCE, UnitAccumulator, UnitOutcome};
+use bc_core::{
+    BcWriter, Evaluator, ExtensionPolicy, RunSummary, STDIN_SOURCE, UnitAccumulator, UnitOutcome,
+};
 
 /// Adapter converting any `std::io::Write + Send` into a `bc_core::BcWriter`.
 pub struct IoWriter<W: Write + Send> {
@@ -228,12 +230,19 @@ where
     E: std::io::Write + Send + 'static,
 {
     let mut math_enabled = false;
+    let mut extension_policy = ExtensionPolicy::Allow;
     let mut files = Vec::new();
 
     for arg in args.iter().skip(1) {
         let kind = verified_cli_classify_arg(arg.as_bytes());
         if kind == CLI_ARG_OPT_L {
             math_enabled = true;
+        } else if kind == CLI_ARG_OPT_S {
+            extension_policy = ExtensionPolicy::Reject;
+        } else if kind == CLI_ARG_OPT_W {
+            if extension_policy == ExtensionPolicy::Allow {
+                extension_policy = ExtensionPolicy::Warn;
+            }
         } else if kind == CLI_ARG_OPT_INVALID {
             let opt = &arg[1..];
             let mut err_writer = stderr_writer;
@@ -245,7 +254,8 @@ where
     }
 
     let mut evaluator = create_evaluator(math_enabled, stdout_writer, stderr_writer);
-    evaluator.scale = verified_cli_initial_scale(math_enabled);
+    evaluator.set_scale(verified_cli_initial_scale(math_enabled));
+    evaluator.extension_policy = extension_policy;
 
     setup_ctrlc_handler();
 

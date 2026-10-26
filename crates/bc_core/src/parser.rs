@@ -636,6 +636,18 @@ pub enum Stmt {
     FunctionDef(FunctionDef),
 }
 
+/// How the parser treats the non-POSIX syntax listed in `docs/COMPATIBILITY.md` §4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExtensionPolicy {
+    /// Accept extensions silently (default).
+    #[default]
+    Allow,
+    /// Accept extensions and record each use as a warning (`-w`).
+    Warn,
+    /// Record each use as an error; the input unit must not be executed (`-s`).
+    Reject,
+}
+
 /// Recursive descent parser with operator precedence support for bc.
 pub struct Parser {
     pub lexer: Lexer,
@@ -644,6 +656,9 @@ pub struct Parser {
     loop_depth: usize,
     /// Whether a function body is being parsed, for rejecting a stray `return`.
     in_function: bool,
+    extension_policy: ExtensionPolicy,
+    /// Uses of extensions as `(line, description)`, recorded unless the policy is `Allow`.
+    extension_uses: Vec<(usize, String)>,
 }
 
 impl Parser {
@@ -655,6 +670,8 @@ impl Parser {
             current_token,
             loop_depth: 0,
             in_function: false,
+            extension_policy: ExtensionPolicy::Allow,
+            extension_uses: Vec::new(),
         })
     }
 
@@ -666,6 +683,39 @@ impl Parser {
     /// Triggers a syntax error during parsing.
     fn error<T>(&self, msg: &str) -> Result<T, BcError> {
         Err(BcError::syntax(self.current_token.line, String::from(msg)))
+    }
+
+    /// Sets how uses of non-POSIX syntax are treated.
+    pub fn set_extension_policy(&mut self, policy: ExtensionPolicy) {
+        self.extension_policy = policy;
+    }
+
+    /// Returns and clears the recorded uses of non-POSIX syntax, as `(line, description)` with
+    /// GNU bc's descriptions (e.g. `multiple letter name - abc`).
+    pub fn take_extension_uses(&mut self) -> Vec<(usize, String)> {
+        core::mem::take(&mut self.extension_uses)
+    }
+
+    /// Records a use of non-POSIX syntax on the line of the current token, as GNU bc does.
+    fn extension(&mut self, description: String) {
+        if self.extension_policy != ExtensionPolicy::Allow {
+            self.extension_uses
+                .push((self.current_token.line, description));
+        }
+    }
+
+    /// Consumes an identifier, recording it if it is longer than one letter (an extension).
+    fn eat_name(&mut self) -> Result<String, BcError> {
+        let name = self.current_token.value.clone();
+        self.eat(TokenType::Letter)?;
+        self.note_name(&name);
+        Ok(name)
+    }
+
+    fn note_name(&mut self, name: &str) {
+        if name.len() > 1 {
+            self.extension(format!("multiple letter name - {}", name));
+        }
     }
 
     /// Reports a statement that is not allowed where it appears, with GNU bc's wording, on the
@@ -866,7 +916,13 @@ impl Parser {
                 self.eat(TokenType::Rbrace)?;
                 Ok(Stmt::Block(stmts))
             }
-            _ => Ok(Stmt::Expr(self.parse_relational_expression()?)),
+            _ => {
+                let expr = self.parse_relational_expression()?;
+                if matches!(expr, Expr::RelationalOp(..)) {
+                    self.extension(String::from("comparison in expression"));
+                }
+                Ok(Stmt::Expr(expr))
+            }
         }
     }
 
@@ -887,6 +943,7 @@ impl Parser {
             && nt != TokenType::Eof
         {
             let expr = self.parse_expression()?;
+            self.extension(String::from("return expression requires parenthesis"));
             Ok(Stmt::Return(Some(expr)))
         } else {
             Ok(Stmt::Return(None))
@@ -907,6 +964,11 @@ impl Parser {
         self.eat(TokenType::Rparen)?;
 
         self.eat(TokenType::Lbrace)?;
+        // POSIX requires a newline after `{`; GNU bc checks the name at this point too.
+        if self.current_token.token_type != TokenType::Newline {
+            self.extension(String::from("End of line required"));
+        }
+        self.note_name(&name);
         self.skip_newlines()?;
 
         let autos = self.parse_opt_auto_define_list()?;
@@ -941,8 +1003,7 @@ impl Parser {
             if self.current_token.token_type != TokenType::Letter {
                 return self.error("expected parameter name (letter)");
             }
-            let pname = self.current_token.value.clone();
-            self.eat(TokenType::Letter)?;
+            let pname = self.eat_name()?;
             let mut is_arr = false;
             if self.current_token.token_type == TokenType::Lbracket {
                 self.eat(TokenType::Lbracket)?;
@@ -1090,8 +1151,7 @@ impl Parser {
                 Ok(Expr::ScaleCall(Box::new(expr)))
             }
             TokenType::Letter if self.peek_token_type(0)? == TokenType::Lparen => {
-                let name = self.current_token.value.clone();
-                self.eat(TokenType::Letter)?;
+                let name = self.eat_name()?;
                 self.eat(TokenType::Lparen)?;
                 let args = self.parse_opt_argument_list()?;
                 self.eat(TokenType::Rparen)?;
@@ -1138,8 +1198,7 @@ impl Parser {
                 Ok(Expr::RegisterAccess(Register::Obase))
             }
             TokenType::Letter => {
-                let name = self.current_token.value.clone();
-                self.eat(TokenType::Letter)?;
+                let name = self.eat_name()?;
                 if self.current_token.token_type == TokenType::Lbracket {
                     self.eat(TokenType::Lbracket)?;
                     let idx = self.parse_expression()?;
@@ -1170,8 +1229,7 @@ impl Parser {
                 && self.peek_token_type(0)? == TokenType::Lbracket
                 && self.peek_token_type(1)? == TokenType::Rbracket
             {
-                let name = self.current_token.value.clone();
-                self.eat(TokenType::Letter)?;
+                let name = self.eat_name()?;
                 self.eat(TokenType::Lbracket)?;
                 self.eat(TokenType::Rbracket)?;
                 args.push(ExprOrArray::ArrayArg(name));

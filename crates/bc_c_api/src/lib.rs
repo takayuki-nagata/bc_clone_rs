@@ -17,7 +17,7 @@ use alloc::ffi::CString;
 use alloc::rc::Rc;
 use alloc::string::String;
 use bc_core::verified_kernels::verified_c_ffi_check_buf_capacity;
-use bc_core::{BcWriter, Evaluator, STDIN_SOURCE};
+use bc_core::{BcWriter, Evaluator, ExtensionPolicy, STDIN_SOURCE};
 use core::cell::RefCell;
 use core::ffi::{CStr, c_char, c_void};
 use core::fmt::Write;
@@ -177,7 +177,7 @@ pub unsafe extern "C" fn bc_eval(
         Box::new(out_shared.clone()),
         Box::new(err_shared.clone()),
     );
-    ev.scale = default_scale as usize;
+    ev.set_scale(default_scale as usize);
 
     let status = eval_into_evaluator(code_str, &mut ev);
     if status != BcStatus::Ok {
@@ -249,7 +249,7 @@ pub unsafe extern "C" fn bc_eval_callback(
     });
 
     let mut evaluator = Evaluator::new(math_enabled, cb_writer_out, cb_writer_err);
-    evaluator.scale = default_scale as usize;
+    evaluator.set_scale(default_scale as usize);
 
     eval_into_evaluator(code_str, &mut evaluator)
 }
@@ -435,6 +435,30 @@ pub unsafe extern "C" fn bc_session_reset(session: *mut BcSession, math_enabled:
         Box::new(sess.out_shared.clone()),
         Box::new(sess.err_shared.clone()),
     );
+}
+
+/// Sets how a session treats non-POSIX syntax (`docs/COMPATIBILITY.md` §4):
+/// 0 accepts it (default), 1 warns like `bc -w`, 2 rejects it like `bc -s`.
+/// Returns `BcStatus::ErrExecution` for any other value.
+///
+/// # Safety
+/// - `session` must be a valid pointer obtained from `bc_session_create` or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bc_session_set_extension_policy(
+    session: *mut BcSession,
+    policy: u32,
+) -> BcStatus {
+    if session.is_null() {
+        return BcStatus::ErrNullPtr;
+    }
+    let policy = match policy {
+        0 => ExtensionPolicy::Allow,
+        1 => ExtensionPolicy::Warn,
+        2 => ExtensionPolicy::Reject,
+        _ => return BcStatus::ErrExecution,
+    };
+    unsafe { &mut *session }.evaluator.extension_policy = policy;
+    BcStatus::Ok
 }
 
 /// Destroys a bc session and frees associated memory.
@@ -624,6 +648,53 @@ mod tests {
         unsafe { bc_session_destroy(session) };
         unsafe { bc_session_destroy(core::ptr::null_mut()) }; // Null safety
         unsafe { bc_session_reset(core::ptr::null_mut(), false) }; // Null safety
+    }
+
+    #[test]
+    fn test_bc_session_extension_policy_and_scale_clamp() {
+        let session = unsafe { bc_session_create(false) };
+        let mut buf = [0 as c_char; 128];
+        let read =
+            |buf: &[c_char]| unsafe { CStr::from_ptr(buf.as_ptr()).to_str().unwrap() }.to_string();
+
+        let code = CString::new("abc = 1; abc\n").unwrap();
+        for (policy, status, out) in [
+            (0, BcStatus::Ok, "1\n"),
+            (1, BcStatus::Ok, "1\n"),
+            (
+                2,
+                BcStatus::ErrExecution,
+                "(standard_in) 1: Error: multiple letter name - abc\n\
+                 (standard_in) 2: Error: multiple letter name - abc\n",
+            ),
+        ] {
+            assert_eq!(
+                unsafe { bc_session_set_extension_policy(session, policy) },
+                BcStatus::Ok
+            );
+            assert_eq!(
+                unsafe { bc_session_eval(session, code.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+                status
+            );
+            assert_eq!(read(&buf), out);
+        }
+        assert_eq!(
+            unsafe { bc_session_set_extension_policy(session, 3) },
+            BcStatus::ErrExecution
+        );
+        assert_eq!(
+            unsafe { bc_session_set_extension_policy(core::ptr::null_mut(), 0) },
+            BcStatus::ErrNullPtr
+        );
+        unsafe { bc_session_destroy(session) };
+
+        // A default scale above BC_SCALE_MAX is clamped instead of breaking the scale invariant.
+        let scale = CString::new("scale\n").unwrap();
+        assert_eq!(
+            unsafe { bc_eval(scale.as_ptr(), false, u32::MAX, buf.as_mut_ptr(), buf.len()) },
+            BcStatus::Ok
+        );
+        assert_eq!(read(&buf), "1000000000\n");
     }
 
     #[test]

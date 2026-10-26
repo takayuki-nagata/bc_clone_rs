@@ -17,7 +17,7 @@ use num_traits::{Signed, ToPrimitive};
 
 use crate::error::{BcError, RuntimeError};
 use crate::math::{BCNum, pow10};
-use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Register, Stmt};
+use crate::parser::{Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Param, Register, Stmt};
 use crate::verified_kernels::{
     BC_BASE_MAX, BC_DIM_MAX, BC_SCALE_MAX, IBASE_MAX, verified_clamp_register,
     verified_hex_char_val, verified_loop_post_body_action, verified_relational_scale_shifts,
@@ -77,9 +77,11 @@ pub struct Evaluator {
     pub variables: BTreeMap<String, Vec<BCNum>>,
     pub arrays: BTreeMap<String, Vec<BTreeMap<BigInt, BCNum>>>,
     pub functions: BTreeMap<String, FunctionDef>,
-    pub scale: usize,
-    pub ibase: usize,
-    pub obase: usize,
+    // Registers are private so that every value stays within its valid range; in particular
+    // `scale <= BC_SCALE_MAX` is what the verified scale kernels rely on.
+    scale: usize,
+    ibase: usize,
+    obase: usize,
     pub math_enabled: bool,
     pub stdout_writer: WrappedStdout,
     pub stderr_writer: Box<dyn BcWriter>,
@@ -88,6 +90,8 @@ pub struct Evaluator {
     pub return_flag: bool,
     pub return_value: BCNum,
     pub quit_flag: bool,
+    /// How non-POSIX syntax is treated (`-s` / `-w`); applied by the input-unit driver.
+    pub extension_policy: ExtensionPolicy,
 
     /// Names of the user functions currently executing, innermost last (for diagnostics).
     call_stack: Vec<String>,
@@ -149,8 +153,29 @@ impl Evaluator {
             return_flag: false,
             return_value: BCNum::zero(),
             quit_flag: false,
+            extension_policy: ExtensionPolicy::Allow,
             call_stack: Vec::new(),
         }
+    }
+
+    /// The `scale` register.
+    pub fn scale(&self) -> usize {
+        self.scale
+    }
+
+    /// The `ibase` register.
+    pub fn ibase(&self) -> usize {
+        self.ibase
+    }
+
+    /// The `obase` register.
+    pub fn obase(&self) -> usize {
+        self.obase
+    }
+
+    /// Sets the `scale` register (e.g. a front end's default scale), clamped to `BC_SCALE_MAX`.
+    pub fn set_scale(&mut self, scale: usize) {
+        self.scale = verified_clamp_register(scale, false, 0, BC_SCALE_MAX).0;
     }
 
     /// Writes `Runtime warning (func=<current function>): <msg>` to the diagnostic stream.

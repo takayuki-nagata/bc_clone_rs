@@ -7,10 +7,11 @@
 //! reported and discards only the rest of its unit, and `quit` stops processing.
 
 use alloc::string::String;
+use alloc::vec::Vec;
 
 use crate::error::BcError;
 use crate::eval::Evaluator;
-use crate::parser::{Lexer, Parser};
+use crate::parser::{ExtensionPolicy, Lexer, Parser};
 use crate::verified_kernels::verified_repl_block_completeness;
 
 /// Source name used in syntax diagnostics for standard input, as in GNU bc.
@@ -101,17 +102,46 @@ impl Evaluator {
     /// `source` names the input in syntax diagnostics (a file name, or [`STDIN_SOURCE`]) and
     /// `first_line` is the line number of the unit's first line within that source.
     pub fn run_unit(&mut self, unit: &str, source: &str, first_line: usize) -> UnitOutcome {
-        let result = Parser::try_new(Lexer::new(unit))
-            .and_then(|mut parser| parser.try_parse_program())
-            .and_then(|stmts| {
-                for stmt in &stmts {
-                    self.try_execute(stmt)?;
-                    if self.quit_flag {
-                        return Err(BcError::Quit);
-                    }
+        let policy = self.extension_policy;
+        let mut extension_uses = Vec::new();
+        let parsed = Parser::try_new(Lexer::new(unit)).and_then(|mut parser| {
+            parser.set_extension_policy(policy);
+            let stmts = parser.try_parse_program();
+            extension_uses = parser.take_extension_uses();
+            stmts
+        });
+
+        // `-w` / `-s`: report every use of non-POSIX syntax with GNU bc's prefixes. Under `-s`
+        // the unit is not executed.
+        let prefix = if policy == ExtensionPolicy::Reject {
+            "Error: "
+        } else {
+            "(Warning) "
+        };
+        for (line, description) in &extension_uses {
+            let _ = writeln!(
+                self.stderr_writer,
+                "{} {}: {}{}",
+                source,
+                first_line + line - 1,
+                prefix,
+                description
+            );
+        }
+        if policy == ExtensionPolicy::Reject && !extension_uses.is_empty() && parsed.is_ok() {
+            let _ = self.stderr_writer.flush();
+            return UnitOutcome::Failed;
+        }
+
+        let result = parsed.and_then(|stmts| {
+            for stmt in &stmts {
+                self.try_execute(stmt)?;
+                if self.quit_flag {
+                    return Err(BcError::Quit);
                 }
-                Ok(())
-            });
+            }
+            Ok(())
+        });
         let _ = self.stdout_writer.flush();
 
         match result {

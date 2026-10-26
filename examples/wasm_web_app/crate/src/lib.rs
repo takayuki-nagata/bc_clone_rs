@@ -9,7 +9,7 @@ extern crate std;
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
-use bc_core::{BcWriter, Evaluator, STDIN_SOURCE};
+use bc_core::{BcWriter, Evaluator, ExtensionPolicy, STDIN_SOURCE};
 use core::cell::RefCell;
 use core::fmt::Write;
 use wasm_bindgen::prelude::*;
@@ -47,7 +47,7 @@ pub fn eval_bc(code: &str, math_enabled: bool, default_scale: u32) -> String {
         Box::new(out_buf.clone()),
         Box::new(err_buf.clone()),
     );
-    ev.scale = default_scale as usize;
+    ev.set_scale(default_scale as usize);
 
     eval_into_wasm(code, &mut ev);
 
@@ -123,12 +123,23 @@ impl BcSession {
 
     /// Sets the default scale precision.
     pub fn set_scale(&mut self, scale: u32) {
-        self.evaluator.scale = scale as usize;
+        self.evaluator.set_scale(scale as usize);
+    }
+
+    /// Sets how non-POSIX syntax is treated: 0 accepts it (default), 1 warns like `bc -w`,
+    /// 2 rejects it like `bc -s`. Other values are ignored.
+    pub fn set_extension_policy(&mut self, policy: u8) {
+        self.evaluator.extension_policy = match policy {
+            0 => ExtensionPolicy::Allow,
+            1 => ExtensionPolicy::Warn,
+            2 => ExtensionPolicy::Reject,
+            _ => return,
+        };
     }
 
     /// Gets the current scale precision.
     pub fn get_scale(&self) -> u32 {
-        self.evaluator.scale as u32
+        self.evaluator.scale() as u32
     }
 }
 
@@ -168,6 +179,25 @@ mod tests {
     }
 
     #[test]
+    fn test_bc_session_extension_policy_and_scale_clamp() {
+        let mut sess = BcSession::new(false);
+        assert_eq!(sess.eval("abc = 1; abc"), "1\n");
+        sess.set_extension_policy(2);
+        assert_eq!(
+            sess.eval("xyz"),
+            "(standard_in) 2: Error: multiple letter name - xyz\n"
+        );
+        sess.set_extension_policy(9);
+        assert_eq!(
+            sess.eval("xyz"),
+            "(standard_in) 2: Error: multiple letter name - xyz\n"
+        );
+        sess.set_extension_policy(0);
+        sess.set_scale(u32::MAX);
+        assert_eq!(sess.get_scale(), 1_000_000_000);
+    }
+
+    #[test]
     fn test_bc_session_lifecycle_and_error_recovery() {
         let mut sess = BcSession::new(true);
         assert_eq!(sess.get_scale(), 0);
@@ -188,7 +218,10 @@ mod tests {
         assert_eq!(sess.eval("x").trim(), "20");
 
         // Syntax error recovery and quit
-        assert!(sess.eval("1 + * 2").contains("(standard_in) 1: syntax error"));
+        assert!(
+            sess.eval("1 + * 2")
+                .contains("(standard_in) 1: syntax error")
+        );
         assert_eq!(sess.eval("quit"), "");
         assert_eq!(sess.eval("x + 2").trim(), "22");
 

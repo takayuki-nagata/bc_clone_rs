@@ -12,9 +12,9 @@ test suites: if the implementation and this document disagree, that is a bug in 
   extensions and `-w` warns about them.
 - **Known differences from GNU bc**: §5.
 
-> **Implementation status.** This specification was written at the start of the v0.4.0 cycle.
-> Items marked ⏳ are not implemented yet. Every ⏳ must be resolved (implemented, or the spec
-> changed) before v0.4.0 is tagged.
+> **Status.** Every item in this document is implemented and covered by tests in
+> `crates/bc_cli/tests/integration_tests.rs`, `scripts/run_posix_compliance_tests.sh`, or the unit
+> tests of `bc_core`. A change in behavior must update this document in the same commit.
 
 ---
 
@@ -26,7 +26,7 @@ against an expected output written by hand (not against GNU `bc`).
 ### 1.1 Invocation
 | Requirement | Notes |
 |---|---|
-| `bc [-l] [file ...]` | Files are read in order, then standard input. |
+| `bc [-l] [file ...]` | Files are read in order, then standard input. `bc_clone` also accepts `-s` and `-w` (§4); each option must be a separate argument (`-ls` is invalid) |
 | `-l` defines `s c a l e j` and sets `scale` to 20 | |
 | An unreadable file operand produces a diagnostic (`bc: cannot open file <f>`) and terminates bc with status 1 without processing anything further | Operands before it have already been processed, as in GNU |
 | Standard error is used only for diagnostics | |
@@ -167,15 +167,19 @@ GNU `bc` evaluated at `scale + 100` and truncated.
 
 ## 4. Extensions
 
-These are accepted by default. `-s` turns each into a syntax error; `-w` prints a warning and then
-accepts it. ⏳ `-s` and `-w` are not implemented yet.
+These are accepted by default. Each use is reported with GNU bc's wording, as
+`<source> <line>: (Warning) <description>` under `-w` (the unit still runs), or as
+`<source> <line>: Error: <description>` under `-s` (the unit is not executed and counts as an
+error). If both are given, `-s` wins. Embedders select the same behavior with
+`Evaluator::extension_policy`, `bc_session_set_extension_policy` (C), or
+`BcSession.set_extension_policy` (Wasm).
 
 | Extension | Example |
 |---|---|
-| Identifiers longer than one letter (letters, digits, `_`) for variables, arrays, and functions | `total = 5`, `define fib(n)` |
-| A relational expression as a statement (its value, 0 or 1, is printed) | `1 < 2` |
-| `return` with an expression that is not in parentheses | `return x + 1` |
-| A function body that does not begin with a newline after `{` | `define f(x) { return (x) }` |
+| Identifiers longer than one letter (letters, digits, `_`) for variables, arrays, functions, parameters, and `auto` names — `multiple letter name - <name>` | `total = 5`, `define fib(n)` |
+| A relational expression as a statement (its value, 0 or 1, is printed) — `comparison in expression` | `1 < 2` |
+| `return` with an expression that is not in parentheses — `return expression requires parenthesis` | `return x + 1` |
+| A function body that does not begin with a newline after `{` — `End of line required` | `define f(x) { return (x) }` |
 
 ### Not supported in v0.4.0
 These GNU `bc` extensions are a syntax error in every mode: `else`, `print`, `continue`, `halt`,
@@ -196,3 +200,4 @@ multi-letter identifiers.
 | Exit status after errors | 0 | 1 (§3.1) |
 | Diagnostics | Include `adr=N` | No address |
 | Unsupported extensions | — | §4 "Not supported" |
+| Command-line options | `-h -i -l -q -s -v -w` and long forms; options can be grouped | Only `-l`, `-s`, `-w`, one per argument; any other option is an error (status 1) |

@@ -286,6 +286,10 @@ fn proof_verified_cli_kernels() {
     let kind = verified_cli_classify_arg(slice);
     if len == 2 && slice[0] == b'-' && slice[1] == b'l' {
         assert_eq!(kind, CLI_ARG_OPT_L);
+    } else if len == 2 && slice[0] == b'-' && slice[1] == b's' {
+        assert_eq!(kind, CLI_ARG_OPT_S);
+    } else if len == 2 && slice[0] == b'-' && slice[1] == b'w' {
+        assert_eq!(kind, CLI_ARG_OPT_W);
     } else if len >= 1 && slice[0] == b'-' {
         assert_eq!(kind, CLI_ARG_OPT_INVALID);
     } else {

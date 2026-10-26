@@ -129,6 +129,15 @@ bc_status_t bc_session_eval_callback(
 void bc_session_reset(bc_session_t *session, bool math_enabled);
 
 /**
+ * Sets how a session treats non-POSIX syntax (see docs/COMPATIBILITY.md, section 4).
+ *
+ * @param session Pointer to active bc session.
+ * @param policy 0 accepts extensions (default), 1 warns like `bc -w`, 2 rejects them like `bc -s`.
+ * @return BC_STATUS_OK, BC_STATUS_ERR_NULL_PTR, or BC_STATUS_ERR_EXECUTION for an unknown policy.
+ */
+bc_status_t bc_session_set_extension_policy(bc_session_t *session, unsigned int policy);
+
+/**
  * Destroys a bc session and frees associated memory.
  *
  * @param session Pointer to session to destroy (may be NULL).

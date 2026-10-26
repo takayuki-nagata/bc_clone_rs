@@ -60,7 +60,7 @@ fn normalize_gnu_stderr(stderr: &str) -> String {
 fn expected_exit_code(gnu_code: i32, normalized_stderr: &str) -> i32 {
     let has_error = normalized_stderr
         .lines()
-        .any(|line| !line.starts_with("Runtime warning"));
+        .any(|line| !line.starts_with("Runtime warning") && !line.contains(": (Warning) "));
     if has_error { 1 } else { gnu_code }
 }
 
@@ -871,5 +871,30 @@ fn test_assignment_and_statement_placement() {
     ];
     for prog in &programs {
         check_differential(prog, &[]);
+    }
+}
+
+/// `-s` rejects and `-w` warns about the extensions in `docs/COMPATIBILITY.md` §4, with GNU bc's
+/// diagnostics; POSIX programs are unaffected.
+#[test]
+fn test_extension_policy_flags() {
+    let programs = [
+        "abc = 1; abc",
+        "1 < 2",
+        "2 == 2; 3",
+        "define f(x) {\nreturn x\n}\nf(2)",
+        "define f(x) { return (x) }\nf(2)",
+        "define f() {\nauto ab\nreturn (1)\n}",
+        "define fn() {\nreturn (1)\n}",
+        "define f(ab) {\nreturn (1)\n}",
+        "define f(x[]) {\nreturn (1)\n}\nf(ab[])",
+        "x = 1; if (x) 5",
+        "define f(x[]) {\nreturn (x[0])\n}\na[0] = 7; f(a[])",
+        "for (i = 0; i < 2; i++) i",
+    ];
+    for flag in ["-s", "-w"] {
+        for prog in &programs {
+            check_differential(prog, &[flag]);
+        }
     }
 }

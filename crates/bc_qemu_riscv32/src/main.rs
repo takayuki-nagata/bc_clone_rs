@@ -63,7 +63,7 @@ fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> Strin
         Box::new(out_buf.clone()),
         Box::new(out_buf.clone()),
     );
-    evaluator.scale = default_scale;
+    evaluator.set_scale(default_scale);
 
     evaluator.run_source(code, STDIN_SOURCE);
 
