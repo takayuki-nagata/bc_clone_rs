@@ -39,7 +39,7 @@ against an expected output written by hand (not against GNU `bc`).
 | `STRING`: any characters except `"`; a backslash-newline inside a string is kept as-is | Issue 8 wording |
 | Comments are `/* ... */` | |
 | Keywords: `auto break define ibase if for length obase quit return scale sqrt while` | |
-| A `NUMBER` is not a named expression: `A = 1` is a syntax error | ⏳ currently accepted (bug B5) |
+| A `NUMBER` is not a named expression: `A = 1` is a syntax error | |
 
 ### 1.3 Registers
 | Requirement | Notes |
@@ -82,6 +82,7 @@ exact are **truncated** (toward zero).
 | Function parameters and `auto` variables are dynamically scoped | |
 | Arrays may be passed as parameters (`f(a[])`), including as the last parameter (Issue 8, Austin Group Defect 1230) | |
 | A relational expression is valid as the condition of `if`, of `while`, and as the middle clause of `for` | Other positions: §4 |
+| An expression statement is printed unless it is an assignment | As in GNU's grammar, an assignment binds to the named expression right before it: `a + b = 3` is `a + (b = 3)` and is printed; `-a = 5` is `-(a = 5)` and is not printed; `(a = 5)` is printed |
 
 ### 1.7 Math library (`-l`)
 POSIX defines `s(x)`, `c(x)`, `a(x)`, `l(x)`, `e(x)`, and `j(n,x)`. Each result is computed to the
@@ -150,7 +151,7 @@ address (`adr=N`).
 | Exponent outside the signed 64-bit range | Runtime error `exponent too large in raise` |
 | Array subscript < 0 (including fractions like `-0.5`) or ≥ `BC_DIM_MAX` | Runtime error `Array <a> subscript out of bounds.` |
 | Input digit ≥ `ibase` | As in GNU: a single-digit number keeps its face value (`ibase=2; 3` → 3); in a multi-digit number, such a digit counts as `ibase`−1 (`ibase=2; 12` → 3) |
-| `break` outside a loop, `return` outside a function | Syntax error ⏳ |
+| `break` outside a loop, `return` outside a function | Syntax error `Break outside a for/while` / `Return outside of a function.` (GNU wording) |
 | Calling an undefined function, or calling with the wrong number of arguments | Runtime error |
 | `l(x)` with `x <= 0` | Returns −(10^scale − 1) for the caller's `scale`, like GNU's library (`scale=3; l(0)` → `-999.000`) |
 

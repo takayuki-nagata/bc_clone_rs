@@ -845,3 +845,31 @@ fn test_math_library_against_high_precision_oracle() {
         }
     }
 }
+
+/// Assignment targets, printing of assignment statements, and misplaced `break`/`return`.
+#[test]
+fn test_assignment_and_statement_placement() {
+    let programs = [
+        "A = 1; A",
+        "1 = 2",
+        "(a) = 2",
+        "a[1] = 2 = 3",
+        "a + b = 3; b",
+        "-a = 5; a",
+        "(a = 5)",
+        "-(a = 5)",
+        "x = (a = 3) + 1; x",
+        "a = 1 + b = 2; a; b",
+        "a = b = c = 4; a + b + c",
+        "break\n1",
+        "{ break }\n1",
+        "define f() { break }\n1",
+        "if (1) return\n1",
+        "return (2)\n1",
+        "define f() { while (1) { return (1) } }; f()",
+        "for (i = 0; i < 3; i++) { if (i == 1) break }; i",
+    ];
+    for prog in &programs {
+        check_differential(prog, &[]);
+    }
+}

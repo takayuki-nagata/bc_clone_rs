@@ -163,6 +163,17 @@ impl Evaluator {
         );
     }
 
+    /// Whether an expression statement is an assignment, whose value is not printed (POSIX).
+    /// As in GNU bc, unary minus keeps that property (`-a = 5` prints nothing) and parentheses
+    /// remove it (`(a = 5)` prints 5).
+    fn is_assignment(expr: &Expr) -> bool {
+        match expr {
+            Expr::AssignOp(..) => true,
+            Expr::UnaryOp('-', inner) => Self::is_assignment(inner),
+            _ => false,
+        }
+    }
+
     /// Converts the subscript `idx` of array `name` to an index, truncating it to an integer.
     /// Negative subscripts and subscripts of at least `BC_DIM_MAX` are runtime errors.
     fn array_index(name: &str, idx: &BCNum) -> Result<BigInt, BcError> {
@@ -518,6 +529,7 @@ impl Evaluator {
                 .try_sqrt(self.scale)
                 .map_err(BcError::from),
             Expr::ScaleCall(expr) => Ok(self.try_evaluate(expr)?.scale_func()),
+            Expr::Paren(expr) => self.try_evaluate(expr),
         }
     }
 
@@ -546,7 +558,7 @@ impl Evaluator {
                 }
             }
             Stmt::Expr(expr) => {
-                if let Expr::AssignOp(..) = expr {
+                if Self::is_assignment(expr) {
                     self.try_evaluate(expr)?;
                 } else {
                     let val = self.try_evaluate(expr)?;

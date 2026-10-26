@@ -600,6 +600,8 @@ pub enum Expr {
     LengthCall(Box<Expr>),
     SqrtCall(Box<Expr>),
     ScaleCall(Box<Expr>),
+    /// A parenthesized expression; kept so that `(a = 5)` is printed while `a = 5` is not.
+    Paren(Box<Expr>),
 }
 
 /// Enum wrapper for function call arguments which can be standard expressions
@@ -638,6 +640,10 @@ pub enum Stmt {
 pub struct Parser {
     pub lexer: Lexer,
     current_token: Token,
+    /// Number of enclosing `for`/`while` bodies, for rejecting a stray `break`.
+    loop_depth: usize,
+    /// Whether a function body is being parsed, for rejecting a stray `return`.
+    in_function: bool,
 }
 
 impl Parser {
@@ -647,6 +653,8 @@ impl Parser {
         Ok(Self {
             lexer,
             current_token,
+            loop_depth: 0,
+            in_function: false,
         })
     }
 
@@ -658,6 +666,24 @@ impl Parser {
     /// Triggers a syntax error during parsing.
     fn error<T>(&self, msg: &str) -> Result<T, BcError> {
         Err(BcError::syntax(self.current_token.line, String::from(msg)))
+    }
+
+    /// Reports a statement that is not allowed where it appears, with GNU bc's wording, on the
+    /// line of the current token.
+    fn misplaced<T>(&self, message: &str) -> Result<T, BcError> {
+        Err(BcError::Syntax {
+            line: self.current_token.line,
+            message: String::from(message),
+            detail: String::from(message),
+        })
+    }
+
+    /// Parses a loop body, tracking the loop nesting for `break`.
+    fn parse_loop_body(&mut self) -> Result<Stmt, BcError> {
+        self.loop_depth += 1;
+        let body = self.parse_statement();
+        self.loop_depth -= 1;
+        body
     }
 
     /// Consumes a token of the expected type, otherwise raises error.
@@ -790,31 +816,21 @@ impl Parser {
                 Ok(Stmt::StringLiteral(val))
             }
             TokenType::Break => {
+                // GNU bc reports a stray `break` on its own line, and a stray `return` on the
+                // line of the token after it.
+                if self.loop_depth == 0 {
+                    return self.misplaced("Break outside a for/while");
+                }
                 self.eat(TokenType::Break)?;
                 Ok(Stmt::Break)
             }
             TokenType::Quit => Err(BcError::Quit),
             TokenType::Return => {
-                self.eat(TokenType::Return)?;
-                if self.current_token.token_type == TokenType::Lparen {
-                    self.eat(TokenType::Lparen)?;
-                    let expr = self.parse_expression()?;
-                    self.eat(TokenType::Rparen)?;
-                    Ok(Stmt::Return(Some(expr)))
-                } else {
-                    // GNU extension: return without parentheses
-                    let nt = self.current_token.token_type;
-                    if nt != TokenType::Newline
-                        && nt != TokenType::Semicolon
-                        && nt != TokenType::Rbrace
-                        && nt != TokenType::Eof
-                    {
-                        let expr = self.parse_expression()?;
-                        Ok(Stmt::Return(Some(expr)))
-                    } else {
-                        Ok(Stmt::Return(None))
-                    }
+                let stmt = self.parse_return()?;
+                if !self.in_function {
+                    return self.misplaced("Return outside of a function.");
                 }
+                Ok(stmt)
             }
             TokenType::For => {
                 self.eat(TokenType::For)?;
@@ -825,7 +841,7 @@ impl Parser {
                 self.eat(TokenType::Semicolon)?;
                 let post = self.parse_expression()?;
                 self.eat(TokenType::Rparen)?;
-                let body = self.parse_statement()?;
+                let body = self.parse_loop_body()?;
                 Ok(Stmt::For(init, cond, post, Box::new(body)))
             }
             TokenType::If => {
@@ -841,7 +857,7 @@ impl Parser {
                 self.eat(TokenType::Lparen)?;
                 let cond = self.parse_relational_expression()?;
                 self.eat(TokenType::Rparen)?;
-                let body = self.parse_statement()?;
+                let body = self.parse_loop_body()?;
                 Ok(Stmt::While(cond, Box::new(body)))
             }
             TokenType::Lbrace => {
@@ -851,6 +867,29 @@ impl Parser {
                 Ok(Stmt::Block(stmts))
             }
             _ => Ok(Stmt::Expr(self.parse_relational_expression()?)),
+        }
+    }
+
+    /// Parses `return`, `return (e)`, or the GNU extension `return e`.
+    fn parse_return(&mut self) -> Result<Stmt, BcError> {
+        self.eat(TokenType::Return)?;
+        if self.current_token.token_type == TokenType::Lparen {
+            self.eat(TokenType::Lparen)?;
+            let expr = self.parse_expression()?;
+            self.eat(TokenType::Rparen)?;
+            return Ok(Stmt::Return(Some(expr)));
+        }
+        // GNU extension: return without parentheses
+        let nt = self.current_token.token_type;
+        if nt != TokenType::Newline
+            && nt != TokenType::Semicolon
+            && nt != TokenType::Rbrace
+            && nt != TokenType::Eof
+        {
+            let expr = self.parse_expression()?;
+            Ok(Stmt::Return(Some(expr)))
+        } else {
+            Ok(Stmt::Return(None))
         }
     }
 
@@ -871,7 +910,11 @@ impl Parser {
         self.skip_newlines()?;
 
         let autos = self.parse_opt_auto_define_list()?;
-        let body = self.parse_statement_list()?;
+        let outer = (self.loop_depth, self.in_function);
+        (self.loop_depth, self.in_function) = (0, true);
+        let body = self.parse_statement_list();
+        (self.loop_depth, self.in_function) = outer;
+        let body = body?;
         self.eat(TokenType::Rbrace)?;
 
         Ok(Stmt::FunctionDef(FunctionDef {
@@ -965,16 +1008,17 @@ impl Parser {
                 break;
             }
 
+            if op_class == "ASSIGN" {
+                // Assignments to named expressions are parsed in `parse_primary`; anything
+                // else on the left (`1 = 2`, `(a) = 2`, `a = 1 = 2`) is not assignable.
+                return self.error("assignment to an expression that is not a named expression");
+            }
+
             let op_val = self.current_token.value.clone();
             self.eat(self.current_token.token_type)?;
 
             let right = self.parse_expr_precedence(next_min_prec)?;
-
-            left = if op_class == "ASSIGN" {
-                Expr::AssignOp(op_val, Box::new(left), Box::new(right))
-            } else {
-                Expr::BinaryOp(op_val, Box::new(left), Box::new(right))
-            };
+            left = Expr::BinaryOp(op_val, Box::new(left), Box::new(right));
         }
         Ok(left)
     }
@@ -1022,7 +1066,7 @@ impl Parser {
                 self.eat(TokenType::Lparen)?;
                 let expr = self.parse_expression()?;
                 self.eat(TokenType::Rparen)?;
-                Ok(expr)
+                Ok(Expr::Paren(Box::new(expr)))
             }
             TokenType::Length => {
                 self.eat(TokenType::Length)?;
@@ -1055,12 +1099,23 @@ impl Parser {
             }
             _ => {
                 let target = self.parse_named_expression()?;
-                if self.current_token.token_type == TokenType::IncrDecr {
-                    let op = self.current_token.value.clone();
-                    self.eat(TokenType::IncrDecr)?;
-                    Ok(Expr::UpdateOp(op, false, Box::new(target)))
-                } else {
-                    Ok(target)
+                match self.current_token.token_type {
+                    TokenType::IncrDecr => {
+                        let op = self.current_token.value.clone();
+                        self.eat(TokenType::IncrDecr)?;
+                        Ok(Expr::UpdateOp(op, false, Box::new(target)))
+                    }
+                    // As in GNU bc's grammar, an assignment operator binds to the named
+                    // expression right before it: `a + b = 3` is `a + (b = 3)` and `-a = 5`
+                    // is `-(a = 5)`. The right-hand side extends as far as possible.
+                    TokenType::AssignOp => {
+                        let op = self.current_token.value.clone();
+                        self.eat(TokenType::AssignOp)?;
+                        let (_, _, rhs_min_prec) = verified_pratt_infix_info(TOK_ASSIGN_OP);
+                        let value = self.parse_expr_precedence(rhs_min_prec)?;
+                        Ok(Expr::AssignOp(op, Box::new(target), Box::new(value)))
+                    }
+                    _ => Ok(target),
                 }
             }
         }
@@ -1241,6 +1296,91 @@ mod tests {
     fn test_lexer_unterminated_comment() {
         let mut lexer = Lexer::new("/* unterminated");
         let _ = lexer.get_next_token();
+    }
+
+    fn parse_err(src: &str) -> BcError {
+        Parser::try_new(Lexer::new(src))
+            .and_then(|mut p| p.try_parse_program())
+            .unwrap_err()
+    }
+
+    #[test]
+    fn test_misplaced_break_and_return_are_syntax_errors() {
+        for (src, line, message) in [
+            ("break\n", 1, "Break outside a for/while"),
+            ("{ break }\n", 1, "Break outside a for/while"),
+            ("define f() { break }\n", 1, "Break outside a for/while"),
+            ("while (1) { define f() { break } }\n", 1, "syntax error"),
+            ("return\n", 2, "Return outside of a function."),
+            ("if (1) return (1)\n", 2, "Return outside of a function."),
+        ] {
+            match parse_err(src) {
+                BcError::Syntax {
+                    line: l,
+                    message: m,
+                    ..
+                } => assert_eq!((l, m.as_str()), (line, message), "{src:?}"),
+                other => panic!("{src:?}: {other:?}"),
+            }
+        }
+        // Allowed: break in a loop inside a function, return inside a loop in a function.
+        let ok = "define f() { while (1) { break }; for (i = 0; 1; i++) return (1) }\n";
+        assert!(
+            Parser::try_new(Lexer::new(ok))
+                .and_then(|mut p| p.try_parse_program())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_assignment_binds_to_preceding_named_expression() {
+        let parse = |src: &str| {
+            let stmts = Parser::new(Lexer::new(src)).parse_program();
+            match &stmts[0] {
+                Stmt::Block(v) => match &v[0] {
+                    Stmt::Expr(e) => e.clone(),
+                    other => panic!("{other:?}"),
+                },
+                other => panic!("{other:?}"),
+            }
+        };
+        let var = |n: &str| Box::new(Expr::Variable(n.to_string()));
+        let num = |n: &str| Box::new(Expr::Number(n.to_string()));
+        assert_eq!(
+            parse("a + b = 3\n"),
+            Expr::BinaryOp(
+                "+".to_string(),
+                var("a"),
+                Box::new(Expr::AssignOp("=".to_string(), var("b"), num("3")))
+            )
+        );
+        assert_eq!(
+            parse("-a = 5\n"),
+            Expr::UnaryOp(
+                '-',
+                Box::new(Expr::AssignOp("=".to_string(), var("a"), num("5")))
+            )
+        );
+        assert_eq!(
+            parse("(a = 5)\n"),
+            Expr::Paren(Box::new(Expr::AssignOp(
+                "=".to_string(),
+                var("a"),
+                num("5")
+            )))
+        );
+        for src in [
+            "A = 1\n",
+            "1 = 2\n",
+            "(a) = 2\n",
+            "a = 1 = 2\n",
+            "++a = 1\n",
+        ] {
+            assert!(
+                matches!(parse_err(src), BcError::Syntax { .. }),
+                "{src:?} must be a syntax error"
+            );
+        }
     }
 
     #[test]
@@ -1588,7 +1728,7 @@ mod tests {
 
         // Verify statement & primary expression variants in try_parse_program
         let mut parser_variants = Parser::try_new(Lexer::new(
-            "\"hello\"\nbreak\nif (1) x = 2\nlength(123)\nscale(1.23)\nobase = 16\nscale = 4\n",
+            "\"hello\"\nwhile (0) break\nif (1) x = 2\nlength(123)\nscale(1.23)\nobase = 16\nscale = 4\n",
         ))
         .unwrap();
         let stmts = parser_variants.try_parse_program().unwrap();
@@ -1597,7 +1737,9 @@ mod tests {
             stmts[0],
             Stmt::Block(vec![Stmt::StringLiteral("hello".to_string())])
         );
-        assert_eq!(stmts[1], Stmt::Block(vec![Stmt::Break]));
+        assert!(
+            matches!(&stmts[1], Stmt::Block(v) if matches!(&v[0], Stmt::While(_, body) if **body == Stmt::Break))
+        );
         assert!(matches!(&stmts[2], Stmt::Block(v) if matches!(&v[0], Stmt::If(_, _))));
         assert!(
             matches!(&stmts[3], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::LengthCall(_))))
