@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/ci.yml/badge.svg)](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/ci.yml)
 [![Release](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/release.yml/badge.svg)](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/release.yml)
-[![Version](https://img.shields.io/badge/version-v0.2.0-blue.svg)](https://github.com/takayuki-nagata/bc_clone_rs/releases)
+[![Version](https://img.shields.io/badge/version-v0.3.0-blue.svg)](https://github.com/takayuki-nagata/bc_clone_rs/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A production-grade, POSIX-compliant arbitrary-precision calculator implemented in pure, idiomatic Rust (`bc_clone_rs`), generating the `bc_clone` executable binary. This project is a complete rewrite/reimplementation of the original Python-based `bc_clone_py`.
 
 > [!NOTE]
-> **AI Agent Notice**: This repository was completely designed, implemented, and verified by **Antigravity**, an advanced AI coding agent developed by Google DeepMind. Every line of production code, unit and integration test, CI/CD pipeline, and documentation was generated, iterated on, and refined by the AI agent to meet strict software engineering standards.
+> **AI Agent Notice**: This repository is developed by AI coding agents under human direction. Versions v0.1.0–v0.3.0 were written by **Antigravity** (Google DeepMind); from v0.4.0 development continues with **Claude Code** (Anthropic). See [AGENTS.md](AGENTS.md) for the design and verification architecture.
 
 ## Features
 

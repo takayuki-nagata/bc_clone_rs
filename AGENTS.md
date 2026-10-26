@@ -1,178 +1,171 @@
-# AI Agent Design & Architecture: bc_clone
+# bc_clone_rs: Design, Verification Architecture & Agent Guide
 
-This document outlines the design decisions, technical architecture, and mathematical algorithms implemented by the AI coding agent (**Antigravity**) for the Rust-based `bc` calculator clone (`bc_clone`).
+This document describes the architecture, numerical algorithms, and verification strategy of
+`bc_clone_rs`, a Rust implementation of the POSIX `bc` calculator (binary: `bc_clone`). It is the
+reference for both human contributors and AI coding agents.
 
-## System Architecture Overview
+> Development history: v0.1.0–v0.3.0 were written by the Antigravity agent. From v0.4.0 the project
+> is developed with Claude Code. Statements in this file are kept in sync with the code; when you
+> change behavior or verification coverage, update this file in the same commit.
 
-The system is designed with clean separation of concerns, divided into two distinct crates within a Cargo Workspace:
+## Specification
+
+- **Authoritative specification**: POSIX.1-2024 (Issue 8), `bc` utility —
+  <https://pubs.opengroup.org/onlinepubs/9799919799/utilities/bc.html>.
+- Where POSIX leaves behavior undefined or unspecified, `bc_clone` chooses behavior close to
+  GNU `bc` 1.08 and documents it as implementation-defined in `docs/COMPATIBILITY.md`.
+- GNU extensions (multi-letter names, `else`, `print`, `continue`, relational operators as
+  expressions, bare `return`, …) are accepted by default.
+- Results of the `-l` math library are defined as the mathematically exact value truncated toward
+  zero at the current `scale`; GNU `bc` output is *not* the oracle for these functions.
+
+## Workspace Layout
 
 ```mermaid
 graph TD
-    CLI[crates/bc_cli/src/main.rs: CLI & REPL Loop] --> Core[crates/bc_core: #![no_std] + alloc Core Engine]
-    Core --> Lexer[crates/bc_core/src/parser.rs: Lexer]
-    Lexer --> Parser[crates/bc_core/src/parser.rs: Pratt Parser]
-    Parser --> AST[AST Nodes / Statements]
-    AST --> Evaluator[crates/bc_core/src/eval.rs: Evaluator]
-    Evaluator --> Math[crates/bc_core/src/math.rs: BCNum & Decimal Math]
+    CLI[crates/bc_cli: CLI & REPL] --> Core[crates/bc_core: no_std + alloc engine]
+    CAPI[crates/bc_c_api: C ABI staticlib] --> Core
+    Zephyr[crates/bc_zephyr: Zephyr RTOS app logic] --> Core
+    QEMU[crates/bc_qemu_riscv32: bare-metal self-test] --> Core
+    Wasm[examples/wasm_web_app/crate: wasm-bindgen] --> Core
+    Core --> Parser[parser.rs: Lexer + Pratt parser]
+    Core --> Eval[eval.rs: Evaluator]
+    Core --> Math[math.rs: BCNum + Decimal]
+    Core --> Kernels[verified_kernels.rs: dual-mode kernels]
 ```
 
-### 1. Lexical Analysis and Parsing (`crates/bc_core/src/parser.rs`)
-- **Lexer**: Tokenizes input character streams. Handles dynamic line number tracking, single and multi-line comments (`/* ... */`), string literals, escape characters, and backslash-newline continuation.
-- **Parser**: A recursive descent parser utilizing Pratt parsing (precedence climbing) for algebraic expressions. 
-  - Resolves operator precedence and associativity (e.g., right-associative exponentiation `^` and assignments).
-  - Emits a clean AST consisting of `Stmt` (Statements) and `Expr` (Expressions).
-  - Handles the GNU extension permitting `return` without enclosing parentheses.
+| Path | Role |
+|---|---|
+| `crates/bc_core` | `#![no_std]` + `alloc` engine: lexer, parser, evaluator, arithmetic, math library |
+| `crates/bc_cli` | `bc_clone` binary: option parsing, file/stdin processing, interactive REPL, SIGINT |
+| `crates/bc_c_api` | C ABI (`include/bc_core.h`): `bc_eval`, `bc_eval_callback`, `bc_session_*` |
+| `crates/bc_zephyr` | Zephyr RTOS application logic (self-tests, serial REPL); C trampoline in `examples/zephyr_app` |
+| `crates/bc_qemu_riscv32` | Bare-metal RISC-V 32 self-test runner for QEMU `virt` |
+| `examples/m5stamp_c3` | ESP32-C3 bare-metal app (`esp-hal`) |
+| `examples/wasm_web_app` | Browser frontend backed by `bc_core` compiled to `wasm32-unknown-unknown` |
 
-### 2. Arbitrary-Precision Math (`crates/bc_core/src/math.rs`)
-- **`BCNum`**: The primary representation for user-facing numbers. Stores numbers as a `coeff: BigInt` coefficient and a `scale: usize` representing the number of fractional decimal digits.
-  - Implements POSIX-compliant truncation/extension semantics for addition, subtraction, multiplication, division, modulo, and exponentiation.
-  - Handles base conversion under arbitrary input bases (`ibase` in $[2, 16]$) and output bases (`obase` in $[2, \infty]$).
-  - Fractional digit calculation for non-decimal `obase` uses exact `BigInt` power inequalities ($obase^k \ge 10^{scale}$) without floating-point `ln()` or `libm`, ensuring full `#![no_std]` compliance.
-- **`Decimal`**: An internal, high-precision fixed-point helper type used specifically for computing transcendental functions. Pairwise operations are computed with an extra guard precision of 15 decimal digits.
+## Core Engine (`crates/bc_core`)
 
-### 3. AST Execution and Scoping (`crates/bc_core/src/eval.rs`)
-- **Stack-based Scoping**: POSIX `bc` uses dynamic scoping. When a function is called, variables and arrays declared as `auto` are pushed onto a global stack map. Uses `alloc::collections::BTreeMap` for memory-compact, zero-entropy, `no_std`-safe storage.
-- **BcWriter & WrappedStdout**: Abstract output stream wrapping (`BcWriter` trait) that formats number output lines to stay within 70 characters as mandated by POSIX, wrapping lines with a backslash-newline when necessary without `std::io` dependencies.
+### Lexer and parser (`src/parser.rs`)
+- The lexer tracks line numbers and handles `/* */` comments, strings, and backslash-newline
+  continuation.
+- The parser is recursive descent, with Pratt precedence climbing for expressions. Assignment and
+  `^` are right-associative. Precedence and associativity come from `verified_pratt_infix_info`.
+- Fallible API: `Lexer::try_get_next_token`, `Parser::try_new`, `Parser::try_parse_program`.
+  `quit` makes `try_parse_program` return `Err("quit")` so execution stops at that point, as
+  POSIX requires.
 
-### 4. Entry Point & REPL Loop (`crates/bc_cli/src/main.rs`)
-- **Option Parsing**: Handled natively without external dependencies, adhering strictly to POSIX option-argument combinations (e.g., `-l` flag to load the math library).
-- **Interactive REPL**: Employs an input accumulator that counts open braces and backslash-newlines to determine block completeness before evaluating. Bypasses signal registration under `#[cfg(test)]` to permit isolated, parallel tests.
-- **IoWriter**: Adapts host `std::io::Write` streams into `bc_core::BcWriter`.
+### Numbers (`src/math.rs`)
+- `BCNum { coeff: BigInt, scale: usize }` represents `coeff × 10^-scale`. Arithmetic follows the
+  POSIX scale rules. The scale and shift computations are delegated to kernels in
+  `verified_kernels.rs`.
+- Fallible API: `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`. The panicking wrappers (`div`,
+  `pow`, …) exist for tests and internal convenience only.
+- Output for `obase != 10` uses exact `BigInt` arithmetic. The number of fractional digits is the
+  smallest `k` with `obase^k >= 10^scale`, so no floating point or `libm` is needed.
+- `Decimal { value: BigInt, prec: usize }` is a fixed-point helper used only by the math library.
 
----
+### Math library (`-l`)
+Every function computes internally with guard digits and truncates to the caller's `scale`.
 
-## Math Library and Transcendental Approximations
+| Function | Algorithm (as implemented) |
+|---|---|
+| π (internal) | Machin's formula `π = 4·(4·atan(1/5) − atan(1/239))`, with atan by Taylor series (`get_pi`) |
+| `s(x)`, `c(x)` | Reduce `x` modulo 2π into `[-π, π]`, then use the Taylor series directly (10 guard digits) |
+| `a(x)` | For `|x| > 1` use `π/2 − atan(1/x)`. Then apply four argument halvings `x/(1+√(1+x²))`, the Taylor series, and multiply by 16 |
+| `l(x)` | Write `x = m·2^k` with `m ≥ 0.707`, then use `ln m = 2·artanh((m−1)/(m+1))`. `ln 2` comes from `2·artanh(1/3)` (15 guard digits) |
+| `e(x)` | Write `x = n·ln2 + r`, use the Taylor series for `e^r`, then multiply by `2^n`. Extra guard digits scale with the size of `x` |
+| `j(n,x)` | Power series of `J_n`; for negative orders, `J_{-n} = (-1)^n J_n` |
 
-All transcendental functions in `src/bc_math.rs` are calculated using `Decimal` fixed-point representations and Taylor series expansions with dynamic scaling/argument reduction.
+Known limitation (v0.4.0 work item): the guard precision of the 2π reduction in `s`/`c` does not
+grow with `|x|`, so very large arguments lose accuracy (e.g. `scale=20; s(10^40)`).
 
-### 1. Exponential function (`e(x)`)
-To compute $e^x$ with high precision:
-- **Argument Reduction**: We express $x$ as $x = n \ln(2) + r$, where $n$ is an integer and $r \in [0, \ln(2))$.
-- **Taylor Series**: We calculate $e^r$ using its Taylor expansion:
-  $$e^r = \sum_{k=0}^{\infty} \frac{r^k}{k!}$$
-  Because $r < \ln(2) \approx 0.693$, this series converges extremely rapidly.
-- **Reconstruction**: The final value is computed as $e^x = e^r \cdot 2^n$. Multiplication by $2^n$ is performed via binary exponentiation.
+### Evaluator (`src/eval.rs`)
+- Dynamic scoping: each variable or array name maps to a stack. Function parameters and `auto`
+  locals push a new entry on entry. `BTreeMap` keeps the storage `no_std`-friendly and deterministic.
+- `ScopeGuard` (RAII) pops the parameter and `auto` frames and restores the caller's control-flow
+  flags on every exit path, including `Err` returns and panics.
+- Output goes through the `BcWriter` trait. `WrappedStdout` wraps long numbers at 70 columns with
+  `\` + newline, as POSIX requires.
+- Fallible API: `Evaluator::try_evaluate`, `Evaluator::try_execute`.
 
-### 2. Natural Logarithm (`l(x)`)
-To compute $\ln(x)$:
-- **Argument Reduction**: We normalize the coefficient of the input $x$ to $x = m \cdot 2^k$, where $m \in [1/\sqrt{2}, \sqrt{2}]$.
-- **Taylor Series**: We compute $\ln(m)$ using the rapid expansion:
-  $$\ln\left(\frac{1+y}{1-y}\right) = 2 \sum_{n=0}^{\infty} \frac{y^{2n+1}}{2n+1}$$
-  where $y = \frac{m-1}{m+1}$. Since $m \in [0.707, 1.414]$, $y \in [-0.171, 0.171]$, guaranteeing rapid convergence.
-- **Reconstruction**: The result is reconstructed as $\ln(x) = \ln(m) + k \ln(2)$, where $\ln(2)$ is precomputed to the required precision.
+### Error handling contract
+- `bc_core` itself never needs to panic on user input. Every syntax or runtime error must be
+  reachable as an `Err` from the `try_*` APIs.
+- `bc_c_api`, `bc_zephyr`, `bc_qemu_riscv32`, the ESP32-C3 app, and Wasm call only the `try_*`
+  APIs. This matters because `catch_unwind` does not work under `panic = "abort"` or on
+  `wasm32-unknown-unknown`.
+- Known issue (v0.4.0 work item): `bc_cli` still drives the panicking wrappers inside
+  `catch_unwind`. As a result, runtime errors print a Rust panic message to stderr.
 
-### 3. Trigonometric Functions (`s(x)`, `c(x)`)
-- **Argument Reduction**: Reduce $x$ modulo $2\pi$ to the range $[-\pi, \pi]$, then divide by a power of 2 ($2^p$) until the argument is small enough (typically $< 0.05$) to ensure fast convergence.
-- **Taylor Series**: Compute $\sin$ and $\cos$ of the reduced argument $x'$:
-  $$\sin(x') = \sum_{k=0}^{\infty} (-1)^k \frac{x'^{2k+1}}{(2k+1)!}, \quad \cos(x') = \sum_{k=0}^{\infty} (-1)^k \frac{x'^{2k}}{(2k)!}$$
-- **Double-Angle Formula**: Double the result $p$ times using trigonometric identities:
-  $$\sin(2\theta) = 2 \sin(\theta) \cos(\theta), \quad \cos(2\theta) = 2\cos^2(\theta) - 1$$
+## Verified Kernels (`src/verified_kernels.rs`)
 
-### 4. Arctangent (`a(x)`)
-- **Argument Reduction**: If $|x| > 1$, we use $\arctan(x) = \frac{\pi}{2} - \arctan(1/x)$.
-- **Taylor Series**: For small $x$, we use:
-  $$\arctan(x) = \sum_{k=0}^{\infty} (-1)^k \frac{x^{2k+1}}{2k+1}$$
+Small pure functions are defined once with `dual_verified!` / `dual_verified_repl_scanner!`:
 
-### 5. Bessel Function (`j(n, x)`)
-- Computed using the infinite series definition for integer order $n$:
-  $$J_n(x) = \sum_{m=0}^{\infty} \frac{(-1)^m (x/2)^{2m+n}}{m! (m+n)!}$$
-  For negative orders, we apply the identity $J_{-n}(x) = (-1)^n J_n(x)$.
+- under Verus (`cfg(verus_keep_ghost)`), they expand inside `verus! {}` with their
+  `requires`/`ensures` contracts;
+- under normal builds, the same bodies compile as `#[inline]` functions that are called from
+  production code.
 
----
+Examples are the POSIX scale and shift computations for `+ - * / sqrt ^`, digit parsing,
+`ibase`/`obase` clamping, the `WrappedStdout` column step, lexer cursor and lookahead bounds, Pratt
+precedence, the C-FFI buffer-capacity check, the Zephyr REPL character class, the CLI argument
+class, and the REPL block-completeness scanner.
 
-## Design Choices & Lessons Learned
+**Preconditions are not checked at runtime.** Several kernels require `scale <= MAX_VERIFIED_SCALE`
+(10^9). A caller that can pass larger values voids the proof. Callers must establish the
+precondition (for example by clamping), and any new caller must be reviewed for this.
 
-### 1. Robust and Safe Error Recovery (Fallible `#![no_std]` API & CLI Unwind Guard)
-- **Fallible `#![no_std]` Execution Pipeline (`bc_core`)**: `BCNum` (`try_div`, `try_mod_op`, `try_pow`, `try_sqrt`), `Lexer` (`try_get_next_token`, `try_peek_token`), `Parser` (`try_new`, `try_parse_program`), and `Evaluator` (`try_evaluate`, `try_execute`) expose complete `Result<_, _>` execution paths that never panic on syntax errors or invalid runtime math (division by zero, negative square root, argument mismatches, undefined functions). This eliminates undefined behavior across `extern "C"` FFI boundaries (`bc_c_api`), RTOS threads (`bc_zephyr`), bare-metal `panic = "abort"` firmware (`bc_qemu_riscv32`, `examples/m5stamp_c3`), and WebAssembly (`bc_wasm` `wasm32-unknown-unknown`).
-- **Host CLI Unwind Guard (`bc_cli`)**: Existing panicking convenience wrappers (`div`, `mod_op`, `pow`, `sqrt`, `get_next_token`, `peek_token`, `Parser::new`, `parse_program`, `evaluate`, `execute`) delegate directly to the `try_*` APIs and remain wrapped inside `std::panic::catch_unwind` in `bc_cli`, preserving 100% POSIX/GNU `bc` CLI error formatting and unit test compatibility.
+## Verification Stack — What Is and Is Not Covered
 
-### 2. Immediate Exit on `quit`
-POSIX `bc` terminates immediately upon reading the `quit` keyword, even if it resides on a line with other statements. In `Parser::try_parse_program`, `TokenType::Quit` immediately returns `Err("quit".to_string())`, which `Parser::parse_program` converts into a targeted `"quit"` panic on the CLI or handles cleanly without panicking in C-FFI/embedded/Wasm sessions.
-- **Silent Quit Hook**: To prevent Rust's default panic handler from printing an unsightly panic message/backtrace to `stderr` during `quit` in `bc_cli`, we registered a custom panic hook in `fn main()`. This hook intercepts `"quit"` panic payloads and exits silently, while letting other unexpected panics format tracebacks normally.
+| Layer | Tool / script | What it actually establishes |
+|---|---|---|
+| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `verus_proofs.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions. `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **standalone model functions that production code does not call** (e.g. `verified_pow_binary_loop`, `verified_scope_guard_lifecycle`, `verified_trig_range_reduction`). Those results apply to the models, not to `math.rs`/`eval.rs`. |
+| Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only). C-API NULL and zero-size guards hold. The CLI brace scanner is consistent. The C-FFI copy harness currently re-implements the copy pattern instead of calling the production code. |
+| UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, and `bc_cli` (strict provenance, symbolic alignment). |
+| Property tests | proptest — `crates/bc_core/tests/proptest_suite.rs` | Algebraic properties (add/sub, mul scale, the div/mod identity), integer base round-trips, and the parser/evaluator do not panic on bounded inputs. There is no value oracle yet, and scales are limited to ≤ 10. |
+| Differential tests | `crates/bc_cli/tests/integration_tests.rs`, `scripts/run_gnu_reference_tests.sh`, `scripts/run_posix_compliance_tests.sh` | stdout matches GNU `bc`. stderr is compared only as empty/non-empty, and exit codes are not compared yet. |
+| Mutation testing | `cargo mutants` (`.cargo/mutants.toml`) | Diff-based in CI. Some exclusions are broader than the equivalent mutants they target. |
+| Coverage | `cargo llvm-cov` | Line coverage gate of 98% in CI. |
 
-### 3. Preventing Parallel Test Conflicts
-Signal handlers (such as `ctrlc::set_handler`) and panic hooks are global process-wide resources, and shared state like the `CTRL_C_PRESSED` atomic can cause race conditions during parallel test runs. 
-- **Signal Guarding**: We isolated the signal handler registration behind a `#[cfg(not(test))]` guard, replacing it with a mock signal trigger in tests.
-- **Test Serialization**: We introduced a `TEST_MUTEX` serial lock to synchronize unit tests in `src/main.rs` that access or modify process-wide states, preventing parallel runner threads from interfering with each other's execution.
+The gaps listed above are tracked work for v0.4.0. Do not describe any layer as proving
+"bug-freedom" or "100% compliance" of the whole program.
 
-### 4. RAII Scope Restoration on Errors and Panics
-In POSIX `bc`, functions execute with dynamic scoping. If a function call encounters a runtime error or panics, standard `bc` restores the caller's variable/array scopes.
-- **ScopeGuard**: We implemented a `ScopeGuard` RAII helper struct in `src/eval.rs`. When a function is called, the guard takes ownership of the previous flow control state and the auto/param scopes. Whether the function exits early via `?` (`Err(...)` in `try_evaluate` / `try_execute`) or unwinds on panic, Rust automatically triggers the `Drop` implementation on `ScopeGuard`, popping the local variable stacks and restoring flow control states. This guarantees 100% specification compliance and prevents variable shadowing or heap leaks under runtime errors across both `std` and `#![no_std]` (`panic = "abort"`) targets.
+## Embedded and Wasm Targets
 
-### 5. Diff-Based Mutation Testing in CI & Equivalent Mutants
-To guarantee high test quality and ensure all code paths have meaningful assertions, `bc_clone` incorporates mutation testing using `cargo-mutants`.
-- **Configured Timeout & Exclusions**: `.cargo/mutants.toml` defines `minimum_test_timeout = 5` and `timeout_multiplier = 2.0` to accommodate deep mathematical calculations.
-- **Handling Semantically Equivalent Mutants**: Calculations that compute extra intermediate precision (such as `extra_prec` in `bc_exp`) produce mathematically identical outputs upon truncation. These over-precision mutants are semantically equivalent and cannot fail unit test assertions. They are explicitly documented and excluded via `exclude_re` in `.cargo/mutants.toml`.
-- **CI Integration**: In `.github/workflows/ci.yml`, `cargo mutants --in-diff` executes on PR and push diffs to ensure newly added or modified lines are covered by tests.
+- **QEMU bare metal** (`scripts/run_qemu_riscv32_tests.sh`): builds for `riscv32imac` and
+  `riscv32imc` and boots under `qemu-system-riscv32 -M virt -bios none`. It uses a 2 MiB
+  `embedded-alloc` heap, an NS16550A UART at `0x1000_0000`, and the SiFive test device at
+  `0x10_0000` to report the exit status.
+- **Zephyr** (`scripts/run_zephyr_tests.sh`): `examples/zephyr_app` builds the `bc_zephyr`
+  staticlib through CMake. It is tested on `qemu_riscv32`; `stamp_c3` is the hardware target.
+- **C API**: `bc_c_api` embeds a 64 KiB LLFF heap on `no_std` targets. Status codes are defined in
+  `include/bc_core.h`.
+- **ESP32-C3** (`examples/m5stamp_c3`): built in CI by `scripts/build_m5stamp_c3.sh`. Flashing
+  scripts exist for manual hardware testing.
+- **Wasm** (`scripts/build_wasm.sh`): runs the `bc_wasm` tests, Clippy for host and wasm32, and
+  produces the bundle.
 
-### 6. Strict Pre-Commit Verification Workflow
-To prevent CI breakage (such as formatting mismatches or clippy warnings), AI agents MUST run full local verification before creating git commits:
+## Agent Workflow Rules
+
+### Pre-commit verification (mandatory)
+Run before every commit; do not commit unless everything passes:
+
 ```bash
 cargo fmt --check && cargo clippy --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --all-targets -- -D warnings && cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings && cargo clippy --package bc_c_api --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo clippy --package bc_zephyr --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo test
 ```
-No changes should be committed until formatting, lints, and test suites pass with 100% success locally.
 
-### 7. Differential E2E Integration Testing & GNU Reference Test Suite
-- **Binary-Level Differential Validation**: `tests/integration_tests.rs` compiles the `bc_clone` binary and spawns both standard `bc` (GNU `bc`) and `bc_clone` using `std::process::Command`, feeding identical inputs and verifying exact `stdout` / `stderr` / exit code parity across 26 test suites.
-- **GNU bc 1.08.2 Reference Test Runner**: `scripts/run_gnu_reference_tests.sh` dynamically fetches the official GNU `bc 1.08.2` reference tests (`BUG.bc`, `array.b`, `atan.b`, `div.b`, `exp.b`, `fact.b`, `jn.b`, `ln.b`, `mul.b`, `raise.b`, `sine.b`, `sqrt.b`, `sqrt1.b`, `sqrt2.b`, `testfn.b`, `signum`) and validates 100% output parity.
-- **Excluded Non-Standard Extensions**: Non-standard GNU pointer extension tests (`arrayp.b` and `aryprm.b` using `*a[]` syntax) and scale-60 micro-rounding checks (`checklib.b`) are excluded as they test non-standard parser extensions or intermediate limb rounding artifacts.
+### Process-global state in tests
+Signal handlers and panic hooks are process-global. `bc_cli` registers the SIGINT handler only
+under `#[cfg(not(test))]`, and tests that touch global state serialize on `TEST_MUTEX`.
 
-### 8. POSIX IEEE Std 1003.1 Compliance Test Suite
-- **Automated POSIX Conformance Verification**: `scripts/run_posix_compliance_tests.sh` evaluates `bc_clone` against standard `bc` across 20 strict POSIX IEEE Std 1003.1 specification test cases.
-- **CI Integration**: Executed automatically on every push and pull request in `.github/workflows/ci.yml` to guarantee zero regressions in POSIX standard compliance.
+### Mutation-testing exclusions
+Only exclude mutants that are semantically equivalent (e.g. changes to over-precision guard digits
+that cannot change a truncated result). Keep each `exclude_re` in `.cargo/mutants.toml` as narrow
+as possible and state the reason next to it.
 
-### 9. Baremetal RISC-V 32 Automated Testing on QEMU (`crates/bc_qemu_riscv32`)
-- **Automated Baremetal Verification**: `scripts/run_qemu_riscv32_tests.sh` cross-compiles the baremetal runner (`bc_qemu_riscv32`) for both `riscv32imac-unknown-none-elf` (QEMU Virt) and `riscv32imc-unknown-none-elf` (ESP32-C3 compatible), booting the standalone binary under `qemu-system-riscv32 -M virt -bios none` and verifying 11 self-tests (including non-panicking division-by-zero error recovery via `try_new` / `try_parse_program` / `try_execute`).
-- **Heap & I/O Architecture**: Integrates `embedded-alloc` for dynamic heap management (2MB buffer), memory-mapped NS16550A UART (`0x1000_0000`) for text output, and the SiFive Test device (`0x10_0000`) for automated zero-exit/failure code signaling in CI pipelines.
-
-### 10. Zephyr RTOS Rust Application, M5Stamp C3 & Automated Testing (`crates/bc_zephyr`, `examples/zephyr_app`, `crates/bc_c_api`)
-- **Rust-Centric Architecture (`crates/bc_zephyr`)**: All application logic (self-test suite, interactive REPL line editor, fallible `bc_core` direct execution via `try_new` / `try_parse_program` / `try_execute`, and QEMU test exit device) is implemented 100% in `#![no_std]` Rust (`crates/bc_zephyr`), with a minimal C trampoline (~40 lines in `examples/zephyr_app/src/main.c`) only bridging Zephyr Devicetree and kernel macros.
-- **C-FFI Static Library (`crates/bc_c_api`)**: Exposes C-ABI interfaces (`bc_eval`, `bc_eval_callback`, and stateful session APIs `bc_session_create`, `bc_session_eval`, `bc_session_reset`, `bc_session_destroy`) along with C header `include/bc_core.h`. Uses `eval_bc_non_panicking` (`try_new` / `try_parse_program` / `try_execute`) to return `-3` (`BC_ERR_PARSE`) or `-4` (`BC_ERR_MATH`) on invalid inputs without unwinding across `extern "C"`. Embeds `embedded-alloc` LLFF dynamic allocator (64KB heap) to provide self-contained, fragmentation-resistant heap management independent of C runtime libc.
-- **Zephyr RTOS Application (`examples/zephyr_app`)**: Integrates `CMakeLists.txt` (with portable multi-target architecture auto-detection and automatic Cargo staticlib invocation) and `prj.conf`, evaluating math expressions directly inside Zephyr kernel threads on both `qemu_riscv32` and physical `stamp_c3` (M5Stamp C3) hardware with an interactive serial REPL.
-- **Automated Zephyr Runners (`scripts/run_zephyr_tests.sh`, `scripts/build_zephyr_m5stamp_c3.sh`, `scripts/flash_and_test_zephyr_m5stamp_c3.sh`)**: Discovers `west` / `ZEPHYR_BASE` / `ZEPHYR_SDK_INSTALL_DIR` dynamically without hardcoded machine paths, running full test suites on QEMU RISC-V 32 and physical hardware with 100% pass verification.
-
-### 11. M5Stamp C3 (ESP32-C3) Baremetal Application (`examples/m5stamp_c3`)
-- **Direct Hardware Target**: Runs `bc_core` on the Espressif ESP32-C3 RISC-V 32-bit RV32IMC @ 160MHz (`riscv32imc-unknown-none-elf`) using `esp-hal 1.1.0`, `esp-bootloader-esp-idf`, `esp-alloc` (128KB SRAM heap), and `esp-println`. Couples the interactive USB-Serial-JTAG REPL line editor directly to `verified_zephyr_classify_char` (`crates/bc_core/src/verified_kernels.rs`) and evaluates commands via `try_new` / `try_parse_program` / `try_execute` so syntax or math errors never reset the MCU.
-- **Automated CI Build Validation**: `scripts/build_m5stamp_c3.sh` runs cross-compilation and linting without physical hardware.
-- **Hardware Flashing & Serial Monitor Testing**: `scripts/flash_and_test_m5stamp_c3.sh` flashes connected hardware via `espflash` and verifies 100% pass of arbitrary-precision math test suites over serial console.
-
-### 12. WebAssembly (wasm32) Web App Frontend (`examples/wasm_web_app`)
-- **Browser-Native Math Engine**: Exposes `eval_bc` and `BcSession` via `wasm-bindgen` (`examples/wasm_web_app/crate`), executing arbitrary-precision math 100% on the client-side using the fallible `try_new` / `try_parse_program` / `try_execute` pipeline (guaranteed free of `unreachable` Wasm traps on `wasm32-unknown-unknown`, where `catch_unwind` is a no-op).
-- **Modern Interactive UI**: Provides a dark-themed terminal REPL with command history ($\uparrow$/$\downarrow$), keyboard shortcuts, and quick preset buttons for $\pi$, $e$, $n!$, and base conversions.
-- **Automated Testing, Packaging & Server**: `scripts/build_wasm.sh` executes the `bc_wasm` unit test suite (`cargo test`), runs host and `wasm32-unknown-unknown` Clippy lints, and compiles/packages the Wasm bundle; `scripts/serve_wasm.sh` serves the frontend locally.
-
-### 13. Verus Formal Verification & Direct Kernel Coupling (`crates/bc_core/src/verified_kernels.rs`, `crates/bc_core/src/verus_proofs.rs`, `scripts/run_verus_verification.sh`)
-- **Single Source of Truth via `dual_verified!` (`crates/bc_core/src/verified_kernels.rs`)**: 31 core pure functions and state machines (`verified_alphanumeric_char_val`, `verified_hex_char_val`, `verified_add_sub_scales`, `verified_mul_scale_and_shift`, `verified_div_scale_and_shift`, `verified_sqrt_scale_and_shift`, `verified_pow_scale_and_shift`, `verified_multi_digit_obase_pad_zeros`, `verified_transcendental_guard_prec`, `verified_decimal_scale_shift`, `verified_bcnum_length`, `verified_bessel_negative_order_parity`, `verified_wrapped_stdout_step`, `verified_relational_scale_shifts`, `verified_clamp_ibase`, `verified_ibase_warning_and_clamp`, `verified_clamp_obase`, `verified_should_abort_execution`, `verified_loop_post_body_action`, `verified_is_bc_digit`, `verified_is_ident_continue`, `verified_lexer_peek_char_index`, `verified_lexer_advance_step`, `verified_lexer_peek_token_index`, `verified_pratt_next_min_prec`, `verified_pratt_infix_info`, `verified_c_ffi_check_buf_capacity`, `verified_zephyr_classify_char`, `verified_cli_classify_arg`, `verified_cli_initial_scale`, `verified_repl_block_completeness`) are defined once inside `verified_kernels.rs` using `dual_verified!` and `dual_verified_repl_scanner!`. Under Verus (`#[cfg(verus_keep_ghost)]`), they expand inside `verus! { ... }` with full SMT contracts (`requires`, `ensures`, `invariant`, `decreases`); under standard Cargo builds (`#[cfg(not(verus_keep_ghost))]`), the exact same function bodies compile as `#[inline]` `#![no_std]` Rust functions called directly across all 4 workspace crates (`bc_core`, `bc_cli`, `bc_c_api`, `bc_zephyr`).
-- **Deduplicated `#![cfg(verus_keep_ghost)]` Proof Suite (`crates/bc_core/src/verus_proofs.rs`)**: Imports `crate::verified_kernels::*` without duplicating kernel implementations, containing only Ghost specifications (`spec fn`), inductive mathematical lemmas (`proof fn`), and higher-order theorems gated behind `#[cfg(verus_keep_ghost)]`. This guarantees zero runtime overhead and full compliance with `cargo test`, `cargo llvm-cov` (98%+ line coverage gate), `cargo mutants`, and baremetal/embedded cross-compilation targets.
-- **Verified Target Areas (149 SMT-Verified Proofs & Functions across 12 Targets)**:
-  1. **POSIX `bc` Scale Rules & Fixed-Point Arithmetic (`math.rs`)**: Formally proves `pow10` exponential identities, `SpecBCNum` addition commutativity and subtraction inversion, exact POSIX scale formulas for `add`, `sub`, `mul` ($\min(a+b, \max(\text{scale}, a, b))$ with non-negative truncation shifts), `div` signed shifts, `sqrt` radicand shifts ($2 \cdot \max(a, \text{scale}) - a \ge 0$ without underflow), and truncating division/modulo error bounds.
-  2. **Non-Decimal `obase` Fractional Digit Loop Termination & Minimality (`math.rs`)**: Proves termination (`decreases`) and exact minimality of the `#![no_std]` floating-point-free power loop ($\text{obase}^k \ge 10^{\text{scale}}$ and $k > 0 \implies \text{obase}^{k-1} < 10^{\text{scale}}$).
-  3. **POSIX 70-Character Line Wrapping & `Lexer` Bounds Safety (`eval.rs`, `parser.rs`)**: Proves that `WrappedStdout` maintains the column invariant $\text{col} \le 68$ (at most 70 characters per line including `\\\n`) across arbitrary byte streams, and that `Lexer` lookahead (`peek`) and cursor advancement (`advance`) are free of out-of-bounds slice panics and integer overflows.
-  4. **Binary Exponentiation (`BCNum::pow`) Loop & POSIX Scale Invariants (`math.rs`)**: Proves inductive exponentiation-by-squaring identities, non-negative truncation shifts for positive exponents, and $\mathcal{O}(\log b)$ loop termination with exact final scale $a_s \cdot b$ and coefficient $a_c^b$.
-  5. **Base Conversion (`ibase`/`obase`) Digit Bounds, Hex LUT Safety & Padding (`math.rs`)**: Proves boundedness of hexadecimal character parsing ($0 \le \text{val} \le 15$), non-linear arithmetic bounds $0 \le d < \text{obase} \le 16$ guaranteeing panic-free indexing into `"0123456789ABCDEF"`, and multi-digit `obase > 16` zero-padding width invariants.
-  6. **Transcendental Math (`Decimal`) Roundtrip & Argument Reduction (`math.rs`)**: Proves lossless roundtrip conversion between `BCNum` and guard-precision `Decimal` (including unsigned shift direction consistency via `verified_decimal_scale_shift`), trigonometric modulo-$2\pi$ range reduction into $[-\pi, \pi]$ with exact $2\pi k$ periodicity equivalence, and exponential $x = n \ln(2) + r$ reduction into $[0, \ln 2)$.
-  7. **`Evaluator` Relational Total Order, Register Clamping & `ScopeGuard` Restoration (`eval.rs`)**: Proves strict trichotomy and total order properties of cross-scale relational comparisons, unconditional clamping and warning classification of `ibase` ($\in [2, 16]$) and `obase` ($\ge 2$), and the **Stack Frame Restoration Theorem** (`final(stack)@ == old(stack)@`) across function call parameter/`auto` pushes, local mutations, and reverse-order `ScopeGuard` drops.
-  8. **`Parser` Pratt Precedence Climbing & `Lexer` Number/Identifier Scanners (`parser.rs`)**: Proves the strict operator precedence hierarchy (`AssignOp < Plus/Minus < MulOp < Exp < UnaryMinus`), left/right-associative `next_min_prec` transition rules (`verified_pratt_infix_info`), `peek_token` buffer index bounds safety, identifier character validation (`verified_is_ident_continue`), and number literal scanning termination with the at-most-one-radix-point ($\text{dot\_count} \le 1$) invariant.
-  9. **`BCNum::length` & `atan` / `ln` / `bessel` Mathematical Identities (`math.rs`)**: Proves $\text{length}(x) \ge \max(1, \text{scale}(x))$, arctangent reciprocal argument reduction $|x| > 1 \implies 1/x \in [0, 1)$, natural logarithm Cayley transform $y = (m-1)/(m+1)$ division-by-zero freedom and unit-disk convergence ($|y| < 1$), and Bessel function $J_{-n}(x) = (-1)^n J_n(x)$ negative-order parity.
-  10. **`Evaluator` Prefix/Postfix `++`/`--` & Control-Flow Short-Circuiting (`eval.rs`)**: Proves scale preservation and return-value semantics of prefix vs. postfix update operators, immediate block short-circuiting on `break`/`return`/`quit`, and loop exit flag propagation (clearing `break_flag` while preserving `return_flag` and `quit_flag`).
-  11. **CLI REPL Block Completeness, C-FFI NUL Buffer Safety & Zephyr Line Editor (`bc_cli`, `bc_c_api`, `bc_zephyr`)**: Proves comment/string mutual exclusion and bounds safety in `is_block_incomplete`, exact buffer capacity checks and trailing NUL (`0u8`) termination in `bc_eval`/`bc_session_eval`, and backspace underflow prevention in the Zephyr RTOS interactive serial REPL line editor.
-  12. **`Decimal` Fixed-Point Unit Identities, Taylor Series Convergence Termination & POSIX CLI Option Parser (`math.rs`, `bc_cli`)**: Proves zero-loss unit multiplication/division on fixed-point `Decimal`, strict monotonic numerator contraction ($0 \le \text{next\_num} \le \text{num}/2 < \text{num}$) and finite-step loop termination (`decreases num`) for Taylor series expansions under reduced arguments ($|r| \le 1/2$), and CLI flag/file parsing invariants (`verified_cli_classify_arg` and `verified_cli_initial_scale`).
-- **Automated Verification Runner**: `scripts/run_verus_verification.sh` invokes Verus to verify `crates/bc_core/src/lib.rs` (`149 verified, 0 errors`).
-
-### 14. 3-Layer Verification Architecture: Kani Bounded Model Checking & Miri Undefined-Behavior Verification (`crates/bc_core/src/kani_proofs.rs`, `scripts/run_kani_verification.sh`, `scripts/run_miri_tests.sh`)
-To achieve near-zero defect guarantees across both pure mathematical logic and dynamic memory / `unsafe` FFI boundaries, `bc_clone_rs` complements **Verus** (Layer 1: unbounded SMT deductive theorem proving) with **Kani** (Layer 2: bit-precise bounded model checking) and **Miri** (Layer 3: strict MIR abstract machine interpretation):
-- **Layer 2: Kani Bounded Model Checking (`#[cfg(kani)]`, `scripts/run_kani_verification.sh`)**:
-  - **Bit-Precise Cross-Verification of All 31 `verified_kernels` (`crates/bc_core/src/kani_proofs.rs`)**: Uses `kani::any()` symbolic inputs and CBMC/CaDiCaL SAT solving to independently verify that every kernel in `verified_kernels.rs` is free of machine-word arithmetic overflows, bit-cast truncation bugs, out-of-bounds slice accesses, and postcondition violations across all bit patterns. Includes bounded symbolic array verification of `verified_repl_block_completeness`, `verified_cli_classify_arg`, and multi-step `WrappedStdout` / `Lexer` cursor state transitions.
-  - **C-FFI Pointer & Buffer Bounds Verification (`crates/bc_c_api/src/lib.rs`)**: Formally verifies that `core::ptr::copy_nonoverlapping` and trailing NUL (`*out_ptr.add(out_len) = 0`) guarded by `verified_c_ffi_check_buf_capacity` never overrun the destination buffer on Kani's pointer object model, and proves NULL-pointer / zero-size buffer rejection across all FFI entry points.
-  - **CLI REPL Scanner & Option Slice Safety (`crates/bc_cli/src/main.rs`)**: Verifies `count_open_braces` / `is_block_incomplete` consistency and proves that invalid option slicing (`&arg[1..]`) never panics on UTF-8 character or slice boundaries.
-  - **Resource Guard**: `scripts/run_kani_verification.sh` enforces a 4GB virtual memory cap (`ulimit -v 4194304`) and avoids heap-reallocating loops inside CBMC harnesses, completing all 14 harnesses across `bc_core`, `bc_c_api`, and `bc_clone` in ~13 seconds.
-- **Layer 3: Miri Undefined Behavior & Memory-Safety Verification (`scripts/run_miri_tests.sh`)**:
-  - **Strict Provenance & Symbolic Alignment**: Runs `cargo +nightly miri test` with `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check -Zmiri-disable-isolation"` across all 4 host-testable workspace crates (`bc_c_api`, `bc_core`, `bc_zephyr`, `bc_clone` — 103 unit tests total) at full arbitrary-precision scale without precision reduction.
-  - **Verified Dynamic & Unsafe Properties**: Proves zero Undefined Behavior (Stacked/Tree Borrows compliance, pointer alignment, initialized memory reads) and zero memory leaks across `Box::into_raw` / `Box::from_raw` session lifecycles (`BcSession`), `CStr::from_ptr` invalid UTF-8 rejection, `Rc<RefCell<String>>` interior mutability (`SharedBuffer`), C callback function pointers (`BcOutputCb`), `num-bigint` multi-limb heap arithmetic, `ScopeGuard` stack restoration across both `Result::Err` early returns and panic unwinding (`catch_unwind`), and `AtomicBool` signal handling.
-- **Property-Based Testing (`proptest`, `crates/bc_core/tests/proptest_suite.rs`)**:
-  - Exercises actual arbitrary-precision `BigInt` / `BCNum` multi-limb heap algorithms, base conversions (`from_string` / `format_obase`), transcendental identities ($\sin^2(x)+\cos^2(x) \approx 1$, $\ln(e^x) \approx x$, $\arctan(x)+\arctan(1/x) \approx \pi/2$), and fallible `Lexer` / `Parser` / `Evaluator` fuzz resilience across randomized inputs under strict memory/scale bounds (`cases: 64`, `fork: false`, `#![cfg(not(miri))]`).
-
-
-
-
-
+### Formal-verification hygiene
+- New kernels go in `verified_kernels.rs` via `dual_verified!` and must be called from production
+  code. A proof about a re-implementation does not count as coverage of the production code.
+- Every caller must establish the kernel's `requires` clause.
+- Add or extend a Kani harness for each new kernel.
