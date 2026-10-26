@@ -13,16 +13,15 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Write as FmtWrite;
 use num_bigint::BigInt;
-use num_traits::ToPrimitive;
+use num_traits::{Signed, ToPrimitive};
 
 use crate::error::{BcError, RuntimeError};
-use crate::math::BCNum;
-use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Stmt};
+use crate::math::{BCNum, pow10};
+use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Register, Stmt};
 use crate::verified_kernels::{
-    verified_clamp_ibase, verified_clamp_obase, verified_hex_char_val,
-    verified_ibase_warning_and_clamp, verified_loop_post_body_action,
-    verified_relational_scale_shifts, verified_should_abort_execution,
-    verified_wrapped_stdout_step,
+    BC_BASE_MAX, BC_DIM_MAX, BC_SCALE_MAX, IBASE_MAX, verified_clamp_register,
+    verified_hex_char_val, verified_loop_post_body_action, verified_relational_scale_shifts,
+    verified_should_abort_execution, verified_wrapped_stdout_step,
 };
 
 /// Abstract output writer trait compatible with both no_std and std environments.
@@ -164,10 +163,62 @@ impl Evaluator {
         );
     }
 
+    /// Converts the subscript `idx` of array `name` to an index, truncating it to an integer.
+    /// Negative subscripts and subscripts of at least `BC_DIM_MAX` are runtime errors.
+    fn array_index(name: &str, idx: &BCNum) -> Result<BigInt, BcError> {
+        let index = &idx.coeff / pow10(idx.scale);
+        if idx.coeff.is_negative() || index >= BigInt::from(BC_DIM_MAX) {
+            return Err(RuntimeError::ArraySubscriptOutOfBounds(String::from(name)).into());
+        }
+        Ok(index)
+    }
+
+    /// Stores `val`, truncated to an integer, into register `reg`, clamping it to the register's range with a warning (`docs/COMPATIBILITY.md`
+    /// §3.3). Returns the stored value.
+    fn store_register(&mut self, reg: Register, val: &BCNum) -> usize {
+        let magnitude = (&val.coeff / pow10(val.scale))
+            .abs()
+            .to_usize()
+            .unwrap_or(usize::MAX);
+        let (min, max) = match reg {
+            Register::Scale => (0, BC_SCALE_MAX),
+            Register::Ibase => (2, IBASE_MAX),
+            Register::Obase => (2, BC_BASE_MAX),
+        };
+        let name = reg.name();
+        let (v, kind) = verified_clamp_register(magnitude, val.coeff.is_negative(), min, max);
+        match kind {
+            -2 => self.warn(&format!("negative {}, set to {}", name, min)),
+            -1 => self.warn(&format!("{} too small, set to {}", name, min)),
+            1 => self.warn(&format!("{} too large, set to {}", name, max)),
+            _ => {}
+        }
+        match reg {
+            Register::Scale => self.scale = v,
+            Register::Ibase => self.ibase = v,
+            Register::Obase => self.obase = v,
+        }
+        v
+    }
+
+    /// Computes `base ^ exp`, warning when the exponent has a fractional part.
+    fn power(&mut self, base: &BCNum, exp: &BCNum) -> Result<BCNum, BcError> {
+        if exp.scale > 0 {
+            self.warn("non-zero scale in exponent");
+        }
+        Ok(base.try_pow(exp, self.scale)?)
+    }
+
     /// Evaluates an AST expression node, returning Err on runtime math/call errors.
     pub fn try_evaluate(&mut self, node: &Expr) -> Result<BCNum, BcError> {
         match node {
-            Expr::Number(value) => Ok(BCNum::from_string(value, self.ibase)),
+            Expr::Number(value) => {
+                let num = BCNum::from_string(value, self.ibase);
+                if num.scale > BC_SCALE_MAX {
+                    return Err(RuntimeError::ScaleTooLarge.into());
+                }
+                Ok(num)
+            }
             Expr::Variable(name) => {
                 let stack = self
                     .variables
@@ -177,12 +228,7 @@ impl Evaluator {
             }
             Expr::ArrayAccess(name, index_expr) => {
                 let idx = self.try_evaluate(index_expr)?;
-                let idx_val = if idx.scale > 0 {
-                    let divisor = BigInt::from(10).pow(idx.scale as u32);
-                    &idx.coeff / divisor
-                } else {
-                    idx.coeff.clone()
-                };
+                let idx_val = Self::array_index(name, &idx)?;
                 let stack = self
                     .arrays
                     .entry(name.clone())
@@ -194,12 +240,11 @@ impl Evaluator {
                     .cloned()
                     .unwrap_or_else(BCNum::zero))
             }
-            Expr::RegisterAccess(name) => {
-                let val = match name.as_str() {
-                    "scale" => self.scale,
-                    "ibase" => self.ibase,
-                    "obase" => self.obase,
-                    _ => 0,
+            Expr::RegisterAccess(reg) => {
+                let val = match reg {
+                    Register::Scale => self.scale,
+                    Register::Ibase => self.ibase,
+                    Register::Obase => self.obase,
                 };
                 Ok(BCNum::new(BigInt::from(val), 0))
             }
@@ -220,7 +265,7 @@ impl Evaluator {
                     "*" => Ok(l.mul(&r, self.scale)),
                     "/" => l.try_div(&r, self.scale).map_err(BcError::from),
                     "%" => l.try_mod_op(&r, self.scale).map_err(BcError::from),
-                    "^" => l.try_pow(&r, self.scale).map_err(BcError::from),
+                    "^" => self.power(&l, &r),
                     _ => Ok(BCNum::zero()),
                 }
             }
@@ -228,8 +273,8 @@ impl Evaluator {
                 let l = self.try_evaluate(left)?;
                 let r = self.try_evaluate(right)?;
                 let (shift_l, shift_r) = verified_relational_scale_shifts(l.scale, r.scale);
-                let coeff_l = &l.coeff * BigInt::from(10).pow(shift_l as u32);
-                let coeff_r = &r.coeff * BigInt::from(10).pow(shift_r as u32);
+                let coeff_l = &l.coeff * pow10(shift_l);
+                let coeff_r = &r.coeff * pow10(shift_r);
 
                 let res = match op.as_str() {
                     "==" => coeff_l == coeff_r,
@@ -243,11 +288,10 @@ impl Evaluator {
                 Ok(BCNum::new(BigInt::from(if res { 1 } else { 0 }), 0))
             }
             Expr::AssignOp(op, target, expr) => {
-                let is_base_reg = if let Expr::RegisterAccess(reg_name) = &**target {
-                    reg_name == "ibase" || reg_name == "obase"
-                } else {
-                    false
-                };
+                let is_base_reg = matches!(
+                    &**target,
+                    Expr::RegisterAccess(Register::Ibase | Register::Obase)
+                );
 
                 let val = if is_base_reg && op == "=" {
                     let mut is_single_char = false;
@@ -278,7 +322,7 @@ impl Evaluator {
                             "%" => old_val
                                 .try_mod_op(&val, self.scale)
                                 .map_err(BcError::from)?,
-                            "^" => old_val.try_pow(&val, self.scale).map_err(BcError::from)?,
+                            "^" => self.power(&old_val, &val)?,
                             _ => BCNum::zero(),
                         };
                     }
@@ -295,53 +339,17 @@ impl Evaluator {
                     }
                     Expr::ArrayAccess(name, idx_expr) => {
                         let idx = self.try_evaluate(idx_expr)?;
-                        let idx_val = if idx.scale > 0 {
-                            let divisor = BigInt::from(10).pow(idx.scale as u32);
-                            &idx.coeff / divisor
-                        } else {
-                            idx.coeff.clone()
-                        };
+                        let idx_val = Self::array_index(name, &idx)?;
                         let arr_stack = self
                             .arrays
                             .entry(name.clone())
                             .or_insert_with(|| vec![BTreeMap::new()]);
                         arr_stack.last_mut().unwrap().insert(idx_val, val.clone());
                     }
-                    Expr::RegisterAccess(name) => {
-                        let mut reg_val = if val.scale > 0 {
-                            let divisor = BigInt::from(10).pow(val.scale as u32);
-                            &val.coeff / divisor
-                        } else {
-                            val.coeff.clone()
-                        };
-                        let reg_val_usize = reg_val.to_usize().unwrap_or(0);
-                        match name.as_str() {
-                            "scale" => {
-                                let v = reg_val.to_usize().unwrap_or(0);
-                                self.scale = v;
-                                reg_val = BigInt::from(v);
-                            }
-                            "ibase" => {
-                                let (v, warn_kind) =
-                                    verified_ibase_warning_and_clamp(reg_val_usize);
-                                if warn_kind < 0 {
-                                    self.warn("ibase too small, set to 2");
-                                } else if warn_kind > 0 {
-                                    self.warn("ibase too large, set to 16");
-                                }
-                                self.ibase = v;
-                                reg_val = BigInt::from(v);
-                            }
-                            "obase" => {
-                                let v = verified_clamp_obase(reg_val_usize);
-                                self.obase = v;
-                                reg_val = BigInt::from(v);
-                            }
-                            _ => {
-                                reg_val = BigInt::from(0);
-                            }
-                        }
-                        return Ok(BCNum::new(reg_val, 0));
+                    Expr::RegisterAccess(reg) => {
+                        // As in GNU bc, the value of the assignment is the value assigned,
+                        // even when the register clamps it.
+                        self.store_register(*reg, &val);
                     }
                     _ => {}
                 }
@@ -366,12 +374,7 @@ impl Evaluator {
                     }
                     Expr::ArrayAccess(name, idx_expr) => {
                         let idx = self.try_evaluate(idx_expr)?;
-                        let idx_val = if idx.scale > 0 {
-                            let divisor = BigInt::from(10).pow(idx.scale as u32);
-                            &idx.coeff / divisor
-                        } else {
-                            idx.coeff.clone()
-                        };
+                        let idx_val = Self::array_index(name, &idx)?;
                         let arr_stack = self
                             .arrays
                             .entry(name.clone())
@@ -381,30 +384,9 @@ impl Evaluator {
                             .unwrap()
                             .insert(idx_val, new_val.clone());
                     }
-                    Expr::RegisterAccess(name) => {
-                        let mut reg_val = new_val.coeff.clone();
-                        let reg_val_usize = reg_val.to_usize().unwrap_or(0);
-                        match name.as_str() {
-                            "scale" => {
-                                let v = reg_val.to_usize().unwrap_or(0);
-                                self.scale = v;
-                                reg_val = BigInt::from(v);
-                            }
-                            "ibase" => {
-                                let v = verified_clamp_ibase(reg_val_usize);
-                                self.ibase = v;
-                                reg_val = BigInt::from(v);
-                            }
-                            "obase" => {
-                                let v = verified_clamp_obase(reg_val_usize);
-                                self.obase = v;
-                                reg_val = BigInt::from(v);
-                            }
-                            _ => {
-                                reg_val = BigInt::from(0);
-                            }
-                        }
-                        let final_val = BCNum::new(reg_val, 0);
+                    Expr::RegisterAccess(reg) => {
+                        let stored = self.store_register(*reg, &new_val);
+                        let final_val = BCNum::new(BigInt::from(stored), 0);
                         return Ok(if *is_prefix { final_val } else { old_val });
                     }
                     _ => {}
@@ -741,7 +723,7 @@ mod tests {
 
     #[test]
     fn test_eval_uncovered_lines() {
-        use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Stmt};
+        use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Register, Stmt};
 
         let mut evaluator = Evaluator::new(true, Box::new(String::new()), Box::new(String::new()));
 
@@ -758,11 +740,6 @@ mod tests {
             "a".to_string(),
             Box::new(Expr::Number("1.5".to_string())),
         )));
-
-        // 2. RegisterAccess fallback
-        let node_reg = Expr::RegisterAccess("dummy".to_string());
-        let res_reg = evaluator.evaluate(&node_reg);
-        assert_eq!(res_reg.coeff, BigInt::from(0));
 
         // 3. Unreachable binary op operator
         let node_bin = Expr::BinaryOp(
@@ -790,14 +767,14 @@ mod tests {
         // 6. Assign single non-hex char to ibase and obase
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("Z".to_string())),
         )));
         assert_eq!(evaluator.ibase, 2);
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("Z".to_string())),
         )));
         assert_eq!(evaluator.obase, 2);
@@ -823,34 +800,18 @@ mod tests {
         // 8. Assign fractional value to register (lines 257-258)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("scale".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Scale)),
             Box::new(Expr::Number("2.5".to_string())),
         )));
 
         // 9. obase < 2 update (line 290)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("1".to_string())),
         )));
 
-        // 10. RegisterAccess / AssignOp unreachable fallbacks
-        let node_reg_assign = Expr::AssignOp(
-            "=".to_string(),
-            Box::new(Expr::RegisterAccess("dummy".to_string())),
-            Box::new(Expr::Number("1".to_string())),
-        );
-        let res_assign_val = evaluator.evaluate(&node_reg_assign);
-        assert_eq!(res_assign_val.coeff, BigInt::from(0));
-
-        let node_reg_update = Expr::UpdateOp(
-            "++".to_string(),
-            true,
-            Box::new(Expr::RegisterAccess("dummy".to_string())),
-        );
-        let res_update_val = evaluator.evaluate(&node_reg_update);
-        assert_eq!(res_update_val.coeff, BigInt::from(0));
-
+        // 10. Update of a non-named expression (unreachable from the parser)
         let node_update_unreach = Expr::UpdateOp(
             "++".to_string(),
             true,
@@ -863,19 +824,19 @@ mod tests {
         // A) multi-character number (cleaned.len() != 1)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("10".to_string())),
         )));
         // B) non-number (expr is not Expr::Number)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Variable("x".to_string())),
         )));
         // C) single character non-hex digit (c is not ascii digit or A-F)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number(".".to_string())),
         )));
 
@@ -918,25 +879,25 @@ mod tests {
         // 12. Increment/decrement a register with a fractional value (lines 340-341)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("scale".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Scale)),
             Box::new(Expr::Number("2.5".to_string())),
         )));
         evaluator.execute(&Stmt::Expr(Expr::UpdateOp(
             "++".to_string(),
             true,
-            Box::new(Expr::RegisterAccess("scale".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Scale)),
         )));
 
         // 13. Update obase with cap (line 360)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("2".to_string())),
         )));
         evaluator.execute(&Stmt::Expr(Expr::UpdateOp(
             "--".to_string(),
             true,
-            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Obase)),
         )));
 
         // 14. Function argument errors (lines 379, 399, 405)
@@ -1386,21 +1347,21 @@ mod tests {
         // 2. Assign fractional values to scale, obase, ibase registers
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("scale".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Scale)),
             Box::new(Expr::Number("5.9".to_string())),
         )));
         assert_eq!(evaluator.scale, 5);
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("10.4".to_string())),
         )));
         assert_eq!(evaluator.obase, 10);
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("16.7".to_string())),
         )));
         assert_eq!(evaluator.ibase, 16);
@@ -1468,7 +1429,7 @@ mod tests {
         // 1. Compound assignment scale propagation
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("scale".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Scale)),
             Box::new(Expr::Number("4".to_string())),
         )));
 
@@ -1556,14 +1517,14 @@ mod tests {
         // 2. Register assignments to ibase and obase
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("10".to_string())),
         )));
         assert_eq!(evaluator.obase, 10);
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("16".to_string())),
         )));
         assert_eq!(evaluator.ibase, 16);
@@ -1571,7 +1532,7 @@ mod tests {
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("2".to_string())),
         )));
         assert_eq!(evaluator.ibase, 2);
@@ -1582,7 +1543,7 @@ mod tests {
         let ibase_inc = evaluator.evaluate(&Expr::UpdateOp(
             "++".to_string(),
             true,
-            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Ibase)),
         ));
         assert_eq!(ibase_inc.coeff, BigInt::from(11));
         assert_eq!(evaluator.ibase, 11);
@@ -1591,7 +1552,7 @@ mod tests {
         let obase_inc = evaluator.evaluate(&Expr::UpdateOp(
             "++".to_string(),
             true,
-            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Obase)),
         ));
         assert_eq!(obase_inc.coeff, BigInt::from(11));
         assert_eq!(evaluator.obase, 11);
@@ -1653,12 +1614,12 @@ mod tests {
         // 3. Register access for scale
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("scale".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Scale)),
             Box::new(Expr::Number("4".to_string())),
         )));
         assert_eq!(evaluator.scale, 4);
 
-        let scale_res = evaluator.evaluate(&Expr::RegisterAccess("scale".to_string()));
+        let scale_res = evaluator.evaluate(&Expr::RegisterAccess(Register::Scale));
         assert_eq!(scale_res.coeff, BigInt::from(4));
     }
 
@@ -1677,14 +1638,14 @@ mod tests {
         // 1. Single character hex base assignment (ibase = A -> 10, ibase = F -> 15)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("A".to_string())),
         )));
         assert_eq!(evaluator.ibase, 10);
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("ibase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("F".to_string())),
         )));
         assert_eq!(evaluator.ibase, 15);
@@ -1695,7 +1656,7 @@ mod tests {
         // 2. obase min clamping (obase < 2 -> 2)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
             "=".to_string(),
-            Box::new(Expr::RegisterAccess("obase".to_string())),
+            Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("0".to_string())),
         )));
         assert_eq!(evaluator.obase, 2);

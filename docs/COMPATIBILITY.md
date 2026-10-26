@@ -99,8 +99,11 @@ requirement; §3.4 defines the one `bc_clone` meets.
 | `BC_DIM_MAX` | 16 777 216 | Valid subscripts are 0..16 777 215 (POSIX: 0..`BC_DIM_MAX`−1), the same range GNU `bc` accepts. |
 | `BC_STRING_MAX` | 2 147 483 647 | Same value as GNU `bc`. |
 | Exponent of `^` | The integer part must fit in a signed 64-bit integer | Same as GNU's "MAX Exponent". |
+| Exact scale of `a ^ b` | `scale(a) · \|b\|` must not exceed `BC_SCALE_MAX` | `bc_clone` computes the exact power and then truncates it. GNU truncates intermediate results, so it can evaluate `0.5 ^ 2000000000` (slowly). |
 
-Status: ⏳ none of these limits are enforced yet (bugs B2 and B6).
+Every `BCNum` scale stays at most `BC_SCALE_MAX`. This invariant establishes the
+`scale <= MAX_VERIFIED_SCALE` preconditions of the Verus-verified scale kernels, and keeps every
+decimal shift below `u32::MAX`, including on 32-bit targets.
 
 Running out of memory (for example `scale=1000000000; 1/3`) is outside the language semantics: the
 process may abort, as GNU `bc` does.
@@ -138,16 +141,18 @@ address (`adr=N`).
 |---|---|
 | Division by zero / modulus by zero | Runtime error `Divide by zero` / `Modulo by zero` |
 | `sqrt` of a negative number | Runtime error `Square root of a negative number` |
-| Non-integer exponent | Warning `non-zero scale in exponent`; the integer part is used ⏳ |
-| `ibase` < 2 or > 16 | Warning `ibase too small/large, set to 2/16`; value clamped |
-| `obase` < 2 or > `BC_BASE_MAX` | Warning `obase too small/large, set to …`; value clamped ⏳ |
-| `scale` < 0 or > `BC_SCALE_MAX` | Warning `negative scale, set to 0` / `scale too large, set to 1000000000` ⏳ |
-| A result or literal whose scale would exceed `BC_SCALE_MAX` (e.g. a chain of `%`, a large `a^b` before truncation) | Runtime error `scale too large` ⏳ |
-| Array subscript < 0 or ≥ `BC_DIM_MAX` | Runtime error `Array <a> subscript out of bounds.` ⏳ |
-| Input digit ≥ `ibase` | As in GNU: a single-digit number keeps its face value (`ibase=2; 3` → 3); in a multi-digit number, such a digit counts as `ibase`−1 (`ibase=2; 12` → 3) ⏳ |
+| Non-integer exponent | Warning `non-zero scale in exponent`; the integer part is used |
+| `ibase` < 0, < 2, or > 16 | Warning `negative ibase, set to 2` / `ibase too small, set to 2` / `ibase too large, set to 16`; value clamped |
+| `obase` < 0, < 2, or > `BC_BASE_MAX` | Warning `negative obase, set to 2` / `obase too small, set to 2` / `obase too large, set to 2147483647`; value clamped |
+| `scale` < 0 or > `BC_SCALE_MAX` | Warning `negative scale, set to 0` / `scale too large, set to 1000000000`; value clamped. The sign is that of the assigned value (`scale=-0.5` warns). Also applies to `++`/`--` |
+| Value of an assignment to a register | The value assigned, before clamping (`x = (scale = 2.7)` sets `x` to 2.7), as in GNU |
+| A result or literal whose scale would exceed `BC_SCALE_MAX` (`%` with `scale + scale(b)` too large, `a^b` with a too-large exact scale) | Runtime error `scale too large` |
+| Exponent outside the signed 64-bit range | Runtime error `exponent too large in raise` |
+| Array subscript < 0 (including fractions like `-0.5`) or ≥ `BC_DIM_MAX` | Runtime error `Array <a> subscript out of bounds.` |
+| Input digit ≥ `ibase` | As in GNU: a single-digit number keeps its face value (`ibase=2; 3` → 3); in a multi-digit number, such a digit counts as `ibase`−1 (`ibase=2; 12` → 3) |
 | `break` outside a loop, `return` outside a function | Syntax error ⏳ |
 | Calling an undefined function, or calling with the wrong number of arguments | Runtime error |
-| `l(x)` with `x <= 0` | Returns −(10^scale − 1) for the caller's `scale`, like GNU's library (`scale=3; l(0)` → `-999.000`) ⏳ |
+| `l(x)` with `x <= 0` | Returns −(10^scale − 1) for the caller's `scale`, like GNU's library (`scale=3; l(0)` → `-999.000`) |
 
 ### 3.4 Accuracy of the math library
 For `s`, `c`, `a`, `l`, `e`, `j`, the result is the exact mathematical value **truncated toward
@@ -183,7 +188,7 @@ multi-letter identifiers.
 | Area | GNU bc | bc_clone |
 |---|---|---|
 | Math library accuracy | Can be wrong at low `scale` for large arguments (`scale=5; s(1000000)` → `-.27332`) | Exact truncation (`-.34999`) |
-| Maximum `ibase` | 36 | 16 (POSIX) |
+| Maximum `ibase`, digits | 36; digits `G`–`Z` are accepted | 16 (POSIX); only `0-9A-F` are digits, so `1G` is a syntax error |
 | `BC_SCALE_MAX` | 2 147 483 647 | 1 000 000 000 |
 | Exit status after errors | 0 | 1 (§3.1) |
 | Diagnostics | Include `adr=N` | No address |

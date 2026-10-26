@@ -212,6 +212,14 @@ pub const TEST_CASES: &[TestCase] = &[
         scale: 0,
         expected: "Runtime error (func=(main)): Divide by zero",
     },
+    TestCase {
+        // 2^32 + 1 does not fit a 32-bit usize; it must clamp, not wrap to 1.
+        name: "Scale Limit on 32-bit usize",
+        code: "scale = 4294967297; scale\n",
+        math_enabled: false,
+        scale: 0,
+        expected: "Runtime warning (func=(main)): scale too large, set to 1000000000\n1000000000",
+    },
 ];
 
 /// Evaluates `code` on `ev` without panicking, writing diagnostics to `ev.stderr_writer`.

@@ -565,13 +565,32 @@ pub struct Param {
     pub is_array: bool,
 }
 
+/// One of the special registers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Register {
+    Scale,
+    Ibase,
+    Obase,
+}
+
+impl Register {
+    /// The register's name as written in bc source.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Scale => "scale",
+            Self::Ibase => "ibase",
+            Self::Obase => "obase",
+        }
+    }
+}
+
 /// Enum representing an expression in bc AST.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Number(String),
     Variable(String),
     ArrayAccess(String, Box<Expr>),
-    RegisterAccess(String), // "scale", "ibase", "obase"
+    RegisterAccess(Register),
     UnaryOp(char, Box<Expr>),
     BinaryOp(String, Box<Expr>, Box<Expr>),
     RelationalOp(String, Box<Expr>, Box<Expr>),
@@ -1053,15 +1072,15 @@ impl Parser {
         match t {
             TokenType::Scale => {
                 self.eat(TokenType::Scale)?;
-                Ok(Expr::RegisterAccess("scale".to_string()))
+                Ok(Expr::RegisterAccess(Register::Scale))
             }
             TokenType::Ibase => {
                 self.eat(TokenType::Ibase)?;
-                Ok(Expr::RegisterAccess("ibase".to_string()))
+                Ok(Expr::RegisterAccess(Register::Ibase))
             }
             TokenType::Obase => {
                 self.eat(TokenType::Obase)?;
-                Ok(Expr::RegisterAccess("obase".to_string()))
+                Ok(Expr::RegisterAccess(Register::Obase))
             }
             TokenType::Letter => {
                 let name = self.current_token.value.clone();
@@ -1587,10 +1606,10 @@ mod tests {
             matches!(&stmts[4], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::ScaleCall(_))))
         );
         assert!(
-            matches!(&stmts[5], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::AssignOp(_, t, _)) if **t == Expr::RegisterAccess("obase".to_string())))
+            matches!(&stmts[5], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::AssignOp(_, t, _)) if **t == Expr::RegisterAccess(Register::Obase)))
         );
         assert!(
-            matches!(&stmts[6], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::AssignOp(_, t, _)) if **t == Expr::RegisterAccess("scale".to_string())))
+            matches!(&stmts[6], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::AssignOp(_, t, _)) if **t == Expr::RegisterAccess(Register::Scale)))
         );
     }
 }

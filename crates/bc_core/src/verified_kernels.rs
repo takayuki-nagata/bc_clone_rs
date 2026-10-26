@@ -75,6 +75,15 @@ macro_rules! dual_verified {
 
 dual_verified! {
     pub const MAX_VERIFIED_SCALE: usize = 1_000_000_000;
+    // `BC_SCALE_MAX` (`docs/COMPATIBILITY.md` §2): every `BCNum` scale stays within this bound,
+    // which establishes the `MAX_VERIFIED_SCALE` preconditions of the scale kernels.
+    pub const BC_SCALE_MAX: usize = MAX_VERIFIED_SCALE;
+    // `BC_BASE_MAX`: the largest valid `obase`.
+    pub const BC_BASE_MAX: usize = 2_147_483_647;
+    // `BC_DIM_MAX`: array subscripts range over `0..BC_DIM_MAX`.
+    pub const BC_DIM_MAX: usize = 16_777_216;
+    // Largest valid `ibase` (POSIX).
+    pub const IBASE_MAX: usize = 16;
     pub const POSIX_WRAP_COL_LIMIT: usize = 68;
     pub const TOK_ASSIGN_OP: u8 = 1;
     pub const TOK_PLUS_MINUS: u8 = 2;
@@ -357,39 +366,6 @@ dual_verified! {
         }
     }
 
-    /// Verified `ibase` register clamping (`eval.rs`).
-    pub fn verified_clamp_ibase(reg_val: usize) -> (res: usize)
-        ensures [
-            2 <= res && res <= 16,
-            (2 <= reg_val && reg_val <= 16) ==> res == reg_val,
-            reg_val < 2 ==> res == 2,
-            reg_val > 16 ==> res == 16,
-        ]
-    {
-        if reg_val < 2 {
-            2
-        } else if reg_val > 16 {
-            16
-        } else {
-            reg_val
-        }
-    }
-
-    /// Verified `obase` register clamping (`eval.rs`).
-    pub fn verified_clamp_obase(reg_val: usize) -> (res: usize)
-        ensures [
-            res >= 2,
-            reg_val >= 2 ==> res == reg_val,
-            reg_val < 2 ==> res == 2,
-        ]
-    {
-        if reg_val < 2 {
-            2
-        } else {
-            reg_val
-        }
-    }
-
     /// Verified check for valid bc numeric literal characters (`0..=9` or `A..=F`) (`parser.rs`).
     pub fn verified_is_bc_digit(b: u32) -> (res: bool)
         ensures [
@@ -626,26 +602,40 @@ dual_verified! {
         }
     }
 
-    /// Verified `ibase` register clamping with warning classification (`eval.rs`).
+    /// Verified register clamping with warning classification for `scale`, `ibase`, and
+    /// `obase` assignments (`eval.rs`, `docs/COMPATIBILITY.md` §3.3).
     ///
-    /// Returns `(clamped_ibase, warning_kind)` where `warning_kind` is:
-    /// - `-1`: `reg_val < 2` ("ibase too small, set to 2")
-    /// - `1`: `reg_val > 16` ("ibase too large, set to 16")
-    /// - `0`: `2 <= reg_val <= 16` (no warning)
-    pub fn verified_ibase_warning_and_clamp(reg_val: usize) -> (res: (usize, i8))
+    /// `magnitude` is the absolute value of the integer part saturated to `usize::MAX`, and
+    /// `negative` is the sign of the assigned value. Returns `(clamped, warning_kind)`:
+    /// - `-2`: the value is negative ("negative <reg>, set to <min>")
+    /// - `-1`: `magnitude < min` ("<reg> too small, set to <min>")
+    /// - `1`: `magnitude > max` ("<reg> too large, set to <max>")
+    /// - `0`: in range (no warning)
+    pub fn verified_clamp_register(
+        magnitude: usize,
+        negative: bool,
+        min: usize,
+        max: usize,
+    ) -> (res: (usize, i8))
+        requires [
+            min <= max,
+        ]
         ensures [
-            2 <= res.0 && res.0 <= 16,
-            reg_val < 2 <==> (res.1 == -1 && res.0 == 2),
-            reg_val > 16 <==> (res.1 == 1 && res.0 == 16),
-            (2 <= reg_val && reg_val <= 16) <==> (res.1 == 0 && res.0 == reg_val),
+            min <= res.0 && res.0 <= max,
+            negative <==> (res.1 == -2 && res.0 == min),
+            (!negative && magnitude < min) <==> (res.1 == -1 && res.0 == min),
+            (!negative && magnitude > max) <==> (res.1 == 1 && res.0 == max),
+            (!negative && min <= magnitude && magnitude <= max) <==> (res.1 == 0 && res.0 == magnitude),
         ]
     {
-        if reg_val < 2 {
-            (2, -1)
-        } else if reg_val > 16 {
-            (16, 1)
+        if negative {
+            (min, -2)
+        } else if magnitude < min {
+            (min, -1)
+        } else if magnitude > max {
+            (max, 1)
         } else {
-            (reg_val, 0)
+            (magnitude, 0)
         }
     }
 

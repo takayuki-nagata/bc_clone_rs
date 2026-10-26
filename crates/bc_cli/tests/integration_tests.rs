@@ -690,3 +690,92 @@ fn test_error_diagnostics_in_file_operands() {
     assert_eq!(clone_code, expected_exit_code(bc_code, &expected_err));
     assert_eq!(clone_code, 1);
 }
+
+/// Register clamping, array subscript bounds, exponent rules, and digits >= ibase
+/// (`docs/COMPATIBILITY.md` §2, §3.3), where bc_clone and GNU bc agree.
+#[test]
+fn test_limits_matching_gnu() {
+    let programs = [
+        "scale = -0.5; scale",
+        "scale = 2.7; scale",
+        "ibase = -5; ibase",
+        "ibase = 1; ibase",
+        "obase = 1; obase",
+        "obase = -3; obase",
+        "obase = 99999999999; obase",
+        "x = (scale = 2.7); x",
+        "a[1.5] = 3; a[1]",
+        "a[-0.5] = 4; a[0]",
+        "a[16777215] = 1; a[16777215]",
+        "a[16777216] = 2",
+        "x = a[-1]",
+        "define f(n) { return (a[n]) }\nf(-1)",
+        "ibase = 2; 12",
+        "ibase = 2; 3",
+        "ibase = 2; 1.1",
+        "2^2.0",
+        "2^2.5",
+        "x = 2; x ^= 0.5; x",
+        "2^9223372036854775808",
+        "2^-9223372036854775809",
+    ];
+    for prog in &programs {
+        check_differential(prog, &[]);
+    }
+    check_differential("scale = 3; l(0)", &["-l"]);
+    check_differential("scale = 0; l(-1)", &["-l"]);
+}
+
+/// Implementation-defined limits that differ from GNU bc (`docs/COMPATIBILITY.md` §2, §5).
+#[test]
+fn test_limits_specific_to_bc_clone() {
+    let bin_path = env!("CARGO_BIN_EXE_bc_clone");
+    let cases: [(&str, &str, &str, i32); 6] = [
+        (
+            "scale = 99999999999999999999; scale\n",
+            "1000000000\n",
+            "Runtime warning (func=(main)): scale too large, set to 1000000000\n",
+            0,
+        ),
+        (
+            // Previously the scale was truncated to 32 bits and this printed 1.
+            "scale = 4294967297; scale\n",
+            "1000000000\n",
+            "Runtime warning (func=(main)): scale too large, set to 1000000000\n",
+            0,
+        ),
+        (
+            "ibase = 20; ibase\n",
+            "16\n",
+            "Runtime warning (func=(main)): ibase too large, set to 16\n",
+            0,
+        ),
+        (
+            "0.5 ^ 2000000000\n1\n",
+            "1\n",
+            "Runtime error (func=(main)): scale too large\n",
+            1,
+        ),
+        (
+            "scale = 1000000000; 1 % 0.1\n2\n",
+            "2\n",
+            "Runtime error (func=(main)): scale too large\n",
+            1,
+        ),
+        (
+            "scale = 999999999; ++scale; ++scale; scale\n",
+            "1000000000\n1000000000\n1000000000\n",
+            "Runtime warning (func=(main)): scale too large, set to 1000000000\n",
+            0,
+        ),
+    ];
+    for (input, out, err, code) in cases {
+        let (c, o, e) = run_command(bin_path, &[], input);
+        assert_eq!(
+            (o.as_str(), e.as_str(), c),
+            (out, err, code),
+            "input: {:?}",
+            input
+        );
+    }
+}

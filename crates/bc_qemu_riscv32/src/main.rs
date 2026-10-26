@@ -158,6 +158,14 @@ fn main() -> ! {
             0,
             "Runtime error (func=(main)): Divide by zero",
         ),
+        (
+            // 2^32 + 1 does not fit a 32-bit usize; it must clamp, not wrap to 1.
+            "Scale Limit on 32-bit usize",
+            "scale = 4294967297; scale\n",
+            false,
+            0,
+            "Runtime warning (func=(main)): scale too large, set to 1000000000\n1000000000",
+        ),
     ];
 
     for (name, code, math_enabled, scale, expected) in test_cases {

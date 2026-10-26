@@ -7,6 +7,7 @@
 //! functions using series expansions.
 
 use crate::error::RuntimeError;
+use crate::verified_kernels::BC_SCALE_MAX;
 use crate::verified_kernels::{
     verified_add_sub_scales, verified_alphanumeric_char_val, verified_bcnum_length,
     verified_bessel_negative_order_parity, verified_decimal_scale_shift,
@@ -19,6 +20,15 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive, Zero};
+
+/// Returns 10^n.
+///
+/// Every `BCNum` scale is at most `BC_SCALE_MAX` (10^9), so the decimal shifts derived from
+/// scales stay below `u32::MAX`. A larger `n` means that invariant was broken, which is a bug.
+pub(crate) fn pow10(n: usize) -> BigInt {
+    let exp = u32::try_from(n).expect("decimal shift exceeds u32: BCNum scale invariant violated");
+    BigInt::from(10).pow(exp)
+}
 
 /// Arbitrary-precision decimal number representation for bc.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,20 +60,32 @@ impl BCNum {
             (num_str.as_str(), "")
         };
 
+        // As in GNU bc, a single-digit number keeps its face value, while in a multi-digit
+        // number a digit >= ibase counts as ibase - 1 (`docs/COMPATIBILITY.md` §3.3).
+        let multi_digit = int_part.len() + frac_part.len() > 1;
+        let digit = |b: u8| {
+            let v = verified_alphanumeric_char_val(b);
+            if multi_digit && v >= ibase {
+                ibase - 1
+            } else {
+                v
+            }
+        };
+
         let mut int_val = BigInt::zero();
         for b in int_part.bytes() {
-            int_val = int_val * ibase + verified_alphanumeric_char_val(b);
+            int_val = int_val * ibase + digit(b);
         }
 
         let scale_val = frac_part.len();
         let coeff = if scale_val > 0 {
             let mut frac_numerator = BigInt::zero();
             for b in frac_part.bytes() {
-                frac_numerator = frac_numerator * ibase + verified_alphanumeric_char_val(b);
+                frac_numerator = frac_numerator * ibase + digit(b);
             }
-            let frac_denominator = BigInt::from(ibase).pow(scale_val as u32);
-            let num = (int_val * &frac_denominator + frac_numerator)
-                * BigInt::from(10).pow(scale_val as u32);
+            let frac_denominator = BigInt::from(ibase)
+                .pow(u32::try_from(scale_val).expect("numeric literal has too many digits"));
+            let num = (int_val * &frac_denominator + frac_numerator) * pow10(scale_val);
             num / frac_denominator
         } else {
             int_val
@@ -83,23 +105,23 @@ impl BCNum {
     /// Adds two BCNum values.
     pub fn add(&self, other: &Self) -> Self {
         let (sr, shift_a, shift_b) = verified_add_sub_scales(self.scale, other.scale);
-        let coeff_a = &self.coeff * BigInt::from(10).pow(shift_a as u32);
-        let coeff_b = &other.coeff * BigInt::from(10).pow(shift_b as u32);
+        let coeff_a = &self.coeff * pow10(shift_a);
+        let coeff_b = &other.coeff * pow10(shift_b);
         Self::new(coeff_a + coeff_b, sr)
     }
 
     /// Subtracts other from self.
     pub fn sub(&self, other: &Self) -> Self {
         let (sr, shift_a, shift_b) = verified_add_sub_scales(self.scale, other.scale);
-        let coeff_a = &self.coeff * BigInt::from(10).pow(shift_a as u32);
-        let coeff_b = &other.coeff * BigInt::from(10).pow(shift_b as u32);
+        let coeff_a = &self.coeff * pow10(shift_a);
+        let coeff_b = &other.coeff * pow10(shift_b);
         Self::new(coeff_a - coeff_b, sr)
     }
 
     /// Multiplies two BCNum values under scale.
     pub fn mul(&self, other: &Self, global_scale: usize) -> Self {
         let (sr, diff) = verified_mul_scale_and_shift(self.scale, other.scale, global_scale);
-        let coeff = (&self.coeff * &other.coeff) / BigInt::from(10).pow(diff as u32);
+        let coeff = (&self.coeff * &other.coeff) / pow10(diff);
         Self::new(coeff, sr)
     }
 
@@ -110,10 +132,10 @@ impl BCNum {
         }
         let (sr, shift) = verified_div_scale_and_shift(self.scale, other.scale, global_scale);
         let coeff = if shift >= 0 {
-            let num = &self.coeff * BigInt::from(10).pow(shift as u32);
+            let num = &self.coeff * pow10(shift.unsigned_abs() as usize);
             num / &other.coeff
         } else {
-            let den = &other.coeff * BigInt::from(10).pow((-shift) as u32);
+            let den = &other.coeff * pow10(shift.unsigned_abs() as usize);
             &self.coeff / den
         };
         Ok(Self::new(coeff, sr))
@@ -130,6 +152,10 @@ impl BCNum {
         if other.coeff.is_zero() {
             return Err(RuntimeError::ModuloByZero);
         }
+        // The result scale is max(scale + scale(b), scale(a)).
+        if global_scale + other.scale > BC_SCALE_MAX {
+            return Err(RuntimeError::ScaleTooLarge);
+        }
         let q = self.try_div(other, global_scale)?;
         let prod_coeff = &q.coeff * &other.coeff;
         let prod_scale = q.scale + other.scale;
@@ -143,50 +169,44 @@ impl BCNum {
             .unwrap_or_else(|msg| panic!("{}", msg))
     }
 
-    /// Raises self to the power of other under scale, returning Err on division by zero.
+    /// Raises self to the power of the integer part of other under scale.
+    ///
+    /// Returns Err when a negative power of zero divides by zero, when the exponent does not
+    /// fit in an `i64`, or when the exact intermediate scale `scale(self) * |exponent|` would
+    /// exceed `BC_SCALE_MAX` (`docs/COMPATIBILITY.md` §2).
     pub fn try_pow(&self, other: &Self, global_scale: usize) -> Result<Self, RuntimeError> {
-        let b_val = if other.scale > 0 {
-            &other.coeff / BigInt::from(10).pow(other.scale as u32)
-        } else {
-            other.coeff.clone()
-        };
+        let b_val = &other.coeff / pow10(other.scale);
+        let b_abs = b_val
+            .to_i64()
+            .ok_or(RuntimeError::ExponentTooLarge)?
+            .unsigned_abs();
+        let exact_scale = usize::try_from(b_abs)
+            .ok()
+            .and_then(|b| self.scale.checked_mul(b))
+            .filter(|&s| s <= BC_SCALE_MAX)
+            .ok_or(RuntimeError::ScaleTooLarge)?;
+
+        // Exponentiation by squaring on the coefficient; the scale of the exact power is
+        // `exact_scale`. The base is only squared while bits remain, so it never exceeds
+        // the size of the result.
+        let mut res_coeff = BigInt::from(1);
+        let mut base_coeff = self.coeff.clone();
+        let mut remaining = b_abs;
+        while remaining > 0 {
+            if remaining & 1 == 1 {
+                res_coeff *= &base_coeff;
+            }
+            remaining >>= 1;
+            if remaining > 0 {
+                base_coeff = &base_coeff * &base_coeff;
+            }
+        }
 
         if b_val >= BigInt::zero() {
-            let mut res_coeff = BigInt::from(1);
-            let mut res_scale = 0usize;
-            let mut base_coeff = self.coeff.clone();
-            let mut base_scale = self.scale;
-            let mut temp_b = b_val;
-            while temp_b > BigInt::zero() {
-                if &temp_b % 2 == BigInt::from(1) {
-                    res_coeff *= &base_coeff;
-                    res_scale += base_scale;
-                }
-                base_coeff = &base_coeff * &base_coeff;
-                base_scale += base_scale;
-                temp_b /= 2;
-            }
-            let (sr, diff) = verified_pow_scale_and_shift(res_scale, self.scale, global_scale);
-            let coeff = res_coeff / BigInt::from(10).pow(diff as u32);
-            Ok(Self::new(coeff, sr))
+            let (sr, diff) = verified_pow_scale_and_shift(exact_scale, self.scale, global_scale);
+            Ok(Self::new(res_coeff / pow10(diff), sr))
         } else {
-            let b_abs = -b_val;
-            let mut res_coeff = BigInt::from(1);
-            let mut res_scale = 0usize;
-            let mut base_coeff = self.coeff.clone();
-            let mut base_scale = self.scale;
-            let mut temp_b = b_abs;
-            while temp_b > BigInt::zero() {
-                if &temp_b % 2 == BigInt::from(1) {
-                    res_coeff *= &base_coeff;
-                    res_scale += base_scale;
-                }
-                base_coeff = &base_coeff * &base_coeff;
-                base_scale += base_scale;
-                temp_b /= 2;
-            }
-            let exact_pow = Self::new(res_coeff, res_scale);
-            Self::new(BigInt::from(1), 0).try_div(&exact_pow, global_scale)
+            Self::new(BigInt::from(1), 0).try_div(&Self::new(res_coeff, exact_scale), global_scale)
         }
     }
 
@@ -202,7 +222,7 @@ impl BCNum {
             return Err(RuntimeError::NegativeSqrt);
         }
         let (sr, shift) = verified_sqrt_scale_and_shift(self.scale, global_scale);
-        let num = &self.coeff * BigInt::from(10).pow(shift as u32);
+        let num = &self.coeff * pow10(shift);
         let coeff = num.sqrt();
         Ok(Self::new(coeff, sr))
     }
@@ -215,7 +235,7 @@ impl BCNum {
 
     /// Computes the total number of significant decimal digits.
     pub fn length(&self) -> Self {
-        let divisor = BigInt::from(10).pow(self.scale as u32);
+        let divisor = pow10(self.scale);
         let int_part = self.coeff.abs() / divisor;
         let is_zero = int_part.is_zero();
         let digits = if is_zero {
@@ -241,7 +261,7 @@ impl BCNum {
         let is_negative = self.coeff < BigInt::zero();
         let coeff_abs = self.coeff.abs();
 
-        let divisor = BigInt::from(10).pow(self.scale as u32);
+        let divisor = pow10(self.scale);
         let int_part = &coeff_abs / &divisor;
         let frac_coeff = &coeff_abs % &divisor;
 
@@ -284,7 +304,7 @@ impl BCNum {
         let mut frac_str = String::new();
         if self.scale > 0 {
             let num_digits = if obase != 10 {
-                let target = BigInt::from(10).pow(self.scale as u32);
+                let target = pow10(self.scale);
                 let mut k = 0usize;
                 let mut current = BigInt::from(1);
                 let ob = BigInt::from(obase);
@@ -364,21 +384,21 @@ impl Decimal {
 
     fn one(prec: usize) -> Self {
         Self {
-            value: BigInt::from(10).pow(prec as u32),
+            value: pow10(prec),
             prec,
         }
     }
 
     fn from_fraction(num: i64, den: i64, prec: usize) -> Self {
         Self {
-            value: BigInt::from(num) * BigInt::from(10).pow(prec as u32) / BigInt::from(den),
+            value: BigInt::from(num) * pow10(prec) / BigInt::from(den),
             prec,
         }
     }
 
     fn from_int(val: i64, prec: usize) -> Self {
         Self {
-            value: BigInt::from(val) * BigInt::from(10).pow(prec as u32),
+            value: BigInt::from(val) * pow10(prec),
             prec,
         }
     }
@@ -386,9 +406,9 @@ impl Decimal {
     fn from_bc_num(num: &BCNum, prec: usize) -> Self {
         let (shift, should_mul) = verified_decimal_scale_shift(num.scale, prec);
         let value = if should_mul {
-            &num.coeff * BigInt::from(10).pow(shift as u32)
+            &num.coeff * pow10(shift)
         } else {
-            &num.coeff / BigInt::from(10).pow(shift as u32)
+            &num.coeff / pow10(shift)
         };
         Self { value, prec }
     }
@@ -396,9 +416,9 @@ impl Decimal {
     fn to_bc_num(&self, target_scale: usize) -> BCNum {
         let (shift, should_mul) = verified_decimal_scale_shift(self.prec, target_scale);
         let coeff = if should_mul {
-            &self.value * BigInt::from(10).pow(shift as u32)
+            &self.value * pow10(shift)
         } else {
-            &self.value / BigInt::from(10).pow(shift as u32)
+            &self.value / pow10(shift)
         };
         BCNum::new(coeff, target_scale)
     }
@@ -419,7 +439,7 @@ impl Decimal {
 
     fn mul(&self, other: &Self) -> Self {
         Self {
-            value: (&self.value * &other.value) / BigInt::from(10).pow(self.prec as u32),
+            value: (&self.value * &other.value) / pow10(self.prec),
             prec: self.prec,
         }
     }
@@ -440,7 +460,7 @@ impl Decimal {
 
     fn div(&self, other: &Self) -> Self {
         Self {
-            value: (&self.value * BigInt::from(10).pow(self.prec as u32)) / &other.value,
+            value: (&self.value * pow10(self.prec)) / &other.value,
             prec: self.prec,
         }
     }
@@ -465,7 +485,7 @@ impl Decimal {
     }
 
     fn sqrt(&self) -> Self {
-        let num = &self.value * BigInt::from(10).pow(self.prec as u32);
+        let num = &self.value * pow10(self.prec);
         Self {
             value: num.sqrt(),
             prec: self.prec,
@@ -831,8 +851,8 @@ pub fn bc_ln(x: &BCNum, global_scale: usize) -> BCNum {
     let prec = verified_transcendental_guard_prec(x.scale, global_scale, 0);
     let dec_x = Decimal::from_bc_num(x, prec);
     if dec_x.value <= BigInt::zero() {
-        let coeff = BigInt::parse_bytes(b"-99999999999999999999", 10).unwrap()
-            * BigInt::from(10).pow(global_scale as u32);
+        // Like GNU's library, l(x) for x <= 0 returns (1 - 10^scale) at the caller's scale.
+        let coeff = (BigInt::from(1) - pow10(global_scale)) * pow10(global_scale);
         return BCNum::new(coeff, global_scale);
     }
     let dec_res = decimal_ln(&dec_x, prec);
@@ -842,7 +862,7 @@ pub fn bc_ln(x: &BCNum, global_scale: usize) -> BCNum {
 /// Math exponential function.
 pub fn bc_exp(x: &BCNum, global_scale: usize) -> BCNum {
     let int_approx = if x.scale > 0 {
-        let divisor = BigInt::from(10).pow(x.scale as u32);
+        let divisor = pow10(x.scale);
         (&x.coeff / divisor).abs().to_u64().unwrap_or(0) as usize
     } else {
         x.coeff.abs().to_u64().unwrap_or(0) as usize
@@ -860,7 +880,7 @@ pub fn bc_exp(x: &BCNum, global_scale: usize) -> BCNum {
 /// Bessel function of the first kind J_n(x).
 pub fn bc_bessel(n_num: &BCNum, x: &BCNum, global_scale: usize) -> BCNum {
     let n = if n_num.scale > 0 {
-        let divisor = BigInt::from(10).pow(n_num.scale as u32);
+        let divisor = pow10(n_num.scale);
         &n_num.coeff / divisor
     } else {
         n_num.coeff.clone()
@@ -1399,12 +1419,17 @@ mod tests {
         assert_eq!(verified_decimal_scale_shift(2, 5), (3, true));
         assert_eq!(verified_decimal_scale_shift(3, 3), (0, true));
         assert_eq!(verified_decimal_scale_shift(5, 2), (3, false));
-        assert_eq!(verified_ibase_warning_and_clamp(0), (2, -1));
-        assert_eq!(verified_ibase_warning_and_clamp(1), (2, -1));
-        assert_eq!(verified_ibase_warning_and_clamp(2), (2, 0));
-        assert_eq!(verified_ibase_warning_and_clamp(10), (10, 0));
-        assert_eq!(verified_ibase_warning_and_clamp(16), (16, 0));
-        assert_eq!(verified_ibase_warning_and_clamp(17), (16, 1));
+        assert_eq!(verified_clamp_register(5, true, 2, 16), (2, -2));
+        assert_eq!(verified_clamp_register(0, true, 0, BC_SCALE_MAX), (0, -2));
+        assert_eq!(verified_clamp_register(1, false, 2, 16), (2, -1));
+        assert_eq!(verified_clamp_register(2, false, 2, 16), (2, 0));
+        assert_eq!(verified_clamp_register(16, false, 2, 16), (16, 0));
+        assert_eq!(verified_clamp_register(17, false, 2, 16), (16, 1));
+        assert_eq!(verified_clamp_register(0, false, 0, BC_SCALE_MAX), (0, 0));
+        assert_eq!(
+            verified_clamp_register(usize::MAX, false, 0, BC_SCALE_MAX),
+            (BC_SCALE_MAX, 1)
+        );
         assert_eq!(verified_pratt_infix_info(0), (-1, false, 0));
         assert_eq!(verified_pratt_infix_info(TOK_ASSIGN_OP), (1, true, 1));
         assert_eq!(verified_pratt_infix_info(TOK_PLUS_MINUS), (2, false, 3));

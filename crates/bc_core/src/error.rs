@@ -16,6 +16,9 @@ pub enum RuntimeError {
     UndefinedFunction(String),
     ParameterMismatch,
     ParameterTypeMismatch(String),
+    ArraySubscriptOutOfBounds(String),
+    ExponentTooLarge,
+    ScaleTooLarge,
 }
 
 impl fmt::Display for RuntimeError {
@@ -29,6 +32,11 @@ impl fmt::Display for RuntimeError {
             Self::ParameterTypeMismatch(name) => {
                 write!(f, "Parameter type mismatch parameter {}.", name)
             }
+            Self::ArraySubscriptOutOfBounds(name) => {
+                write!(f, "Array {} subscript out of bounds.", name)
+            }
+            Self::ExponentTooLarge => f.write_str("exponent too large in raise"),
+            Self::ScaleTooLarge => f.write_str("scale too large"),
         }
     }
 }

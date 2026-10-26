@@ -118,9 +118,17 @@ Examples are the POSIX scale and shift computations for `+ - * / sqrt ^`, digit 
 precedence, the C-FFI buffer-capacity check, the Zephyr REPL character class, the CLI argument
 class, and the REPL block-completeness scanner.
 
-**Preconditions are not checked at runtime.** Several kernels require `scale <= MAX_VERIFIED_SCALE`
-(10^9). A caller that can pass larger values voids the proof. Callers must establish the
-precondition (for example by clamping), and any new caller must be reviewed for this.
+**Preconditions are not checked at runtime; callers establish them.** Several kernels require
+`scale <= MAX_VERIFIED_SCALE` (10^9). The evaluator maintains the invariant "every `BCNum` scale is
+at most `BC_SCALE_MAX` (= `MAX_VERIFIED_SCALE`)":
+
+- the `scale` register is clamped by `verified_clamp_register`;
+- `%` and `^` return `scale too large` instead of producing a larger scale;
+- numeric literals with more fractional digits are rejected.
+
+Decimal shifts go through `math::pow10`, which treats a shift above `u32::MAX` as a broken
+invariant (an internal error) instead of truncating it. Review any new code that creates a
+`BCNum` scale against this invariant.
 
 ## Verification Stack — What Is and Is Not Covered
 

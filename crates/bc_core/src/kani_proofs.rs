@@ -139,34 +139,29 @@ fn proof_verified_stdout_step_and_relational_shifts() {
     assert!(shift_l == 0 || shift_r == 0);
 }
 
-/// Bit-precise verification of `ibase` and `obase` clamping and warning kernels across all `usize`.
+/// Bit-precise verification of `verified_clamp_register` for the `scale`, `ibase`, and `obase`
+/// ranges across all `usize` magnitudes and both signs.
 #[kani::proof]
 fn proof_verified_register_clamping() {
-    let reg_val: usize = kani::any();
+    let magnitude: usize = kani::any();
+    let negative: bool = kani::any();
 
-    let ib = verified_clamp_ibase(reg_val);
-    assert!((2..=16).contains(&ib));
-
-    let (ib_warn, warn_kind) = verified_ibase_warning_and_clamp(reg_val);
-    assert_eq!(ib_warn, ib);
-    if reg_val < 2 {
-        assert_eq!(warn_kind, -1);
-        assert_eq!(ib_warn, 2);
-    } else if reg_val > 16 {
-        assert_eq!(warn_kind, 1);
-        assert_eq!(ib_warn, 16);
-    } else {
-        assert_eq!(warn_kind, 0);
-        assert_eq!(ib_warn, reg_val);
+    for (min, max) in [(0, BC_SCALE_MAX), (2, IBASE_MAX), (2, BC_BASE_MAX)] {
+        let (v, kind) = verified_clamp_register(magnitude, negative, min, max);
+        assert!(min <= v && v <= max);
+        if negative {
+            assert!(kind == -2 && v == min);
+        } else if magnitude < min {
+            assert!(kind == -1 && v == min);
+        } else if magnitude > max {
+            assert!(kind == 1 && v == max);
+        } else {
+            assert!(kind == 0 && v == magnitude);
+        }
     }
-
-    let ob = verified_clamp_obase(reg_val);
-    assert!(ob >= 2);
-    if reg_val >= 2 {
-        assert_eq!(ob, reg_val);
-    } else {
-        assert_eq!(ob, 2);
-    }
+    // The clamped scale satisfies the precondition of every scale kernel.
+    let (scale, _) = verified_clamp_register(magnitude, negative, 0, BC_SCALE_MAX);
+    assert!(scale <= MAX_VERIFIED_SCALE);
 }
 
 /// Bit-precise verification of lexer & parser helper kernels (`verified_is_bc_digit`,

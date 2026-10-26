@@ -34,4 +34,6 @@ pub use eval::{BcWriter, Evaluator, WrappedStdout};
 #[cfg(not(verus_keep_ghost))]
 pub use math::BCNum;
 #[cfg(not(verus_keep_ghost))]
-pub use parser::{Expr, ExprOrArray, FunctionDef, Lexer, Param, Parser, Stmt, Token, TokenType};
+pub use parser::{
+    Expr, ExprOrArray, FunctionDef, Lexer, Param, Parser, Register, Stmt, Token, TokenType,
+};
