@@ -158,7 +158,9 @@ address (`adr=N`).
 For `s`, `c`, `a`, `l`, `e`, `j`, the result is the exact mathematical value **truncated toward
 zero** to the current `scale`. This must hold for any argument magnitude whose result fits in
 memory: argument reduction must carry enough guard digits for the size of the argument.
-⏳ `s` and `c` currently lose accuracy for large arguments (bug B3).
+`s` and `c` compute π with as many extra digits as the argument has integer digits. The
+integration test `test_math_library_against_high_precision_oracle` checks every function against
+GNU `bc` evaluated at `scale + 100` and truncated.
 
 ---
 

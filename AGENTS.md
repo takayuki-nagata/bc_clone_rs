@@ -71,14 +71,16 @@ Every function computes internally with guard digits and truncates to the caller
 | Function | Algorithm (as implemented) |
 |---|---|
 | π (internal) | Machin's formula `π = 4·(4·atan(1/5) − atan(1/239))`, with atan by Taylor series (`get_pi`) |
-| `s(x)`, `c(x)` | Reduce `x` modulo 2π into `[-π, π]`, then use the Taylor series directly (10 guard digits) |
+| `s(x)`, `c(x)` | Reduce `x` modulo 2π into `[-π, π]` with π carrying 10 guard digits plus one digit per integer digit of `x` (`reduce_angle`), then use the Taylor series directly |
 | `a(x)` | For `|x| > 1` use `π/2 − atan(1/x)`. Then apply four argument halvings `x/(1+√(1+x²))`, the Taylor series, and multiply by 16 |
 | `l(x)` | Write `x = m·2^k` with `m ≥ 0.707`, then use `ln m = 2·artanh((m−1)/(m+1))`. `ln 2` comes from `2·artanh(1/3)` (15 guard digits) |
 | `e(x)` | Write `x = n·ln2 + r`, use the Taylor series for `e^r`, then multiply by `2^n`. Extra guard digits scale with the size of `x` |
 | `j(n,x)` | Power series of `J_n`; for negative orders, `J_{-n} = (-1)^n J_n` |
 
-Known limitation (v0.4.0 work item): the guard precision of the 2π reduction in `s`/`c` does not
-grow with `|x|`, so very large arguments lose accuracy (e.g. `scale=20; s(10^40)`).
+Accuracy contract: every result is the exact value truncated toward zero
+(`docs/COMPATIBILITY.md` §3.4). `test_math_library_against_high_precision_oracle` in
+`crates/bc_cli/tests/integration_tests.rs` checks it against GNU bc at `scale + 100`. GNU's own
+results are *not* exact at the requested scale.
 
 ### Evaluator (`src/eval.rs`)
 - Dynamic scoping: each variable or array name maps to a stack. Function parameters and `auto`

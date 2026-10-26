@@ -779,3 +779,69 @@ fn test_limits_specific_to_bc_clone() {
         );
     }
 }
+
+/// Checks a `-l` result against the exact value truncated toward zero
+/// (`docs/COMPATIBILITY.md` §3.4).
+///
+/// The reference is GNU bc evaluated at `scale + 100` and then truncated; GNU's own argument
+/// reduction loses digits for large arguments, hence the generous margin. Truncation is
+/// ill-conditioned when the true value lies within the reference error of a multiple of
+/// 10^-scale, so the truncations of the reference ± 10^-(scale+90) are accepted as well.
+fn check_math_oracle(scale: usize, expr: &str) {
+    let hi = scale + 100;
+    let eps = scale + 90;
+    let reference_prog =
+        format!("scale={hi}; v={expr}; e=10^-{eps}; scale={scale}; v/1; (v+e)/1; (v-e)/1\n");
+    let (_, reference, _) = run_command("bc", &["-l"], &reference_prog);
+    let accepted: Vec<String> = reference
+        .replace("\\\n", "")
+        .lines()
+        .map(str::to_string)
+        .collect();
+
+    let bin_path = env!("CARGO_BIN_EXE_bc_clone");
+    let (code, out, err) = run_command(bin_path, &["-l"], &format!("scale={scale}; {expr}\n"));
+    let got = out.replace("\\\n", "");
+    let got = got.trim_end();
+    assert_eq!((code, err.as_str()), (0, ""), "scale={scale}; {expr}");
+    assert!(
+        accepted.iter().any(|a| a == got),
+        "scale={scale}; {expr}\nexpected one of {accepted:?}\ngot {got:?}"
+    );
+}
+
+#[test]
+fn test_math_library_against_high_precision_oracle() {
+    let exprs = [
+        "s(0)",
+        "s(1)",
+        "s(-3.14159)",
+        "s(1000000)",
+        "s(-10^30)",
+        "s(10^40)",
+        "s(7^50)",
+        "c(0)",
+        "c(355)",
+        "c(-12345.678)",
+        "c(10^40)",
+        "a(0.001)",
+        "a(-1)",
+        "a(10^30)",
+        "l(0.000000000000000000000000000001)",
+        "l(2)",
+        "l(123456789.123)",
+        "l(100000000000000000000000000000000000000000000000000)",
+        "e(-100)",
+        "e(0.0000001)",
+        "e(230.5)",
+        "j(0,100)",
+        "j(-3,7)",
+        "j(20,1)",
+        "j(2,-30)",
+    ];
+    for scale in [0, 5, 20] {
+        for expr in exprs {
+            check_math_oracle(scale, expr);
+        }
+    }
+}

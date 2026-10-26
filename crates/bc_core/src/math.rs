@@ -526,22 +526,37 @@ fn get_pi(prec: usize) -> Decimal {
     atan_0_2.mul_int(4).sub(&atan_1_239).mul_int(4)
 }
 
-fn decimal_sin(x: &Decimal, prec: usize) -> Decimal {
-    let pi = get_pi(prec + 10);
+/// Reduces the angle `x` modulo 2π into [-π, π] and returns it with 10 guard digits
+/// (precision `x.prec + 10`).
+///
+/// The reduction subtracts k·2π with k ≈ |x| / 2π, which multiplies the error of 2π by k. π is
+/// therefore computed with as many extra digits as `x` has integer digits, so the reduced angle
+/// is accurate to the guard precision for any magnitude of `x` (`docs/COMPATIBILITY.md` §3.4).
+fn reduce_angle(x: &Decimal) -> Decimal {
+    let guard_prec = x.prec + 10;
+    let int_digits = (&x.value / pow10(x.prec)).abs().to_string().len();
+    let work_prec = guard_prec + int_digits;
+    let pi = get_pi(work_prec);
     let two_pi = pi.mul_int(2);
 
-    let mut x_p = Decimal {
-        value: &x.value * BigInt::from(10).pow(10),
-        prec: prec + 10,
-    };
-
-    x_p = x_p.rem(&two_pi);
-
-    if x_p.value > pi.value {
-        x_p = x_p.sub(&two_pi);
-    } else if x_p.value < -pi.value {
-        x_p = x_p.add(&two_pi);
+    let mut r = Decimal {
+        value: &x.value * pow10(work_prec - x.prec),
+        prec: work_prec,
     }
+    .rem(&two_pi);
+    if r.value > pi.value {
+        r = r.sub(&two_pi);
+    } else if r.value < -pi.value {
+        r = r.add(&two_pi);
+    }
+    Decimal {
+        value: r.value / pow10(int_digits),
+        prec: guard_prec,
+    }
+}
+
+fn decimal_sin(x: &Decimal, prec: usize) -> Decimal {
+    let x_p = reduce_angle(x);
 
     let mut total = Decimal::zero(prec + 10);
     let mut num = x_p.clone();
@@ -575,21 +590,7 @@ fn decimal_sin(x: &Decimal, prec: usize) -> Decimal {
 }
 
 fn decimal_cos(x: &Decimal, prec: usize) -> Decimal {
-    let pi = get_pi(prec + 10);
-    let two_pi = pi.mul_int(2);
-
-    let mut x_p = Decimal {
-        value: &x.value * BigInt::from(10).pow(10),
-        prec: prec + 10,
-    };
-
-    x_p = x_p.rem(&two_pi);
-
-    if x_p.value > pi.value {
-        x_p = x_p.sub(&two_pi);
-    } else if x_p.value < -pi.value {
-        x_p = x_p.add(&two_pi);
-    }
+    let x_p = reduce_angle(x);
 
     let mut total = Decimal::zero(prec + 10);
     let mut num = Decimal::one(prec + 10);
