@@ -829,3 +829,17 @@ fn test_assignment_target_evaluated_once_first() {
         check_differential(prog, &[]);
     }
 }
+
+/// Regressions for mutants that survived the full `cargo mutants` run.
+#[test]
+fn test_mutation_regressions() {
+    let programs = [
+        // A backslash in a string that is not a line continuation is printed as is.
+        "\"a\\bcd\"",
+        // The loop depth is restored after a loop body, so this `break` is outside any loop.
+        "{ while (0) 1; break }\n2",
+    ];
+    for prog in &programs {
+        check_differential(prog, &[]);
+    }
+}

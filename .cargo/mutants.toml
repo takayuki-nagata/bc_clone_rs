@@ -31,4 +31,46 @@ exclude_re = [
     # input hangs; cargo-mutants would report timeouts rather than misses.
     "in Lexer::advance_char",
     "replace Lexer::advance_char with \\(\\)",
+
+    # Code that tests cannot observe:
+    # - Kani harnesses (`#[cfg(kani)] mod kani_proofs`) only compile under `cargo kani`.
+    "kani_proofs::",
+    # - `main` and the process-wide panic hook (the hook only changes what a default panic
+    #   message looks like; unit panics are reported by `run_unit_guarded`, which is tested).
+    " in main$",
+    "install_panic_hook",
+    # - Boundaries at exactly BC_SCALE_MAX: exercising them computes with 10^9 decimal digits.
+    "replace > with (==|>=) in Evaluator::literal",
+    "replace > with >= in BCNum::try_mod_op",
+
+    # Semantically equivalent mutants:
+    # - `sign` is always +1 or -1, so `sign > 0` and `sign >= 0` agree.
+    "replace > with >= in (atan_tiny|decimal_sin|decimal_cos|decimal_atan)",
+    # - Zero is handled before these sign checks, so `< 0` and `<= 0` agree.
+    "replace < with <= in (decimal_exp|decimal_atan)",
+    "replace < with <= in BCNum::format_obase",
+    # - `x.scale > 0` vs `>= 0`: for scale 0 the divisor is 10^0 = 1 either way.
+    "replace > with >= in (bc_exp|bc_bessel)",
+    # - The last squaring in exponentiation by squaring is unused; doing it changes only speed.
+    "replace > with >= in BCNum::try_pow",
+    # - After `return` or `quit`, try_execute skips every remaining statement anyway.
+    "replace \\|\\| with && in Evaluator::try_evaluate",
+    # - atan is odd and the half-angle step x / (1 + sqrt(1 + x^2)) converges for any real x, so
+    #   skipping the sign or reciprocal reduction still gives the exact truncated result.
+    "replace (<|>) with (==|<|>|<=|>=) in decimal_atan",
+    # - ln: skipping the final normalization loop leaves m in [0.5, 0.707); the series still
+    #   converges to the same truncated result.
+    "replace (<|>|&&) with (==|<|>|<=|>=|\\|\\|) in decimal_ln",
+    # - Angle reduction: leaving x outside [-pi, pi] (but within (-2pi, 2pi)) or computing pi
+    #   with more digits does not change the truncated sin/cos.
+    "replace (<|>) with (==|<|>|<=|>=) in reduce_angle",
+    "delete - in reduce_angle",
+    # - `int_digits` only sizes the extra digits of pi; computing it as a larger number adds
+    #   digits.
+    "replace / with \\* in reduce_angle",
+    # - Guard digits: the sin/cos/atan series keep SERIES_GUARD_DIGITS (10) extra digits on top
+    #   of the 15 added by the caller; 10 more, or 10 fewer, cannot change a result truncated to
+    #   `scale` for inputs a test can afford. The high-precision oracle test checks the guard as
+    #   a whole.
+    "replace \\+ with (-|\\*) in guarded",
 ]

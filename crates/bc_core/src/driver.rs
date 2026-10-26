@@ -233,18 +233,34 @@ mod tests {
     #[test]
     fn accumulator_groups_continuations_and_blocks() {
         let mut acc = UnitAccumulator::new();
+        assert!(!acc.is_pending());
         assert_eq!(acc.push_line("1 + \\\n"), None);
         assert_eq!(acc.push_line("2\n"), Some(("1 + \\\n2\n".to_string(), 1)));
         assert_eq!(acc.push_line("{\n"), None);
         assert!(acc.is_pending());
         assert_eq!(acc.push_line("3\n"), None);
         assert_eq!(acc.push_line("}\n"), Some(("{\n3\n}\n".to_string(), 3)));
+        assert!(!acc.is_pending());
         assert_eq!(acc.push_line("4"), Some(("4".to_string(), 6)));
         assert_eq!(acc.finish(), None);
 
         assert_eq!(acc.push_line("/* open\n"), None);
         acc.clear();
         assert_eq!(acc.finish(), None);
+    }
+
+    #[test]
+    fn register_getters_reflect_assignments() {
+        let mut ev = Evaluator::new(
+            false,
+            Box::new(Shared::default()),
+            Box::new(Shared::default()),
+        );
+        assert_eq!((ev.scale(), ev.ibase(), ev.obase()), (0, 10, 10));
+        ev.run_source("scale = 5; obase = 8; ibase = 3\n", STDIN_SOURCE);
+        assert_eq!((ev.scale(), ev.ibase(), ev.obase()), (5, 3, 8));
+        ev.set_scale(usize::MAX);
+        assert_eq!(ev.scale(), crate::verified_kernels::BC_SCALE_MAX);
     }
 
     #[test]

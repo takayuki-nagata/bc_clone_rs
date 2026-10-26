@@ -470,6 +470,21 @@ mod tests {
     }
 
     #[test]
+    fn test_quit_in_a_file_after_an_error_exits_with_status_1() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        CTRL_C_PRESSED.store(false, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!("bc_clone_quit_{}.bc", std::process::id()));
+        std::fs::write(&path, "1/0\nquit\n").unwrap();
+        let args = ["bc".to_string(), path.to_str().unwrap().to_string()];
+        let status = run_app(&args, "2\n".as_bytes(), Vec::new(), Vec::new(), false);
+        let clean = ["bc".to_string(), path.to_str().unwrap().to_string()];
+        std::fs::write(&path, "1\nquit\n").unwrap();
+        let clean_status = run_app(&clean, "2\n".as_bytes(), Vec::new(), Vec::new(), false);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!((status, clean_status), (1, 0));
+    }
+
+    #[test]
     fn test_incomplete_unit_at_end_of_input_is_reported() {
         let _guard = TEST_MUTEX.lock().unwrap();
         CTRL_C_PRESSED.store(false, Ordering::SeqCst);

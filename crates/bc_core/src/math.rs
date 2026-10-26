@@ -528,14 +528,23 @@ fn get_pi(prec: usize) -> Decimal {
     atan_0_2.mul_int(4).sub(&atan_1_239).mul_int(4)
 }
 
+/// Extra decimal digits that the sin/cos/atan series carry on top of the precision they are
+/// asked for (which already includes the caller's guard digits).
+const SERIES_GUARD_DIGITS: usize = 10;
+
+/// The working precision of a series evaluated for precision `prec`.
+fn guarded(prec: usize) -> usize {
+    prec + SERIES_GUARD_DIGITS
+}
+
 /// Reduces the angle `x` modulo 2π into [-π, π] and returns it with 10 guard digits
-/// (precision `x.prec + 10`).
+/// (precision `guarded(x.prec)`).
 ///
 /// The reduction subtracts k·2π with k ≈ |x| / 2π, which multiplies the error of 2π by k. π is
 /// therefore computed with as many extra digits as `x` has integer digits, so the reduced angle
 /// is accurate to the guard precision for any magnitude of `x` (`docs/COMPATIBILITY.md` §3.4).
 fn reduce_angle(x: &Decimal) -> Decimal {
-    let guard_prec = x.prec + 10;
+    let guard_prec = guarded(x.prec);
     let int_digits = (&x.value / pow10(x.prec)).abs().to_string().len();
     let work_prec = guard_prec + int_digits;
     let pi = get_pi(work_prec);
@@ -560,7 +569,7 @@ fn reduce_angle(x: &Decimal) -> Decimal {
 fn decimal_sin(x: &Decimal, prec: usize) -> Decimal {
     let x_p = reduce_angle(x);
 
-    let mut total = Decimal::zero(prec + 10);
+    let mut total = Decimal::zero(guarded(prec));
     let mut num = x_p.clone();
     let x_sq = x_p.mul(&x_p);
     let mut fact = BigInt::from(1);
@@ -569,7 +578,7 @@ fn decimal_sin(x: &Decimal, prec: usize) -> Decimal {
     loop {
         let term = Decimal {
             value: &num.value / &fact,
-            prec: prec + 10,
+            prec: guarded(prec),
         };
         if term.is_zero() {
             break;
@@ -594,8 +603,8 @@ fn decimal_sin(x: &Decimal, prec: usize) -> Decimal {
 fn decimal_cos(x: &Decimal, prec: usize) -> Decimal {
     let x_p = reduce_angle(x);
 
-    let mut total = Decimal::zero(prec + 10);
-    let mut num = Decimal::one(prec + 10);
+    let mut total = Decimal::zero(guarded(prec));
+    let mut num = Decimal::one(guarded(prec));
     let x_sq = x_p.mul(&x_p);
     let mut fact = BigInt::from(1);
     let mut k = 0;
@@ -603,7 +612,7 @@ fn decimal_cos(x: &Decimal, prec: usize) -> Decimal {
     loop {
         let term = Decimal {
             value: &num.value / &fact,
-            prec: prec + 10,
+            prec: guarded(prec),
         };
         if term.is_zero() {
             break;
@@ -628,7 +637,7 @@ fn decimal_cos(x: &Decimal, prec: usize) -> Decimal {
 fn decimal_atan(x: &Decimal, prec: usize) -> Decimal {
     let mut x_p = Decimal {
         value: &x.value * BigInt::from(10).pow(10),
-        prec: prec + 10,
+        prec: guarded(prec),
     };
 
     if x_p.is_zero() {
@@ -642,20 +651,20 @@ fn decimal_atan(x: &Decimal, prec: usize) -> Decimal {
     }
 
     let mut inv = false;
-    let one_p = Decimal::one(prec + 10);
+    let one_p = Decimal::one(guarded(prec));
     if x_p.value > one_p.value {
         x_p = one_p.div(&x_p);
         inv = true;
     }
 
     for _ in 0..4 {
-        let one = Decimal::one(prec + 10);
+        let one = Decimal::one(guarded(prec));
         let x_sq = x_p.mul(&x_p);
         let sqrt_term = one.add(&x_sq).sqrt();
         x_p = x_p.div(&one.add(&sqrt_term));
     }
 
-    let mut total = Decimal::zero(prec + 10);
+    let mut total = Decimal::zero(guarded(prec));
     let mut num = x_p.clone();
     let x_sq = x_p.mul(&x_p);
     let mut k = 1;
@@ -677,7 +686,7 @@ fn decimal_atan(x: &Decimal, prec: usize) -> Decimal {
 
     let mut val = total.mul_int(16);
     if inv {
-        let pi = get_pi(prec + 10);
+        let pi = get_pi(guarded(prec));
         let pi_over_2 = pi.div_int(2);
         val = pi_over_2.sub(&val);
     }

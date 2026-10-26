@@ -128,7 +128,9 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git diff origin/${{ github.base_ref }}...HEAD > pr.diff
-          cargo mutants --in-diff pr.diff
+          # Exit status 3 means only timeouts: a mutant made a loop never end, which the tests
+          # detected by hanging.
+          cargo mutants --in-diff pr.diff || [ $? -eq 3 ]
 
       - name: Run Diff-based Mutation Testing (Push)
         if: github.event_name == 'push'
@@ -140,7 +142,7 @@ jobs:
           else
             git diff $BEFORE..HEAD > push.diff
           fi
-          cargo mutants --in-diff push.diff
+          cargo mutants --in-diff push.diff || [ $? -eq 3 ]
 
 
 

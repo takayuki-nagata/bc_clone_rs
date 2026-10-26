@@ -316,6 +316,16 @@ impl Evaluator {
         v
     }
 
+    /// Converts a numeric literal in the current `ibase`. A literal with more than
+    /// `BC_SCALE_MAX` fractional digits is rejected to keep the scale invariant.
+    fn literal(&self, digits: &str) -> Result<BCNum, BcError> {
+        let num = BCNum::from_string(digits, self.ibase);
+        if num.scale > BC_SCALE_MAX {
+            return Err(RuntimeError::ScaleTooLarge.into());
+        }
+        Ok(num)
+    }
+
     /// Computes `base ^ exp`, warning when the exponent has a fractional part.
     fn power(&mut self, base: &BCNum, exp: &BCNum) -> Result<BCNum, BcError> {
         if exp.scale > 0 {
@@ -327,13 +337,7 @@ impl Evaluator {
     /// Evaluates an AST expression node, returning Err on runtime math/call errors.
     pub fn try_evaluate(&mut self, node: &Expr) -> Result<BCNum, BcError> {
         match node {
-            Expr::Number(value) => {
-                let num = BCNum::from_string(value, self.ibase);
-                if num.scale > BC_SCALE_MAX {
-                    return Err(RuntimeError::ScaleTooLarge.into());
-                }
-                Ok(num)
-            }
+            Expr::Number(value) => self.literal(value),
             Expr::Variable(name) => {
                 let stack = self
                     .variables
