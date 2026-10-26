@@ -131,7 +131,8 @@ process may abort, as GNU `bc` does.
 | Runtime error | `Runtime error (func=<name>): <message>` (`<name>` is `(main)` at top level) |
 | Runtime warning | `Runtime warning (func=<name>): <message>` |
 
-The message texts follow GNU `bc`: `Divide by zero`, `Modulo by zero`,
+The message texts follow GNU `bc`: `Divide by zero`, `Modulo by zero`, `divide by zero` (zero to a
+negative power),
 `Square root of a negative number`, `Parameter type mismatch parameter <p>.`,
 `Function <f> not defined.`, `Parameter number mismatch`, `Array <a> subscript out of bounds.`,
 `exponent too large in raise`, `scale too large`. Unlike GNU, `bc_clone` does not print a bytecode
@@ -201,5 +202,6 @@ multi-letter identifiers.
 | `sqrt` of an exact value | `sqrt(1.000)` prints `1` | `1.0000` at `scale=4`, as POSIX's scale rule requires |
 | `return ()` | Syntax error | Returns 0, as POSIX's grammar allows |
 | Diagnostics | Include `adr=N` | No address |
+| Recovery after a syntax error | yacc error recovery; may report several errors per line and sometimes also discard the following line | One diagnostic, then the rest of the input unit is discarded (§3.1) |
 | Unsupported extensions | — | §4 "Not supported" |
 | Command-line options | `-h -i -l -q -s -v -w` and long forms; options can be grouped | Only `-l`, `-s`, `-w`, one per argument; any other option is an error (status 1) |

@@ -23,6 +23,7 @@ version = "0.3.0"
 dependencies = [
  "bc_core",
  "ctrlc",
+ "proptest",
 ]
 
 [[package]]

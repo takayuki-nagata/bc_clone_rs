@@ -11,6 +11,8 @@ use core::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeError {
     DivideByZero,
+    /// Zero raised to a negative power (GNU bc words this one in lower case).
+    NegativePowerOfZero,
     ModuloByZero,
     NegativeSqrt,
     UndefinedFunction(String),
@@ -25,6 +27,7 @@ impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DivideByZero => f.write_str("Divide by zero"),
+            Self::NegativePowerOfZero => f.write_str("divide by zero"),
             Self::ModuloByZero => f.write_str("Modulo by zero"),
             Self::NegativeSqrt => f.write_str("Square root of a negative number"),
             Self::UndefinedFunction(name) => write!(f, "Function {} not defined.", name),

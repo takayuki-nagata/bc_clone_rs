@@ -97,6 +97,13 @@ pub struct Evaluator {
     call_stack: Vec<String>,
 }
 
+/// An assignment target whose array subscript has already been evaluated.
+enum Place {
+    Variable(String),
+    Element(String, BigInt),
+    Register(Register),
+}
+
 struct ScopeGuard<'a> {
     evaluator: &'a mut Evaluator,
     autos: &'a [Param],
@@ -188,6 +195,78 @@ impl Evaluator {
         );
     }
 
+    /// Resolves an assignment target, evaluating an array subscript exactly once. Returns
+    /// `None` for an expression that is not a named expression (the parser never produces one).
+    fn resolve_place(&mut self, target: &Expr) -> Result<Option<Place>, BcError> {
+        Ok(match target {
+            Expr::Variable(name) => Some(Place::Variable(name.clone())),
+            Expr::ArrayAccess(name, index_expr) => {
+                let idx = self.try_evaluate(index_expr)?;
+                Some(Place::Element(name.clone(), Self::array_index(name, &idx)?))
+            }
+            Expr::RegisterAccess(reg) => Some(Place::Register(*reg)),
+            _ => None,
+        })
+    }
+
+    /// Reads the current value of a resolved target.
+    fn load(&mut self, place: &Place) -> BCNum {
+        match place {
+            Place::Variable(name) => self.variable_stack(name.clone()).last().unwrap().clone(),
+            Place::Element(name, index) => self
+                .array_stack(name.clone())
+                .last()
+                .unwrap()
+                .get(index)
+                .cloned()
+                .unwrap_or_else(BCNum::zero),
+            Place::Register(reg) => BCNum::new(BigInt::from(self.register(*reg)), 0),
+        }
+    }
+
+    /// Writes `val` to a resolved target and returns the value now held there (registers clamp
+    /// it to their range).
+    fn store(&mut self, place: Place, val: &BCNum) -> BCNum {
+        match place {
+            Place::Variable(name) => {
+                *self.variable_stack(name).last_mut().unwrap() = val.clone();
+            }
+            Place::Element(name, index) => {
+                self.array_stack(name)
+                    .last_mut()
+                    .unwrap()
+                    .insert(index, val.clone());
+            }
+            Place::Register(reg) => {
+                let stored = self.store_register(reg, val);
+                return BCNum::new(BigInt::from(stored), 0);
+            }
+        }
+        val.clone()
+    }
+
+    fn register(&self, reg: Register) -> usize {
+        match reg {
+            Register::Scale => self.scale,
+            Register::Ibase => self.ibase,
+            Register::Obase => self.obase,
+        }
+    }
+
+    /// The scope stack of variable `name`, created with its global frame (0) if needed.
+    fn variable_stack(&mut self, name: String) -> &mut Vec<BCNum> {
+        self.variables
+            .entry(name)
+            .or_insert_with(|| vec![BCNum::zero()])
+    }
+
+    /// The scope stack of array `name`, created with its global frame (empty) if needed.
+    fn array_stack(&mut self, name: String) -> &mut Vec<BTreeMap<BigInt, BCNum>> {
+        self.arrays
+            .entry(name)
+            .or_insert_with(|| vec![BTreeMap::new()])
+    }
+
     /// Whether an expression statement is an assignment, whose value is not printed (POSIX).
     /// As in GNU bc, unary minus keeps that property (`-a = 5` prints nothing) and parentheses
     /// remove it (`(a = 5)` prints 5).
@@ -276,14 +355,7 @@ impl Evaluator {
                     .cloned()
                     .unwrap_or_else(BCNum::zero))
             }
-            Expr::RegisterAccess(reg) => {
-                let val = match reg {
-                    Register::Scale => self.scale,
-                    Register::Ibase => self.ibase,
-                    Register::Obase => self.obase,
-                };
-                Ok(BCNum::new(BigInt::from(val), 0))
-            }
+            Expr::RegisterAccess(reg) => Ok(BCNum::new(BigInt::from(self.register(*reg)), 0)),
             Expr::UnaryOp(op, expr) => {
                 let val = self.try_evaluate(expr)?;
                 if *op == '-' {
@@ -324,111 +396,63 @@ impl Evaluator {
                 Ok(BCNum::new(BigInt::from(if res { 1 } else { 0 }), 0))
             }
             Expr::AssignOp(op, target, expr) => {
-                let is_base_reg = matches!(
-                    &**target,
-                    Expr::RegisterAccess(Register::Ibase | Register::Obase)
-                );
+                // The named expression is evaluated once, before the right-hand side, as in
+                // GNU bc: `a[i++] = i` stores into a[0], and `c += c++` adds the old value.
+                let place = self.resolve_place(target)?;
 
-                let val = if is_base_reg && op == "=" {
-                    let mut is_single_char = false;
-                    let mut char_val = 0usize;
-                    if let Expr::Number(num_val) = &**expr {
-                        let cleaned = num_val.replace("\\\n", "");
-                        if cleaned.len() == 1 {
-                            let b = cleaned.as_bytes()[0];
-                            is_single_char = true;
-                            char_val = verified_hex_char_val(b);
+                let val = match (&place, op.as_str(), &**expr) {
+                    // POSIX: a single digit assigned to ibase or obase is read as hexadecimal.
+                    (
+                        Some(Place::Register(Register::Ibase | Register::Obase)),
+                        "=",
+                        Expr::Number(digits),
+                    ) if digits.replace("\\\n", "").len() == 1 => {
+                        let b = digits.replace("\\\n", "").as_bytes()[0];
+                        BCNum::new(BigInt::from(verified_hex_char_val(b)), 0)
+                    }
+                    (_, "=", _) => self.try_evaluate(expr)?,
+                    _ => {
+                        let old_val = match &place {
+                            Some(place) => self.load(place),
+                            None => self.try_evaluate(target)?,
+                        };
+                        let rhs = self.try_evaluate(expr)?;
+                        match &op[..op.len() - 1] {
+                            "+" => old_val.add(&rhs),
+                            "-" => old_val.sub(&rhs),
+                            "*" => old_val.mul(&rhs, self.scale),
+                            "/" => old_val.try_div(&rhs, self.scale)?,
+                            "%" => old_val.try_mod_op(&rhs, self.scale)?,
+                            "^" => self.power(&old_val, &rhs)?,
+                            _ => BCNum::zero(),
                         }
                     }
-                    if is_single_char {
-                        BCNum::new(BigInt::from(char_val), 0)
-                    } else {
-                        self.try_evaluate(expr)?
-                    }
-                } else {
-                    let mut val = self.try_evaluate(expr)?;
-                    if op != "=" {
-                        let old_val = self.try_evaluate(target)?;
-                        let base_op = &op[..op.len() - 1];
-                        val = match base_op {
-                            "+" => old_val.add(&val),
-                            "-" => old_val.sub(&val),
-                            "*" => old_val.mul(&val, self.scale),
-                            "/" => old_val.try_div(&val, self.scale).map_err(BcError::from)?,
-                            "%" => old_val
-                                .try_mod_op(&val, self.scale)
-                                .map_err(BcError::from)?,
-                            "^" => self.power(&old_val, &val)?,
-                            _ => BCNum::zero(),
-                        };
-                    }
-                    val
                 };
 
-                match &**target {
-                    Expr::Variable(name) => {
-                        let var_stack = self
-                            .variables
-                            .entry(name.clone())
-                            .or_insert_with(|| vec![BCNum::zero()]);
-                        *var_stack.last_mut().unwrap() = val.clone();
-                    }
-                    Expr::ArrayAccess(name, idx_expr) => {
-                        let idx = self.try_evaluate(idx_expr)?;
-                        let idx_val = Self::array_index(name, &idx)?;
-                        let arr_stack = self
-                            .arrays
-                            .entry(name.clone())
-                            .or_insert_with(|| vec![BTreeMap::new()]);
-                        arr_stack.last_mut().unwrap().insert(idx_val, val.clone());
-                    }
-                    Expr::RegisterAccess(reg) => {
-                        // As in GNU bc, the value of the assignment is the value assigned,
-                        // even when the register clamps it.
-                        self.store_register(*reg, &val);
-                    }
-                    _ => {}
+                // As in GNU bc, the value of the assignment is the value assigned, even when a
+                // register clamps it.
+                if let Some(place) = place {
+                    self.store(place, &val);
                 }
                 Ok(val)
             }
             Expr::UpdateOp(op, is_prefix, target) => {
-                let old_val = self.try_evaluate(target)?;
+                let place = self.resolve_place(target)?;
+                let old_val = match &place {
+                    Some(place) => self.load(place),
+                    None => self.try_evaluate(target)?,
+                };
                 let step = BCNum::new(BigInt::from(1), 0);
                 let new_val = if op == "++" {
                     old_val.add(&step)
                 } else {
                     old_val.sub(&step)
                 };
-
-                match &**target {
-                    Expr::Variable(name) => {
-                        let var_stack = self
-                            .variables
-                            .entry(name.clone())
-                            .or_insert_with(|| vec![BCNum::zero()]);
-                        *var_stack.last_mut().unwrap() = new_val.clone();
-                    }
-                    Expr::ArrayAccess(name, idx_expr) => {
-                        let idx = self.try_evaluate(idx_expr)?;
-                        let idx_val = Self::array_index(name, &idx)?;
-                        let arr_stack = self
-                            .arrays
-                            .entry(name.clone())
-                            .or_insert_with(|| vec![BTreeMap::new()]);
-                        arr_stack
-                            .last_mut()
-                            .unwrap()
-                            .insert(idx_val, new_val.clone());
-                    }
-                    Expr::RegisterAccess(reg) => {
-                        let stored = self.store_register(*reg, &new_val);
-                        let final_val = BCNum::new(BigInt::from(stored), 0);
-                        return Ok(if *is_prefix { final_val } else { old_val });
-                    }
-                    _ => {}
-                }
-
-                Ok(if *is_prefix { new_val } else { old_val })
+                let stored = match place {
+                    Some(place) => self.store(place, &new_val),
+                    None => new_val,
+                };
+                Ok(if *is_prefix { stored } else { old_val })
             }
             Expr::Call(name, args) => {
                 if self.functions.contains_key(name) {
@@ -469,23 +493,22 @@ impl Evaluator {
                         }
                     }
 
+                    // Every name keeps its global frame at the bottom of its stack, so popping
+                    // the function's frames in `ScopeGuard::drop` never leaves an empty stack
+                    // (a name first seen as a parameter or `auto` stays usable afterwards).
                     for (is_arr, pname, arr_opt, val_opt) in evaluated_args {
                         if is_arr {
-                            let stack = self.arrays.entry(pname).or_default();
-                            stack.push(arr_opt.unwrap());
+                            self.array_stack(pname).push(arr_opt.unwrap());
                         } else {
-                            let stack = self.variables.entry(pname).or_default();
-                            stack.push(val_opt.unwrap());
+                            self.variable_stack(pname).push(val_opt.unwrap());
                         }
                     }
 
                     for auto in &func.autos {
                         if auto.is_array {
-                            let stack = self.arrays.entry(auto.name.clone()).or_default();
-                            stack.push(BTreeMap::new());
+                            self.array_stack(auto.name.clone()).push(BTreeMap::new());
                         } else {
-                            let stack = self.variables.entry(auto.name.clone()).or_default();
-                            stack.push(BCNum::zero());
+                            self.variable_stack(auto.name.clone()).push(BCNum::zero());
                         }
                     }
 
@@ -1847,6 +1870,23 @@ mod tests {
         evaluator3.execute(&block_break);
         let val4 = evaluator3.evaluate(&Expr::Variable("block_var2".to_string()));
         assert_eq!(val4.coeff, BigInt::from(0));
+    }
+
+    #[test]
+    fn test_names_first_seen_as_parameters_or_autos_stay_usable() {
+        let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut ev = Evaluator::new(
+            false,
+            Box::new(TestWriter { buf: out.clone() }),
+            Box::new(String::new()),
+        );
+        let src = "define f(p, q[]) {\nauto r, s[]\nr = p; s[0] = q[0]\nreturn (r + s[0])\n}\n\
+                   t[0] = 2; f(1, t[])\n\
+                   p = 5; q[0] = 6; r++; s[1] = 7; p; q[0]; r; s[1]\n";
+        let summary = ev.run_source(src, "test");
+        assert_eq!(summary.errors, 0);
+        let out = String::from_utf8(out.lock().unwrap().clone()).unwrap();
+        assert_eq!(out, "3\n0\n5\n6\n1\n7\n");
     }
 
     #[test]

@@ -205,6 +205,8 @@ impl BCNum {
         if b_val >= BigInt::zero() {
             let (sr, diff) = verified_pow_scale_and_shift(exact_scale, self.scale, global_scale);
             Ok(Self::new(res_coeff / pow10(diff), sr))
+        } else if res_coeff.is_zero() {
+            Err(RuntimeError::NegativePowerOfZero)
         } else {
             Self::new(BigInt::from(1), 0).try_div(&Self::new(res_coeff, exact_scale), global_scale)
         }
@@ -1477,7 +1479,10 @@ mod tests {
 
         assert_eq!(ten.try_div(&zero, 0), Err(RuntimeError::DivideByZero));
         assert_eq!(ten.try_mod_op(&zero, 0), Err(RuntimeError::ModuloByZero));
-        assert_eq!(zero.try_pow(&neg, 0), Err(RuntimeError::DivideByZero));
+        assert_eq!(
+            zero.try_pow(&neg, 0),
+            Err(RuntimeError::NegativePowerOfZero)
+        );
         assert_eq!(neg.try_sqrt(0), Err(RuntimeError::NegativeSqrt));
 
         assert_eq!(

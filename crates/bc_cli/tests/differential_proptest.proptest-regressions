@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 256eebb9b63d6c056d99b55fe4ec43e7790be8c90b47881037114a37dddf0a15 # shrinks to prog = "define f(a, n) {\nauto x\nx = a * 2\nif (n > 0) if (n < 4) return (x + f(a, n - 1))\nreturn (x - n)\n}\nif (-f(0, 0) != 1) a = (0 + length(((b = 388) ^ -3)))\n"
+cc ba8219741a689639aa1aa0357d946ec1ea6fd2e4808d0847611ff4973b82d5e2 # shrinks to prog = "define f(a, n) {\nauto x\nx = a * 2\nif (n > 0) if (n < 4) return (x + f(a, n - 1))\nreturn (x - n)\n}\nif ((0 + ((.8058 + 1077.7) ^ -1)) < (c = (f(a, 1653) ^ 2))) if (((b[2] * (b * 991)) ^ -1) >= (-x - 165.3754)) scale = 5\n"
+cc 6e818c5b6ea8d93d90c35c8b8541118231832400b5d5a56c871d43ef28a19d31 # shrinks to prog = "define f(a, n) {\nauto x\nx = a * 2\nif (n > 0) if (n < 4) return (x + f(a, n - 1))\nreturn (x - n)\n}\nif ((0 + 2) != 0) c += (c++ + 0)\nc++\n"
+cc 16b3c4e6b8943cba791135cfe54baa5f86d232c0774cbef5eab5fe780fc3e054 # shrinks to prog = "define f(a, n) {\nauto x\nx = a * 2\nif (n > 0) if (n < 4) return (x + f(a, n - 1))\nreturn (x - n)\n}\nfor (i = 0; i < 0; i++) { length(---a) }; if ((scale(48.558) * ++y) == (length(92) * x++)) obase = 10\n"

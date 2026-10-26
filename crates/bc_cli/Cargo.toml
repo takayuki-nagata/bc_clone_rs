@@ -13,5 +13,8 @@ path = "src/main.rs"
 bc_core = { path = "../bc_core" }
 ctrlc = "3.4"
 
+[dev-dependencies]
+proptest = "1.5"
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(miri)'] }
