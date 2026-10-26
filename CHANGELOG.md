@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.4.0 — unreleased
+## v0.4.0 — 2026-10-26
 
 This release makes POSIX.1-2024 the authoritative specification and fixes the defects found by
 reviewing the verification suite and testing against GNU `bc`. All behavior is specified in

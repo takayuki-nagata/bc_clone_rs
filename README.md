@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/ci.yml/badge.svg)](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/ci.yml)
 [![Release](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/release.yml/badge.svg)](https://github.com/takayuki-nagata/bc_clone_rs/actions/workflows/release.yml)
-[![Version](https://img.shields.io/badge/version-v0.3.0-blue.svg)](https://github.com/takayuki-nagata/bc_clone_rs/releases)
+[![Version](https://img.shields.io/badge/version-v0.4.0-blue.svg)](https://github.com/takayuki-nagata/bc_clone_rs/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 An arbitrary-precision calculator implementing the POSIX.1-2024 `bc` utility in Rust (`bc_clone_rs`), producing the `bc_clone` executable. The engine is `#![no_std]` and also runs as a C library, on Zephyr RTOS, on bare-metal RISC-V, and in the browser via WebAssembly. It is a rewrite of the earlier Python implementation [`bc_clone_py`](https://github.com/takayuki-nagata/bc_clone_py).
@@ -28,7 +28,7 @@ An arbitrary-precision calculator implementing the POSIX.1-2024 `bc` utility in 
 
 ## Performance & Benchmarks
 
-`bc_clone` is highly optimized and outperforms the original `system bc` (GNU bc) by over **45x** for high-precision calculations. 
+`bc_clone` is about **50x** faster than GNU `bc` 1.08.2 on the high-precision benchmark below.
 
 ### Benchmark: Computing $\pi$ to 10,000 decimal places
 Using the arctangent formula for $\pi$ ($4 \times \arctan(1)$) with `scale=10000`:
@@ -38,8 +38,10 @@ time ./bc_clone -l <<< "scale=10000;4*a(1)"
 
 | Implementation | Execution Time (Real) | Speedup |
 |---|---|---|
-| **`bc_clone` (Rust)** | **~1.7 seconds** | **47x faster** |
-| `system bc` (GNU bc) | ~80.8 seconds | 1.0x (Baseline) |
+| **`bc_clone` v0.4.0 (Rust)** | **~1.5 seconds** | **~51x faster** |
+| GNU `bc` 1.08.2 | ~76.4 seconds | 1.0x (Baseline) |
+
+Measured on a 4-core x86_64 Linux machine (median of three `bc_clone` runs); both outputs are byte-for-byte identical.
 
 ### Key Reasons for the Performance Advantage
 1. **CPU-Native Binary Representation**: Unlike the original `bc` which operates on a slow digit-by-digit base-10 array representation, `bc_clone` stores numbers in binary format using native CPU 64-bit integer limbs.
