@@ -13,7 +13,7 @@ mod uart;
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
-use bc_core::{BcWriter, Evaluator, Lexer, Parser};
+use bc_core::{BcWriter, Evaluator, STDIN_SOURCE};
 use core::cell::RefCell;
 use core::fmt::Write;
 use core::panic::PanicInfo;
@@ -65,34 +65,7 @@ fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> Strin
     );
     evaluator.scale = default_scale;
 
-    let lexer = Lexer::new(code);
-    let mut parser = match Parser::try_new(lexer) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = writeln!(evaluator.stderr_writer, "{}", e);
-            return out_buf.0.borrow().clone();
-        }
-    };
-    let stmts = match parser.try_parse_program() {
-        Ok(s) => s,
-        Err(e) => {
-            if e != "quit" {
-                let _ = writeln!(evaluator.stderr_writer, "{}", e);
-            }
-            return out_buf.0.borrow().clone();
-        }
-    };
-
-    for stmt in &stmts {
-        if let Err(e) = evaluator.try_execute(stmt) {
-            let _ = writeln!(evaluator.stderr_writer, "Runtime error: {}", e);
-            break;
-        }
-        if evaluator.quit_flag {
-            break;
-        }
-    }
-    let _ = evaluator.stdout_writer.flush();
+    evaluator.run_source(code, STDIN_SOURCE);
 
     out_buf.0.borrow().clone()
 }
@@ -183,7 +156,7 @@ fn main() -> ! {
             "1 / 0\n",
             false,
             0,
-            "Runtime error: division by zero",
+            "Runtime error (func=(main)): Divide by zero",
         ),
     ];
 

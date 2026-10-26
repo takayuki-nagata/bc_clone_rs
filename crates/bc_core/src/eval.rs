@@ -8,13 +8,14 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Write as FmtWrite;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
+use crate::error::{BcError, RuntimeError};
 use crate::math::BCNum;
 use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Stmt};
 use crate::verified_kernels::{
@@ -88,6 +89,9 @@ pub struct Evaluator {
     pub return_flag: bool,
     pub return_value: BCNum,
     pub quit_flag: bool,
+
+    /// Names of the user functions currently executing, innermost last (for diagnostics).
+    call_stack: Vec<String>,
 }
 
 struct ScopeGuard<'a> {
@@ -100,6 +104,7 @@ struct ScopeGuard<'a> {
 
 impl<'a> Drop for ScopeGuard<'a> {
     fn drop(&mut self) {
+        self.evaluator.call_stack.pop();
         self.evaluator.return_flag = self.prev_return_flag;
         self.evaluator.return_value = self.prev_return_value.clone();
 
@@ -145,11 +150,22 @@ impl Evaluator {
             return_flag: false,
             return_value: BCNum::zero(),
             quit_flag: false,
+            call_stack: Vec::new(),
         }
     }
 
+    /// Writes `Runtime warning (func=<current function>): <msg>` to the diagnostic stream.
+    fn warn(&mut self, msg: &str) {
+        let func = self.call_stack.last().map_or("(main)", String::as_str);
+        let _ = writeln!(
+            self.stderr_writer,
+            "Runtime warning (func={}): {}",
+            func, msg
+        );
+    }
+
     /// Evaluates an AST expression node, returning Err on runtime math/call errors.
-    pub fn try_evaluate(&mut self, node: &Expr) -> Result<BCNum, String> {
+    pub fn try_evaluate(&mut self, node: &Expr) -> Result<BCNum, BcError> {
         match node {
             Expr::Number(value) => Ok(BCNum::from_string(value, self.ibase)),
             Expr::Variable(name) => {
@@ -202,9 +218,9 @@ impl Evaluator {
                     "+" => Ok(l.add(&r)),
                     "-" => Ok(l.sub(&r)),
                     "*" => Ok(l.mul(&r, self.scale)),
-                    "/" => l.try_div(&r, self.scale).map_err(String::from),
-                    "%" => l.try_mod_op(&r, self.scale).map_err(String::from),
-                    "^" => l.try_pow(&r, self.scale).map_err(String::from),
+                    "/" => l.try_div(&r, self.scale).map_err(BcError::from),
+                    "%" => l.try_mod_op(&r, self.scale).map_err(BcError::from),
+                    "^" => l.try_pow(&r, self.scale).map_err(BcError::from),
                     _ => Ok(BCNum::zero()),
                 }
             }
@@ -258,9 +274,11 @@ impl Evaluator {
                             "+" => old_val.add(&val),
                             "-" => old_val.sub(&val),
                             "*" => old_val.mul(&val, self.scale),
-                            "/" => old_val.try_div(&val, self.scale).map_err(String::from)?,
-                            "%" => old_val.try_mod_op(&val, self.scale).map_err(String::from)?,
-                            "^" => old_val.try_pow(&val, self.scale).map_err(String::from)?,
+                            "/" => old_val.try_div(&val, self.scale).map_err(BcError::from)?,
+                            "%" => old_val
+                                .try_mod_op(&val, self.scale)
+                                .map_err(BcError::from)?,
+                            "^" => old_val.try_pow(&val, self.scale).map_err(BcError::from)?,
                             _ => BCNum::zero(),
                         };
                     }
@@ -307,15 +325,9 @@ impl Evaluator {
                                 let (v, warn_kind) =
                                     verified_ibase_warning_and_clamp(reg_val_usize);
                                 if warn_kind < 0 {
-                                    let _ = writeln!(
-                                        self.stderr_writer,
-                                        "Runtime warning (func=(main), adr=3): ibase too small, set to 2"
-                                    );
+                                    self.warn("ibase too small, set to 2");
                                 } else if warn_kind > 0 {
-                                    let _ = writeln!(
-                                        self.stderr_writer,
-                                        "Runtime warning (func=(main), adr=3): ibase too large, set to 16"
-                                    );
+                                    self.warn("ibase too large, set to 16");
                                 }
                                 self.ibase = v;
                                 reg_val = BigInt::from(v);
@@ -404,7 +416,7 @@ impl Evaluator {
                 if self.functions.contains_key(name) {
                     let func = self.functions.get(name).unwrap().clone();
                     if args.len() != func.params.len() {
-                        return Err("argument count mismatch".to_string());
+                        return Err(RuntimeError::ParameterMismatch.into());
                     }
 
                     let mut evaluated_args = Vec::new();
@@ -424,13 +436,18 @@ impl Evaluator {
                                     None,
                                 ));
                             } else {
-                                return Err("expected array argument".to_string());
+                                return Err(RuntimeError::ParameterTypeMismatch(
+                                    param.name.clone(),
+                                )
+                                .into());
                             }
                         } else if let ExprOrArray::Expr(expr) = arg {
                             let val = self.try_evaluate(expr)?;
                             evaluated_args.push((false, param.name.clone(), None, Some(val)));
                         } else {
-                            return Err("argument count mismatch".to_string());
+                            return Err(
+                                RuntimeError::ParameterTypeMismatch(param.name.clone()).into()
+                            );
                         }
                     }
 
@@ -459,6 +476,7 @@ impl Evaluator {
                     self.return_flag = false;
                     self.return_value = BCNum::zero();
 
+                    self.call_stack.push(name.clone());
                     let guard = ScopeGuard {
                         evaluator: self,
                         autos: &func.autos,
@@ -468,7 +486,10 @@ impl Evaluator {
                     };
 
                     for stmt in &func.body {
-                        guard.evaluator.try_execute(stmt)?;
+                        guard
+                            .evaluator
+                            .try_execute(stmt)
+                            .map_err(|e| e.in_function(name))?;
                         if guard.evaluator.return_flag || guard.evaluator.quit_flag {
                             break;
                         }
@@ -507,13 +528,13 @@ impl Evaluator {
                     }
                 }
 
-                Err(format!("undefined function {}", name))
+                Err(RuntimeError::UndefinedFunction(name.clone()).into())
             }
             Expr::LengthCall(expr) => Ok(self.try_evaluate(expr)?.length()),
             Expr::SqrtCall(expr) => self
                 .try_evaluate(expr)?
                 .try_sqrt(self.scale)
-                .map_err(String::from),
+                .map_err(BcError::from),
             Expr::ScaleCall(expr) => Ok(self.try_evaluate(expr)?.scale_func()),
         }
     }
@@ -524,7 +545,7 @@ impl Evaluator {
     }
 
     /// Executes an AST statement node, returning Err on runtime errors.
-    pub fn try_execute(&mut self, node: &Stmt) -> Result<(), String> {
+    pub fn try_execute(&mut self, node: &Stmt) -> Result<(), BcError> {
         if verified_should_abort_execution(self.break_flag, self.return_flag, self.quit_flag) {
             return Ok(());
         }
@@ -1842,12 +1863,15 @@ mod tests {
             assert!(ev.try_execute(&stmt).is_ok());
         }
 
-        // Calling bad(10, a[]) must return Err("division by zero") AND ScopeGuard must restore x = 42
+        // Calling bad(10, a[]) must fail with "Divide by zero" inside bad() AND ScopeGuard must restore x = 42
         let mut p_call = Parser::try_new(Lexer::new("bad(10, a[])\n")).unwrap();
         let call_stmts = p_call.try_parse_program().unwrap();
         assert_eq!(
             ev.try_execute(&call_stmts[0]),
-            Err("division by zero".to_string())
+            Err(BcError::Runtime {
+                kind: RuntimeError::DivideByZero,
+                func: Some("bad".to_string())
+            })
         );
         let x_after = ev.try_evaluate(&Expr::Variable("x".to_string())).unwrap();
         assert_eq!(x_after.coeff, BigInt::from(42));
@@ -1857,35 +1881,50 @@ mod tests {
         let stmts_mismatch = p_mismatch.try_parse_program().unwrap();
         assert_eq!(
             ev.try_execute(&stmts_mismatch[0]),
-            Err("argument count mismatch".to_string())
+            Err(BcError::Runtime {
+                kind: RuntimeError::ParameterMismatch,
+                func: None
+            })
         );
 
         let mut p_arr_err = Parser::try_new(Lexer::new("bad(10, 20)\n")).unwrap();
         let stmts_arr_err = p_arr_err.try_parse_program().unwrap();
         assert_eq!(
             ev.try_execute(&stmts_arr_err[0]),
-            Err("expected array argument".to_string())
+            Err(BcError::Runtime {
+                kind: RuntimeError::ParameterTypeMismatch("a".to_string()),
+                func: None
+            })
         );
 
         let mut p_scalar_err = Parser::try_new(Lexer::new("bad(a[], a[])\n")).unwrap();
         let stmts_scalar_err = p_scalar_err.try_parse_program().unwrap();
         assert_eq!(
             ev.try_execute(&stmts_scalar_err[0]),
-            Err("argument count mismatch".to_string())
+            Err(BcError::Runtime {
+                kind: RuntimeError::ParameterTypeMismatch("x".to_string()),
+                func: None
+            })
         );
 
         let mut p_undef = Parser::try_new(Lexer::new("nonexistent(1)\n")).unwrap();
         let stmts_undef = p_undef.try_parse_program().unwrap();
         assert_eq!(
             ev.try_execute(&stmts_undef[0]),
-            Err("undefined function nonexistent".to_string())
+            Err(BcError::Runtime {
+                kind: RuntimeError::UndefinedFunction("nonexistent".to_string()),
+                func: None
+            })
         );
 
         let mut p_sqrt = Parser::try_new(Lexer::new("sqrt(-1)\n")).unwrap();
         let stmts_sqrt = p_sqrt.try_parse_program().unwrap();
         assert_eq!(
             ev.try_execute(&stmts_sqrt[0]),
-            Err("square root of negative number".to_string())
+            Err(BcError::Runtime {
+                kind: RuntimeError::NegativeSqrt,
+                func: None
+            })
         );
 
         // Verify binary operators (-, %, ^) and math library functions (s, c, a, l, e, j) via try_evaluate

@@ -17,7 +17,7 @@ use alloc::ffi::CString;
 use alloc::rc::Rc;
 use alloc::string::String;
 use bc_core::verified_kernels::verified_c_ffi_check_buf_capacity;
-use bc_core::{BcWriter, Evaluator, Lexer, Parser};
+use bc_core::{BcWriter, Evaluator, STDIN_SOURCE};
 use core::cell::RefCell;
 use core::ffi::{CStr, c_char, c_void};
 use core::fmt::Write;
@@ -128,39 +128,16 @@ impl BcWriter for CallbackWriter {
     }
 }
 
-/// Evaluates `code_str` against `ev` without panicking, returning `BcStatus::Ok` or `BcStatus::ErrExecution`.
+/// Evaluates `code_str` against `ev` without panicking. Errors are reported to `ev`'s stderr
+/// writer and evaluation continues with the next input unit (`docs/COMPATIBILITY.md` §3.1).
+/// Returns `BcStatus::ErrExecution` if any unit failed.
 fn eval_into_evaluator(code_str: &str, ev: &mut Evaluator) -> BcStatus {
-    let lexer = Lexer::new(code_str);
-    let mut parser = match Parser::try_new(lexer) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = writeln!(ev.stderr_writer, "{}", e);
-            return BcStatus::ErrExecution;
-        }
-    };
-    let stmts = match parser.try_parse_program() {
-        Ok(s) => s,
-        Err(e) => {
-            if e == "quit" {
-                return BcStatus::Ok;
-            }
-            let _ = writeln!(ev.stderr_writer, "{}", e);
-            return BcStatus::ErrExecution;
-        }
-    };
-
-    for stmt in &stmts {
-        if let Err(e) = ev.try_execute(stmt) {
-            let _ = writeln!(ev.stderr_writer, "Runtime error: {}", e);
-            let _ = ev.stdout_writer.flush();
-            return BcStatus::ErrExecution;
-        }
-        if ev.quit_flag {
-            break;
-        }
+    let summary = ev.run_source(code_str, STDIN_SOURCE);
+    if summary.errors > 0 {
+        BcStatus::ErrExecution
+    } else {
+        BcStatus::Ok
     }
-    let _ = ev.stdout_writer.flush();
-    BcStatus::Ok
 }
 
 /// Evaluates a bc expression or script string and writes the output into a buffer.
@@ -825,7 +802,7 @@ mod tests {
             BcStatus::ErrExecution
         );
         let err_msg = unsafe { CStr::from_ptr(buf.as_ptr()).to_str().unwrap() };
-        assert!(err_msg.contains("Runtime error: division by zero"));
+        assert_eq!(err_msg, "Runtime error (func=(main)): Divide by zero\n");
 
         // Small buffer fallback on error (*out_buf = 0)
         assert_eq!(
@@ -848,7 +825,7 @@ mod tests {
             BcStatus::ErrExecution
         );
         let lex_msg = unsafe { CStr::from_ptr(buf.as_ptr()).to_str().unwrap() };
-        assert!(lex_msg.contains("Lexical error"));
+        assert_eq!(lex_msg, "(standard_in) 1: illegal character: @\n");
 
         let syn_err = CString::new("1 + * 2\n").unwrap();
         assert_eq!(
@@ -856,7 +833,7 @@ mod tests {
             BcStatus::ErrExecution
         );
         let syn_msg = unsafe { CStr::from_ptr(buf.as_ptr()).to_str().unwrap() };
-        assert!(syn_msg.contains("Parser error"));
+        assert_eq!(syn_msg, "(standard_in) 1: syntax error\n");
 
         let quit_code = CString::new("quit\n").unwrap();
         assert_eq!(
@@ -887,7 +864,10 @@ mod tests {
             },
             BcStatus::ErrExecution
         );
-        assert!(cb_err.contains("square root of negative number"));
+        assert_eq!(
+            cb_err,
+            "Runtime error (func=(main)): Square root of a negative number\n"
+        );
 
         // 3. Session ScopeGuard recovery and 100-iteration error stress test
         let session = unsafe { bc_session_create(false) };

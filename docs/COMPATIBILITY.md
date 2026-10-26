@@ -28,8 +28,8 @@ against an expected output written by hand (not against GNU `bc`).
 |---|---|
 | `bc [-l] [file ...]` | Files are read in order, then standard input. |
 | `-l` defines `s c a l e j` and sets `scale` to 20 | |
-| An unreadable file operand produces a diagnostic and terminates bc before any further processing | ⏳ the order relative to already-processed files needs a test |
-| Standard error is used only for diagnostics | ⏳ runtime errors currently print a Rust panic message |
+| An unreadable file operand produces a diagnostic (`bc: cannot open file <f>`) and terminates bc with status 1 without processing anything further | Operands before it have already been processed, as in GNU |
+| Standard error is used only for diagnostics | |
 
 ### 1.2 Lexical conventions
 | Requirement | Notes |
@@ -118,17 +118,17 @@ process may abort, as GNU `bc` does.
 - Dynamic scopes (parameters and `auto`) are restored when an error unwinds out of a function.
 - **Exit status**: 0 when all input was processed without any error. 1 when any syntax or runtime
   error occurred (processing still continues to the end), when an option is invalid, or when a file
-  cannot be opened. Warnings do not change the exit status. ⏳ (currently 1 on runtime errors only
-  because of the panic path)
+  cannot be opened. Warnings do not change the exit status.
 
-### 3.2 Diagnostic formats ⏳
+### 3.2 Diagnostic formats
 | Kind | Format |
 |---|---|
-| Syntax error | `<source> <line>: syntax error` (`<source>` is the file name, or `(standard_in)` for stdin) |
+| Syntax error | `<source> <line>: syntax error`, or `<source> <line>: illegal character: <c>` for a character that cannot start a token (`<source>` is the file name, or `(standard_in)` for stdin) |
 | Runtime error | `Runtime error (func=<name>): <message>` (`<name>` is `(main)` at top level) |
 | Runtime warning | `Runtime warning (func=<name>): <message>` |
 
-The message texts follow GNU `bc`: `Divide by zero`, `Square root of a negative number`,
+The message texts follow GNU `bc`: `Divide by zero`, `Modulo by zero`,
+`Square root of a negative number`, `Parameter type mismatch parameter <p>.`,
 `Function <f> not defined.`, `Parameter number mismatch`, `Array <a> subscript out of bounds.`,
 `exponent too large in raise`, `scale too large`. Unlike GNU, `bc_clone` does not print a bytecode
 address (`adr=N`).
@@ -136,7 +136,7 @@ address (`adr=N`).
 ### 3.3 Out-of-range and undefined operations
 | Situation (POSIX: undefined) | Behavior |
 |---|---|
-| Division or modulus by zero | Runtime error `Divide by zero` |
+| Division by zero / modulus by zero | Runtime error `Divide by zero` / `Modulo by zero` |
 | `sqrt` of a negative number | Runtime error `Square root of a negative number` |
 | Non-integer exponent | Warning `non-zero scale in exponent`; the integer part is used ⏳ |
 | `ibase` < 2 or > 16 | Warning `ibase too small/large, set to 2/16`; value clamped |

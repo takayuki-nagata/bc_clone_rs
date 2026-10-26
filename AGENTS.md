@@ -92,11 +92,17 @@ grow with `|x|`, so very large arguments lose accuracy (e.g. `scale=20; s(10^40)
 ### Error handling contract
 - `bc_core` itself never needs to panic on user input. Every syntax or runtime error must be
   reachable as an `Err` from the `try_*` APIs.
-- `bc_c_api`, `bc_zephyr`, `bc_qemu_riscv32`, the ESP32-C3 app, and Wasm call only the `try_*`
-  APIs. This matters because `catch_unwind` does not work under `panic = "abort"` or on
+- Front ends must not rely on unwinding: `catch_unwind` does not work under `panic = "abort"` or on
   `wasm32-unknown-unknown`.
-- Known issue (v0.4.0 work item): `bc_cli` still drives the panicking wrappers inside
-  `catch_unwind`. As a result, runtime errors print a Rust panic message to stderr.
+- Errors are typed: `BcError` (`Quit`, `Syntax`, `Runtime { kind: RuntimeError, func }`) in
+  `src/error.rs`. Do not match on message strings.
+- `src/driver.rs` is the only place that turns input into executed units. `UnitAccumulator`
+  groups lines into units, `Evaluator::run_unit` / `run_source` parse and execute them, and
+  diagnostics are written in the format of `docs/COMPATIBILITY.md` §3.2. Every front end (CLI,
+  C API, Zephyr, QEMU, ESP32-C3, Wasm) uses this driver, so error recovery is identical on all
+  targets.
+- `bc_cli` additionally wraps each unit in `catch_unwind`. A panic there is a bug in `bc_core`; it
+  is reported as `bc_clone: internal error: …` and counted as a failed unit.
 
 ## Verified Kernels (`src/verified_kernels.rs`)
 

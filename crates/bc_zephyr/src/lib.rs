@@ -13,7 +13,7 @@ use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
 use bc_core::verified_kernels::verified_zephyr_classify_char;
-use bc_core::{BcWriter, Evaluator, Lexer, Parser};
+use bc_core::{BcWriter, Evaluator, STDIN_SOURCE};
 use core::cell::RefCell;
 use core::fmt::Write;
 
@@ -210,41 +210,15 @@ pub const TEST_CASES: &[TestCase] = &[
         code: "1 / 0\n",
         math_enabled: false,
         scale: 0,
-        expected: "Runtime error: division by zero",
+        expected: "Runtime error (func=(main)): Divide by zero",
     },
 ];
 
 /// Evaluates `code` on `ev` without panicking, writing diagnostics to `ev.stderr_writer`.
 pub fn eval_bc_non_panicking(code: &str, ev: &mut Evaluator) {
-    let lexer = Lexer::new(code);
-    let mut parser = match Parser::try_new(lexer) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = writeln!(ev.stderr_writer, "{}", e);
-            return;
-        }
-    };
-    let stmts = match parser.try_parse_program() {
-        Ok(s) => s,
-        Err(e) => {
-            if e == "quit" {
-                ev.quit_flag = true;
-                return;
-            }
-            let _ = writeln!(ev.stderr_writer, "{}", e);
-            return;
-        }
-    };
-    for stmt in &stmts {
-        if let Err(e) = ev.try_execute(stmt) {
-            let _ = writeln!(ev.stderr_writer, "Runtime error: {}", e);
-            break;
-        }
-        if ev.quit_flag {
-            break;
-        }
+    if ev.run_source(code, STDIN_SOURCE).quit {
+        ev.quit_flag = true;
     }
-    let _ = ev.stdout_writer.flush();
 }
 
 /// Evaluates a single test case and returns true if actual output matches expected.
@@ -669,9 +643,9 @@ mod tests {
             |_| {},
             None,
         );
-        assert!(out.contains("Lexical error"));
-        assert!(out.contains("Parser error"));
-        assert!(out.contains("Runtime error: division by zero"));
+        assert!(out.contains("(standard_in) 1: illegal character: @"));
+        assert!(out.contains("(standard_in) 1: syntax error"));
+        assert!(out.contains("Runtime error (func=(main)): Divide by zero"));
         assert!(out.contains("7\n"));
     }
 }

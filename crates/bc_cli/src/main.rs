@@ -13,7 +13,7 @@ use bc_core::verified_kernels::{
     CLI_ARG_OPT_INVALID, CLI_ARG_OPT_L, verified_cli_classify_arg, verified_cli_initial_scale,
     verified_repl_block_completeness,
 };
-use bc_core::{BcWriter, Evaluator, Lexer, Parser};
+use bc_core::{BcWriter, Evaluator, RunSummary, STDIN_SOURCE, UnitAccumulator, UnitOutcome};
 
 /// Adapter converting any `std::io::Write + Send` into a `bc_core::BcWriter`.
 pub struct IoWriter<W: Write + Send> {
@@ -88,223 +88,140 @@ pub fn is_block_incomplete(text: &str) -> bool {
     verified_repl_block_completeness(text.as_bytes()).1
 }
 
-/// Formats and logs panic payloads onto evaluator's stderr writer.
-fn handle_panic_payload(
-    payload: Box<dyn std::any::Any + Send>,
-    filename: &str,
-    lexer_line: usize,
-    evaluator: &mut Evaluator,
-    is_interactive: bool,
-) {
-    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
-        *s
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.as_str()
-    } else {
-        "unknown error"
-    };
+thread_local! {
+    /// Set while a unit runs under [`run_unit_guarded`], whose handler reports the panic itself.
+    static IN_UNIT_GUARD: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
 
-    if msg.starts_with("Parser error") || msg.starts_with("Lexical error") {
-        let extracted_line = if let Some(pos) = msg.find("on line ") {
-            let sub = &msg[pos + 8..];
-            let end = sub.find(':').unwrap_or(sub.len());
-            sub[..end].parse::<usize>().unwrap_or(lexer_line)
-        } else {
-            lexer_line
-        };
-        if is_interactive {
+/// Extracts the message from a panic payload.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown panic")
+}
+
+/// Runs one input unit. `bc_core` reports every bc error through `Result`, so a panic here is
+/// an internal bug; it is reported as such and counted as a failed unit instead of aborting.
+fn run_unit_guarded(
+    evaluator: &mut Evaluator,
+    unit: &str,
+    source: &str,
+    first_line: usize,
+) -> UnitOutcome {
+    IN_UNIT_GUARD.with(|g| g.set(true));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        evaluator.run_unit(unit, source, first_line)
+    }));
+    IN_UNIT_GUARD.with(|g| g.set(false));
+    match result {
+        Ok(outcome) => outcome,
+        Err(payload) => {
+            evaluator.break_flag = false;
+            evaluator.return_flag = false;
             let _ = writeln!(
                 evaluator.stderr_writer,
-                "(standard_in) {}: syntax error",
-                extracted_line
+                "bc_clone: internal error: {}",
+                panic_message(payload.as_ref())
             );
-        } else {
-            let _ = writeln!(
-                evaluator.stderr_writer,
-                "{}: syntax error on line {}",
-                filename, extracted_line
-            );
-        }
-    } else if msg.contains("division by zero") {
-        if is_interactive {
-            let _ = writeln!(evaluator.stderr_writer, "Runtime error: division by zero");
-        } else {
-            let _ = writeln!(
-                evaluator.stderr_writer,
-                "Runtime error: division by zero in {}",
-                filename
-            );
-        }
-    } else {
-        let clean_msg = msg.strip_prefix("panic: ").unwrap_or(msg);
-        if is_interactive {
-            let _ = writeln!(evaluator.stderr_writer, "Runtime error: {}", clean_msg);
-        } else {
-            let _ = writeln!(
-                evaluator.stderr_writer,
-                "Runtime error: {} in {}",
-                clean_msg, filename
-            );
+            UnitOutcome::Failed
         }
     }
 }
 
-/// Runs evaluation on a non-interactive text block (catching errors).
+/// Records the outcome of one unit in `summary`. Returns `true` if processing must stop.
+fn record(summary: &mut RunSummary, outcome: UnitOutcome) -> bool {
+    match outcome {
+        UnitOutcome::Completed => false,
+        UnitOutcome::Failed => {
+            summary.errors += 1;
+            false
+        }
+        UnitOutcome::Quit => {
+            summary.quit = true;
+            true
+        }
+    }
+}
+
+/// Processes a complete file or standard-input text, continuing after errors until its end
+/// or `quit` (`docs/COMPATIBILITY.md` §3.1).
 pub fn run_non_interactive_block(
     content: &str,
-    filename: &str,
+    source: &str,
     evaluator: &mut Evaluator,
-) -> Result<(), i32> {
-    let mut accumulator = String::new();
-    let mut has_error = false;
-
+) -> RunSummary {
+    let mut summary = RunSummary::default();
+    let mut acc = UnitAccumulator::new();
     for line in content.split_inclusive('\n') {
-        accumulator.push_str(line);
-
-        let accumulated_text = &accumulator;
-        if accumulated_text.ends_with("\\\n") || accumulated_text.ends_with("\\\r\n") {
-            continue;
-        }
-
-        if is_block_incomplete(accumulated_text) {
-            continue;
-        }
-
-        let lexer = Lexer::new(accumulated_text);
-        let parse_line = lexer.line;
-
-        let parse_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut parser = Parser::new(lexer);
-            parser.parse_program()
-        }));
-
-        match parse_res {
-            Ok(stmts) => {
-                let eval_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    for stmt in &stmts {
-                        evaluator.execute(stmt);
-                        if evaluator.quit_flag {
-                            break;
-                        }
-                    }
-                }));
-
-                match eval_res {
-                    Ok(_) => {
-                        if evaluator.quit_flag {
-                            return Err(0);
-                        }
-                        accumulator.clear();
-                    }
-                    Err(e) => {
-                        handle_panic_payload(e, filename, 1, evaluator, false);
-                        accumulator.clear();
-                        has_error = true;
-                    }
-                }
-            }
-            Err(e) => {
-                if e.downcast_ref::<&str>().is_some_and(|m| *m == "quit") {
-                    return Err(0);
-                }
-                handle_panic_payload(e, filename, parse_line, evaluator, false);
-                accumulator.clear();
-                has_error = true;
-            }
+        if let Some((unit, first_line)) = acc.push_line(line)
+            && record(
+                &mut summary,
+                run_unit_guarded(evaluator, &unit, source, first_line),
+            )
+        {
+            return summary;
         }
     }
-
-    if has_error { Err(1) } else { Ok(()) }
+    if let Some((unit, first_line)) = acc.finish() {
+        record(
+            &mut summary,
+            run_unit_guarded(evaluator, &unit, source, first_line),
+        );
+    }
+    summary
 }
 
-/// Runs interactive REPL loop reading incrementally.
-pub fn run_interactive_loop<R: BufRead>(
-    mut reader: R,
-    evaluator: &mut Evaluator,
-) -> Result<(), i32> {
-    let mut accumulator = String::new();
+/// Runs the interactive REPL, reading and executing one unit at a time.
+pub fn run_interactive_loop<R: BufRead>(mut reader: R, evaluator: &mut Evaluator) -> RunSummary {
+    let mut summary = RunSummary::default();
+    let mut acc = UnitAccumulator::new();
 
     loop {
         if CTRL_C_PRESSED.swap(false, Ordering::SeqCst) {
             let _ = writeln!(evaluator.stderr_writer);
-            accumulator.clear();
+            acc.clear();
             continue;
         }
 
         let mut line = String::new();
         match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {
-                if CTRL_C_PRESSED.swap(false, Ordering::SeqCst) {
-                    accumulator.clear();
-                    continue;
-                }
-                accumulator.push_str(&line);
-            }
-            Err(_) => break,
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
         }
-
-        let accumulated_text = &accumulator;
-        if accumulated_text.ends_with("\\\n") || accumulated_text.ends_with("\\\r\n") {
+        if CTRL_C_PRESSED.swap(false, Ordering::SeqCst) {
+            acc.clear();
             continue;
         }
 
-        if is_block_incomplete(accumulated_text) {
-            continue;
-        }
-
-        let lexer = Lexer::new(accumulated_text);
-        let parse_line = lexer.line;
-
-        let parse_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let mut parser = Parser::new(lexer);
-            parser.parse_program()
-        }));
-
-        match parse_res {
-            Ok(stmts) => {
-                let eval_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    for stmt in &stmts {
-                        evaluator.execute(stmt);
-                        if evaluator.quit_flag {
-                            break;
-                        }
-                    }
-                }));
-
-                match eval_res {
-                    Ok(_) => {
-                        if evaluator.quit_flag {
-                            return Err(0);
-                        }
-                        accumulator.clear();
-                    }
-                    Err(e) => {
-                        handle_panic_payload(e, "standard input", 1, evaluator, true);
-                        accumulator.clear();
-                    }
-                }
-            }
-            Err(e) => {
-                if e.downcast_ref::<&str>().is_some_and(|m| *m == "quit") {
-                    return Err(0);
-                }
-                handle_panic_payload(e, "standard input", parse_line, evaluator, true);
-                accumulator.clear();
-            }
+        if let Some((unit, first_line)) = acc.push_line(&line)
+            && record(
+                &mut summary,
+                run_unit_guarded(evaluator, &unit, STDIN_SOURCE, first_line),
+            )
+        {
+            return summary;
         }
     }
-    Ok(())
+    if let Some((unit, first_line)) = acc.finish() {
+        record(
+            &mut summary,
+            run_unit_guarded(evaluator, &unit, STDIN_SOURCE, first_line),
+        );
+    }
+    summary
 }
 
-/// Main application execution entry point, extracted for CLI and exit-code testing.
+/// Main application entry point, extracted for testing. Returns the process exit status:
+/// 0 if all input was processed without error, 1 otherwise (`docs/COMPATIBILITY.md` §3.1).
 pub fn run_app<R, W, E>(
     args: &[String],
     mut stdin_reader: R,
     stdout_writer: W,
     stderr_writer: E,
     is_interactive: bool,
-) -> Result<(), i32>
+) -> i32
 where
     R: std::io::Read + std::io::BufRead,
     W: std::io::Write + Send + 'static,
@@ -321,7 +238,7 @@ where
             let opt = &arg[1..];
             let mut err_writer = stderr_writer;
             let _ = writeln!(err_writer, "bc: invalid option -- '{}'", opt);
-            return Err(1);
+            return 1;
         } else {
             files.push(arg.clone());
         }
@@ -332,42 +249,48 @@ where
 
     setup_ctrlc_handler();
 
+    let mut errors = 0;
     for filename in &files {
         match std::fs::read_to_string(filename) {
             Ok(content) => {
-                run_non_interactive_block(&content, filename, &mut evaluator)?;
+                let summary = run_non_interactive_block(&content, filename, &mut evaluator);
+                errors += summary.errors;
+                if summary.quit {
+                    return i32::from(errors > 0);
+                }
             }
             Err(_) => {
                 let _ = writeln!(evaluator.stderr_writer, "bc: cannot open file {}", filename);
-                return Err(1);
+                return 1;
             }
         }
     }
 
-    if is_interactive {
+    let summary = if is_interactive {
         run_interactive_loop(stdin_reader, &mut evaluator)
     } else {
         let mut content = String::new();
         if stdin_reader.read_to_string(&mut content).is_err() {
-            return Err(1);
+            return 1;
         }
-        run_non_interactive_block(&content, "standard input", &mut evaluator)
-    }
+        run_non_interactive_block(&content, STDIN_SOURCE, &mut evaluator)
+    };
+    i32::from(errors + summary.errors > 0)
+}
+
+/// Installs a panic hook that stays silent for panics inside [`run_unit_guarded`], which reports
+/// them in bc's diagnostic format, and defers to the default hook otherwise.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if !IN_UNIT_GUARD.with(|g| g.get()) {
+            default_hook(info);
+        }
+    }));
 }
 
 fn main() {
-    let default_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let msg = info
-            .payload()
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()));
-        if msg == Some("quit") {
-            return;
-        }
-        default_hook(info);
-    }));
+    install_panic_hook();
 
     let args: Vec<String> = std::env::args().collect();
     use std::io::IsTerminal;
@@ -375,9 +298,7 @@ fn main() {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
-    if let Err(code) = run_app(&args, stdin.lock(), stdout, stderr, is_interactive) {
-        std::process::exit(code);
-    }
+    std::process::exit(run_app(&args, stdin.lock(), stdout, stderr, is_interactive));
 }
 
 #[cfg(test)]
@@ -445,8 +366,8 @@ mod tests {
 
         let mut evaluator = create_evaluator(false, stdout, stderr);
 
-        let res = run_interactive_loop(input.as_bytes(), &mut evaluator);
-        assert!(res.is_ok());
+        let summary = run_interactive_loop(input.as_bytes(), &mut evaluator);
+        assert_eq!(summary, RunSummary::default());
 
         let out = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
         assert_eq!(out, "3\n3\n");
@@ -455,6 +376,7 @@ mod tests {
     #[test]
     fn test_run_repl_errors() {
         let _guard = TEST_MUTEX.lock().unwrap();
+        CTRL_C_PRESSED.store(false, Ordering::SeqCst);
         let input = "1/0\n@\nsqrt(-1)\n";
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -468,12 +390,16 @@ mod tests {
 
         let mut evaluator = create_evaluator(false, stdout, stderr);
 
-        let _ = run_interactive_loop(input.as_bytes(), &mut evaluator);
+        let summary = run_interactive_loop(input.as_bytes(), &mut evaluator);
+        assert_eq!(summary.errors, 3);
 
         let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
-        assert!(err.contains("division by zero"));
-        assert!(err.contains("syntax error"));
-        assert!(err.contains("square root of negative number"));
+        assert_eq!(
+            err,
+            "Runtime error (func=(main)): Divide by zero\n\
+             (standard_in) 2: illegal character: @\n\
+             Runtime error (func=(main)): Square root of a negative number\n"
+        );
     }
 
     #[test]
@@ -492,11 +418,11 @@ mod tests {
 
         let mut evaluator = create_evaluator(false, stdout, stderr);
 
-        let res = run_non_interactive_block(content, "test.bc", &mut evaluator);
-        assert_eq!(res, Err(1));
+        let summary = run_non_interactive_block(content, "test.bc", &mut evaluator);
+        assert_eq!(summary.errors, 1);
 
         let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
-        assert!(err.contains("division by zero in test.bc"));
+        assert_eq!(err, "Runtime error (func=(main)): Divide by zero\n");
     }
 
     #[test]
@@ -511,74 +437,68 @@ mod tests {
             buf: stderr_buf.clone(),
         };
         let mut evaluator = create_evaluator(false, stdout, stderr);
-        let res = run_non_interactive_block("1 + 2\nquit\n3\n", "test.bc", &mut evaluator);
-        assert_eq!(res, Err(0));
+        let summary = run_non_interactive_block("1 + 2\nquit\n3\n", "test.bc", &mut evaluator);
+        assert_eq!(
+            summary,
+            RunSummary {
+                errors: 0,
+                quit: true
+            }
+        );
+        let out = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
+        assert_eq!(out, "3\n");
+    }
+
+    struct PanickingWriter;
+    impl Write for PanickingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            panic!("writer exploded");
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
 
     #[test]
-    fn test_handle_panic_payload_unknown() {
-        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stdout = TestWriter { buf: stdout_buf };
-        let stderr = TestWriter {
-            buf: stderr_buf.clone(),
-        };
-        let mut evaluator = create_evaluator(false, stdout, stderr);
-        handle_panic_payload(Box::new(42), "test.bc", 1, &mut evaluator, false);
-        let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
-        assert!(err.contains("unknown error"));
-
-        // Trigger parser error extraction without "on line " (covers line 147)
-        handle_panic_payload(
-            Box::new("Parser error: some error".to_string()),
-            "test.bc",
-            7,
-            &mut evaluator,
-            false,
-        );
-        let err2 = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
-        assert!(err2.contains("syntax error on line 7"));
+    fn test_incomplete_unit_at_end_of_input_is_reported() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        CTRL_C_PRESSED.store(false, Ordering::SeqCst);
+        for interactive in [false, true] {
+            let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let stderr = TestWriter {
+                buf: stderr_buf.clone(),
+            };
+            let mut evaluator = create_evaluator(false, Vec::new(), stderr);
+            let input = "1\n{ 2\n";
+            let summary = if interactive {
+                run_interactive_loop(input.as_bytes(), &mut evaluator)
+            } else {
+                run_non_interactive_block(input, STDIN_SOURCE, &mut evaluator)
+            };
+            assert_eq!(summary.errors, 1);
+            let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
+            assert_eq!(err, "(standard_in) 3: syntax error\n");
+        }
     }
 
     #[test]
-    fn test_handle_panic_payload_runtime_interactive() {
-        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    fn test_internal_panic_is_reported_and_counted() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stdout = TestWriter { buf: stdout_buf };
         let stderr = TestWriter {
             buf: stderr_buf.clone(),
         };
-        let mut evaluator = create_evaluator(false, stdout, stderr);
-        handle_panic_payload(
-            Box::new("some runtime error".to_string()),
-            "test.bc",
-            1,
-            &mut evaluator,
-            true,
-        );
+        let mut evaluator = create_evaluator(false, PanickingWriter, stderr);
+        let summary = run_non_interactive_block("1\n", "test.bc", &mut evaluator);
+        assert_eq!(summary.errors, 1);
         let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
-        assert!(err.contains("Runtime error: some runtime error"));
-    }
+        assert_eq!(err, "bc_clone: internal error: writer exploded\n");
+        assert_eq!(panic_message(&42), "unknown panic");
+        assert!(PanickingWriter.flush().is_ok());
 
-    #[test]
-    fn test_handle_panic_payload_extracted_line_parsing() {
-        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stdout = TestWriter { buf: stdout_buf };
-        let stderr = TestWriter {
-            buf: stderr_buf.clone(),
-        };
-        let mut evaluator = create_evaluator(false, stdout, stderr);
-        handle_panic_payload(
-            Box::new("Parser error on line 42: unexpected token".to_string()),
-            "test.bc",
-            1,
-            &mut evaluator,
-            false,
-        );
-        let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
-        assert!(err.contains("syntax error on line 42"));
-        assert!(!err.contains("line 1"));
+        // The hook defers to the default hook outside a guarded unit; installing it is harmless.
+        install_panic_hook();
+        assert!(std::panic::catch_unwind(|| panic!("outside a unit")).is_err());
     }
 
     #[test]
@@ -706,8 +626,14 @@ mod tests {
         let _ = reader.fill_buf();
         reader.consume(0);
 
-        let _ = run_interactive_loop(reader, &mut evaluator);
-        let _ = run_non_interactive_block("1", "test.bc", &mut evaluator);
+        assert_eq!(
+            run_interactive_loop(reader, &mut evaluator),
+            RunSummary::default()
+        );
+        assert_eq!(
+            run_non_interactive_block("1", "test.bc", &mut evaluator),
+            RunSummary::default()
+        );
     }
 
     #[test]
@@ -760,7 +686,7 @@ mod tests {
             },
             false,
         );
-        assert!(res.is_ok());
+        assert_eq!(res, 0);
         let out_str = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
         assert!(out_str.contains('3'));
 
@@ -776,7 +702,7 @@ mod tests {
             },
             false,
         );
-        assert_eq!(res_invalid, Err(1));
+        assert_eq!(res_invalid, 1);
 
         // C. Cannot open file
         let res_no_file = run_app(
@@ -790,7 +716,7 @@ mod tests {
             },
             false,
         );
-        assert_eq!(res_no_file, Err(1));
+        assert_eq!(res_no_file, 1);
 
         // D. Math library enabled (-l)
         let res_math = run_app(
@@ -804,7 +730,7 @@ mod tests {
             },
             false,
         );
-        assert!(res_math.is_ok());
+        assert_eq!(res_math, 0);
 
         // E. Interactive mode via run_app (covers line 383)
         let input_interactive = "1 + 2\nquit\n";
@@ -819,7 +745,7 @@ mod tests {
             },
             true,
         );
-        assert_eq!(res_interactive, Err(0));
+        assert_eq!(res_interactive, 0);
 
         // F. Stdin read error via run_app (covers line 387)
         let res_err_read = run_app(
@@ -833,13 +759,13 @@ mod tests {
             },
             false,
         );
-        assert_eq!(res_err_read, Err(1));
+        assert_eq!(res_err_read, 1);
     }
 
     #[test]
     fn test_non_interactive_block_quit_flag_ok_path() {
         let _guard = TEST_MUTEX.lock().unwrap();
-        // Covers line 234: quit_flag check in Ok(_) branch of run_non_interactive_block.
+        // A quit flag already set when a unit finishes stops processing.
         // Pre-set quit_flag so the evaluator executes normally but the
         // outer loop detects the flag and returns Err(0).
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -852,14 +778,14 @@ mod tests {
         };
         let mut evaluator = create_evaluator(false, stdout, stderr);
         evaluator.quit_flag = true;
-        let res = run_non_interactive_block("1\n", "test.bc", &mut evaluator);
-        assert_eq!(res, Err(0));
+        let summary = run_non_interactive_block("1\n", "test.bc", &mut evaluator);
+        assert!(summary.quit);
     }
 
     #[test]
     fn test_interactive_loop_quit_flag_ok_path() {
         let _guard = TEST_MUTEX.lock().unwrap();
-        // Covers line 317: quit_flag check in Ok(_) branch of run_interactive_loop.
+        // A quit flag already set when a unit finishes stops processing.
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stdout = TestWriter {
@@ -871,8 +797,8 @@ mod tests {
         let mut evaluator = create_evaluator(false, stdout, stderr);
         evaluator.quit_flag = true;
         let input = "1\n";
-        let res = run_interactive_loop(input.as_bytes(), &mut evaluator);
-        assert_eq!(res, Err(0));
+        let summary = run_interactive_loop(input.as_bytes(), &mut evaluator);
+        assert!(summary.quit);
     }
 
     #[test]

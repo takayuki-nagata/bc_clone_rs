@@ -9,7 +9,7 @@ extern crate std;
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
-use bc_core::{BcWriter, Evaluator, Lexer, Parser};
+use bc_core::{BcWriter, Evaluator, STDIN_SOURCE};
 use core::cell::RefCell;
 use core::fmt::Write;
 use wasm_bindgen::prelude::*;
@@ -33,34 +33,7 @@ impl BcWriter for SharedBuffer {
 }
 
 fn eval_into_wasm(code: &str, ev: &mut Evaluator) {
-    let lexer = Lexer::new(code);
-    let mut parser = match Parser::try_new(lexer) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = writeln!(ev.stderr_writer, "{}", e);
-            return;
-        }
-    };
-    let stmts = match parser.try_parse_program() {
-        Ok(s) => s,
-        Err(e) => {
-            if e != "quit" {
-                let _ = writeln!(ev.stderr_writer, "{}", e);
-            }
-            return;
-        }
-    };
-
-    for stmt in &stmts {
-        if let Err(e) = ev.try_execute(stmt) {
-            let _ = writeln!(ev.stderr_writer, "Runtime error: {}", e);
-            break;
-        }
-        if ev.quit_flag {
-            break;
-        }
-    }
-    let _ = ev.stdout_writer.flush();
+    ev.run_source(code, STDIN_SOURCE);
 }
 
 /// One-shot evaluation function for simple calculations.
@@ -172,14 +145,26 @@ mod tests {
 
     #[test]
     fn test_eval_bc_error_recovery() {
-        assert!(eval_bc("@\n", false, 0).contains("Lexical error"));
-        assert!(eval_bc("1 + * 2\n", false, 0).contains("Parser error"));
-        assert!(eval_bc("1 / 0\n", false, 0).contains("Runtime error: division by zero"));
-        assert!(
-            eval_bc("sqrt(-1)\n", false, 0)
-                .contains("Runtime error: square root of negative number")
+        assert_eq!(
+            eval_bc("@\n", false, 0),
+            "(standard_in) 1: illegal character: @\n"
         );
-        assert!(eval_bc("unknown_fn(1)\n", false, 0).contains("Runtime error: undefined function"));
+        assert_eq!(
+            eval_bc("1 + * 2\n", false, 0),
+            "(standard_in) 1: syntax error\n"
+        );
+        assert_eq!(
+            eval_bc("1 / 0\n", false, 0),
+            "Runtime error (func=(main)): Divide by zero\n"
+        );
+        assert_eq!(
+            eval_bc("sqrt(-1)\n", false, 0),
+            "Runtime error (func=(main)): Square root of a negative number\n"
+        );
+        assert_eq!(
+            eval_bc("unknown_fn(1)\n", false, 0),
+            "Runtime error (func=(main)): Function unknown_fn not defined.\n"
+        );
     }
 
     #[test]
@@ -198,12 +183,12 @@ mod tests {
         );
         assert!(
             sess.eval("bad(5)")
-                .contains("Runtime error: division by zero")
+                .contains("Runtime error (func=bad): Divide by zero")
         );
         assert_eq!(sess.eval("x").trim(), "20");
 
         // Syntax error recovery and quit
-        assert!(sess.eval("1 + * 2").contains("Parser error"));
+        assert!(sess.eval("1 + * 2").contains("(standard_in) 1: syntax error"));
         assert_eq!(sess.eval("quit"), "");
         assert_eq!(sess.eval("x + 2").trim(), "22");
 

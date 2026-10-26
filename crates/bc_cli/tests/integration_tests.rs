@@ -28,33 +28,73 @@ fn run_command(cmd_name: &str, args: &[&str], input: &str) -> (i32, String, Stri
     (exit_code, stdout, stderr)
 }
 
-fn check_differential(program: &str, flags: &[&str], match_stderr: bool) {
+/// Rewrites GNU bc diagnostics into the format specified in `docs/COMPATIBILITY.md` §3.2:
+/// the bytecode address (`, adr=N`) is removed, and only the first syntax diagnostic of each
+/// input line is kept, because bc_clone discards the rest of the input unit after a syntax
+/// error instead of emulating yacc error recovery.
+fn normalize_gnu_stderr(stderr: &str) -> String {
+    let mut out = String::new();
+    let mut last_syntax_prefix: Option<String> = None;
+    for line in stderr.lines() {
+        if line.starts_with("(standard_in) ") {
+            let prefix = line.split(':').next().unwrap_or(line).to_string();
+            if last_syntax_prefix.as_deref() == Some(prefix.as_str()) {
+                continue;
+            }
+            last_syntax_prefix = Some(prefix);
+        }
+        match (line.find(", adr="), line.find("):")) {
+            (Some(start), Some(end)) if start < end => {
+                out.push_str(&line[..start]);
+                out.push_str(&line[end..]);
+            }
+            _ => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Exit status mandated by `docs/COMPATIBILITY.md` §3.1: 1 if any error was diagnosed,
+/// otherwise GNU's status. Warnings do not count as errors.
+fn expected_exit_code(gnu_code: i32, normalized_stderr: &str) -> i32 {
+    let has_error = normalized_stderr
+        .lines()
+        .any(|line| !line.starts_with("Runtime warning"));
+    if has_error { 1 } else { gnu_code }
+}
+
+/// Runs `program` through GNU bc and bc_clone and requires identical stdout, identical
+/// diagnostics (modulo `adr=N`), and the exit status defined by the compatibility spec.
+fn check_differential(program: &str, flags: &[&str]) {
     let input = if program.ends_with('\n') {
         program.to_string()
     } else {
         format!("{}\n", program)
     };
 
-    let (_bc_code, bc_out, bc_err) = run_command("bc", flags, &input);
+    let (bc_code, bc_out, bc_err) = run_command("bc", flags, &input);
+    let expected_err = normalize_gnu_stderr(&bc_err);
+    let expected_code = expected_exit_code(bc_code, &expected_err);
 
     let bin_path = env!("CARGO_BIN_EXE_bc_clone");
-    let (_clone_code, clone_out, clone_err) = run_command(bin_path, flags, &input);
+    let (clone_code, clone_out, clone_err) = run_command(bin_path, flags, &input);
 
     assert_eq!(
         clone_out, bc_out,
         "Stdout mismatch!\nProgram: {:?}\nExpected:\n{:?}\nGot:\n{:?}",
         program, bc_out, clone_out
     );
-
-    if match_stderr {
-        let has_bc_err = !bc_err.trim().is_empty();
-        let has_clone_err = !clone_err.trim().is_empty();
-        assert_eq!(
-            has_clone_err, has_bc_err,
-            "Stderr mismatch!\nExpected error: {} ({:?})\nGot: {} ({:?})",
-            has_bc_err, bc_err, has_clone_err, clone_err
-        );
-    }
+    assert_eq!(
+        clone_err, expected_err,
+        "Stderr mismatch!\nProgram: {:?}\nExpected:\n{:?}\nGot:\n{:?}",
+        program, expected_err, clone_err
+    );
+    assert_eq!(
+        clone_code, expected_code,
+        "Exit code mismatch!\nProgram: {:?}\nExpected: {}\nGot: {}",
+        program, expected_code, clone_code
+    );
 }
 
 #[test]
@@ -82,7 +122,7 @@ fn test_basic_arithmetic() {
         "2^-3",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -102,7 +142,7 @@ fn test_precedence_and_associativity() {
         "a = 2; b = 3; c = 4; a += b *= c; a; b; c",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -122,7 +162,7 @@ fn test_incr_decr() {
         "scale = 5; a = 2.5; ++a; a++",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -143,7 +183,7 @@ fn test_scale_propagation() {
         "scale = 3; a = scale = 5; scale; a",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -172,17 +212,17 @@ fn test_builtin_functions() {
         "scale(sqrt(2))",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
 #[test]
 fn test_builtin_errors() {
-    check_differential("sqrt(-2)", &[], true);
-    check_differential("1 / 0", &[], true);
-    check_differential("1 % 0", &[], true);
-    check_differential("a = 1; a /= 0", &[], true);
-    check_differential("a = 1; a %= 0", &[], true);
+    check_differential("sqrt(-2)", &[]);
+    check_differential("1 / 0", &[]);
+    check_differential("1 % 0", &[]);
+    check_differential("a = 1; a /= 0", &[]);
+    check_differential("a = 1; a %= 0", &[]);
 }
 
 #[test]
@@ -198,7 +238,7 @@ fn test_variables_and_arrays() {
         "a = 2; a[2] = 5; a; a[2]",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -225,7 +265,7 @@ fn test_bases() {
         "ibase = 16; a = FF; obase = 10; a",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -237,7 +277,7 @@ fn test_line_wrapping() {
         "\"12345678901234567890123456789012345678901234567890123456789012345678901234567890\"",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -256,7 +296,7 @@ fn test_control_flow() {
         "a = 1; if (a) 5",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -273,7 +313,7 @@ fn test_functions_and_scoping() {
         "define f() { return (1); }; f(); define f() { return (2); }; f()",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -313,15 +353,15 @@ fn test_math_library() {
         "scale = 10; e(1)",
     ];
     for prog in &programs {
-        check_differential(prog, &flags, false);
+        check_differential(prog, &flags);
     }
 }
 
 #[test]
 fn test_math_library_errors() {
     let flags = ["-l"];
-    check_differential("l(-1)", &flags, true);
-    check_differential("l(0)", &flags, true);
+    check_differential("l(-1)", &flags);
+    check_differential("l(0)", &flags);
 }
 
 #[test]
@@ -336,7 +376,7 @@ fn test_lexical_rules() {
         "1.2\\\n34 + 1",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -396,34 +436,33 @@ fn test_e2e_complex_calculations() {
         }
     }
     ";
-    check_differential(complex_program, &["-l"], false);
+    check_differential(complex_program, &["-l"]);
 }
 
 #[test]
 fn test_parser_and_evaluator_edge_cases() {
-    check_differential("a = 5; a ^= 2; a", &[], false);
-    check_differential("a = 5; a -= 2; a", &[], false);
-    check_differential("5 >= 2", &[], false);
-    check_differential("5 != 2", &[], false);
-    check_differential("{ 1 }", &[], false);
-    check_differential("define f() { return; }; f()", &[], false);
-    check_differential("a", &[], false);
-    check_differential("1.2 > 1.23", &[], false);
-    check_differential("1.23 > 1.2", &[], false);
-    check_differential("++a; a", &[], false);
-    check_differential("++a[0]; a[0]", &[], false);
-    check_differential("scale = 5; ++scale; scale", &[], false);
-    check_differential("ibase = 10; ++ibase; ibase", &[], false);
-    check_differential("obase = 10; ++obase; obase", &[], false);
-    check_differential("define f(x[]) { return(1); }; f(a[])", &[], false);
-    check_differential("define f() { while(1) { return(42); }; }; f()", &[], false);
+    check_differential("a = 5; a ^= 2; a", &[]);
+    check_differential("a = 5; a -= 2; a", &[]);
+    check_differential("5 >= 2", &[]);
+    check_differential("5 != 2", &[]);
+    check_differential("{ 1 }", &[]);
+    check_differential("define f() { return; }; f()", &[]);
+    check_differential("a", &[]);
+    check_differential("1.2 > 1.23", &[]);
+    check_differential("1.23 > 1.2", &[]);
+    check_differential("++a; a", &[]);
+    check_differential("++a[0]; a[0]", &[]);
+    check_differential("scale = 5; ++scale; scale", &[]);
+    check_differential("ibase = 10; ++ibase; ibase", &[]);
+    check_differential("obase = 10; ++obase; obase", &[]);
+    check_differential("define f(x[]) { return(1); }; f(a[])", &[]);
+    check_differential("define f() { while(1) { return(42); }; }; f()", &[]);
     check_differential(
         "define g() { for(i=0; i<10; ++i) { return(42); }; }; g()",
         &[],
-        false,
     );
 
-    check_differential("f(1)", &[], true);
+    check_differential("f(1)", &[]);
 }
 
 #[test]
@@ -451,7 +490,7 @@ fn test_scale_register_preservation() {
         "scale = 6; j(1, 2); scale",
     ];
     for prog in &programs {
-        check_differential(prog, &["-l"], false);
+        check_differential(prog, &["-l"]);
     }
 }
 
@@ -463,7 +502,7 @@ fn test_gnu_extension_return() {
         "define f() { return; }; f()",
     ];
     for prog in &programs {
-        check_differential(prog, &[], false);
+        check_differential(prog, &[]);
     }
 }
 
@@ -494,7 +533,7 @@ fn test_user_fib_sqrt_demo() {
     \"e(1) = \"
     e(1)
     ";
-    check_differential(demo_program, &["-l"], false);
+    check_differential(demo_program, &["-l"]);
 }
 
 #[test]
@@ -608,4 +647,46 @@ fn test_real_ctrlc_signal() {
     assert!(output.status.success());
     let stderr_str = String::from_utf8_lossy(&output.stderr);
     assert!(stderr_str.contains("(interrupt) Exiting bc."));
+}
+
+/// Error recovery per input unit, diagnostics, and exit status (`docs/COMPATIBILITY.md` §3).
+#[test]
+fn test_error_recovery_and_diagnostics() {
+    let programs = [
+        "1/0\n2+2",
+        "1/0; 5\n7",
+        "x = 5\n{ 1/0; x = 6 }\nx",
+        "define f(x) { x = 99; return (1/0) }\nx = 5; f(1); x\nx",
+        "define f() { return (sqrt(-1)) }\nf()",
+        "define g() { return (1 % 0) }\ndefine f() { return (g()) }\nf()",
+        "define f(x) { return (x) }\nf()\nf(1, 2)",
+        "1\n2\n3 +\n4",
+        "@\n1",
+        "1 + * 2\n3",
+        "1/0\nquit\n2",
+        "scale = 3; x = 1/0; x",
+    ];
+    for prog in &programs {
+        check_differential(prog, &[]);
+    }
+}
+
+/// Syntax diagnostics name the file operand, and errors in an earlier file do not stop later
+/// input from being processed.
+#[test]
+fn test_error_diagnostics_in_file_operands() {
+    let path = std::env::temp_dir().join(format!("bc_clone_err_{}.bc", std::process::id()));
+    std::fs::write(&path, "1\n1 + * 2\n1/0\n").unwrap();
+    let path_str = path.to_str().unwrap();
+
+    let (bc_code, bc_out, bc_err) = run_command("bc", &[path_str], "5\n");
+    let bin_path = env!("CARGO_BIN_EXE_bc_clone");
+    let (clone_code, clone_out, clone_err) = run_command(bin_path, &[path_str], "5\n");
+    let _ = std::fs::remove_file(&path);
+
+    let expected_err = normalize_gnu_stderr(&bc_err);
+    assert_eq!(clone_out, bc_out);
+    assert_eq!(clone_err, expected_err);
+    assert_eq!(clone_code, expected_exit_code(bc_code, &expected_err));
+    assert_eq!(clone_code, 1);
 }

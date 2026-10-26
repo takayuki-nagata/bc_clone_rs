@@ -5,6 +5,7 @@
 //! Conforms to standard POSIX bc lexical and syntax grammar rules, supporting
 //! operator precedence climbing and backslash-newline continuation.
 
+use crate::error::BcError;
 use crate::verified_kernels::{
     TOK_ASSIGN_OP, TOK_EXP_OP, TOK_MUL_OP, TOK_PLUS_MINUS, verified_is_bc_digit,
     verified_is_ident_continue, verified_lexer_advance_step, verified_lexer_peek_char_index,
@@ -88,8 +89,17 @@ impl Lexer {
     }
 
     /// Triggers a syntax error during lexical analysis.
-    fn error<T>(&self, msg: &str) -> Result<T, String> {
-        Err(format!("Lexical error on line {}: {}", self.line, msg))
+    fn error<T>(&self, msg: &str) -> Result<T, BcError> {
+        Err(BcError::syntax(self.line, String::from(msg)))
+    }
+
+    /// Reports a character that cannot start any token, as GNU bc does.
+    fn illegal_character<T>(&self, c: char) -> Result<T, BcError> {
+        Err(BcError::Syntax {
+            line: self.line,
+            message: format!("illegal character: {}", c),
+            detail: format!("unexpected character {:?}", c),
+        })
     }
 
     /// Peeks a character ahead of the current position by the given offset.
@@ -111,7 +121,7 @@ impl Lexer {
     }
 
     /// Skips whitespace, comments (`/* ... */`), and backslash-newlines.
-    fn skip_whitespace_and_comments(&mut self) -> Result<(), String> {
+    fn skip_whitespace_and_comments(&mut self) -> Result<(), BcError> {
         loop {
             let c = self.peek_char(0);
             if c == ' ' || c == '\t' || c == '\r' {
@@ -141,7 +151,7 @@ impl Lexer {
     }
 
     /// Scans the next token from input.
-    fn scan_token(&mut self) -> Result<Token, String> {
+    fn scan_token(&mut self) -> Result<Token, BcError> {
         self.skip_whitespace_and_comments()?;
         let c = self.peek_char(0);
         if c == '\0' {
@@ -157,7 +167,7 @@ impl Lexer {
             return Ok(Token {
                 token_type: TokenType::Newline,
                 value: "\n".to_string(),
-                line: self.line - 1,
+                line: self.line,
             });
         }
 
@@ -404,7 +414,7 @@ impl Lexer {
                     line: self.line,
                 });
             }
-            return self.error("unexpected character '!'");
+            return self.illegal_character('!');
         }
 
         if c == '"' {
@@ -413,7 +423,7 @@ impl Lexer {
             loop {
                 let cc = self.peek_char(0);
                 if cc == '\0' {
-                    return self.error("unterminated string");
+                    return self.illegal_character('"');
                 }
                 if cc == '"' {
                     self.advance_char(1);
@@ -507,11 +517,11 @@ impl Lexer {
             });
         }
 
-        self.error(&format!("unexpected character {:?}", c))
+        self.illegal_character(c)
     }
 
     /// Obtains the next token, returning Err on lexical error.
-    pub fn try_get_next_token(&mut self) -> Result<Token, String> {
+    pub fn try_get_next_token(&mut self) -> Result<Token, BcError> {
         if !self.buffer.is_empty() {
             Ok(self.buffer.remove(0))
         } else {
@@ -522,11 +532,11 @@ impl Lexer {
     /// Obtains the next token, consuming it from the buffer or stream.
     pub fn get_next_token(&mut self) -> Token {
         self.try_get_next_token()
-            .unwrap_or_else(|e| panic!("{}", e))
+            .unwrap_or_else(|e| panic!("{:?}", e))
     }
 
     /// Peeks a token at a given offset forward, returning Err on lexical error.
-    pub fn try_peek_token(&mut self, offset: usize) -> Result<&Token, String> {
+    pub fn try_peek_token(&mut self, offset: usize) -> Result<&Token, BcError> {
         while self.buffer.len() <= offset {
             let tok = self.scan_token()?;
             let is_eof = tok.token_type == TokenType::Eof;
@@ -542,7 +552,7 @@ impl Lexer {
     /// Peeks a token at a given offset forward.
     pub fn peek_token(&mut self, offset: usize) -> &Token {
         self.try_peek_token(offset)
-            .unwrap_or_else(|e| panic!("{}", e))
+            .unwrap_or_else(|e| panic!("{:?}", e))
     }
 }
 
@@ -613,7 +623,7 @@ pub struct Parser {
 
 impl Parser {
     /// Creates a new Parser from the Lexer, returning Err on initial lexical error.
-    pub fn try_new(mut lexer: Lexer) -> Result<Self, String> {
+    pub fn try_new(mut lexer: Lexer) -> Result<Self, BcError> {
         let current_token = lexer.try_get_next_token()?;
         Ok(Self {
             lexer,
@@ -623,19 +633,16 @@ impl Parser {
 
     /// Creates a new Parser from the Lexer.
     pub fn new(lexer: Lexer) -> Self {
-        Self::try_new(lexer).unwrap_or_else(|e| panic!("{}", e))
+        Self::try_new(lexer).unwrap_or_else(|e| panic!("{:?}", e))
     }
 
     /// Triggers a syntax error during parsing.
-    fn error<T>(&self, msg: &str) -> Result<T, String> {
-        Err(format!(
-            "Parser error on line {}: {}",
-            self.current_token.line, msg
-        ))
+    fn error<T>(&self, msg: &str) -> Result<T, BcError> {
+        Err(BcError::syntax(self.current_token.line, String::from(msg)))
     }
 
     /// Consumes a token of the expected type, otherwise raises error.
-    fn eat(&mut self, token_type: TokenType) -> Result<(), String> {
+    fn eat(&mut self, token_type: TokenType) -> Result<(), BcError> {
         if self.current_token.token_type == token_type {
             self.current_token = self.lexer.try_get_next_token()?;
             Ok(())
@@ -648,12 +655,12 @@ impl Parser {
     }
 
     /// Peeks the token type of the token at `offset`.
-    fn peek_token_type(&mut self, offset: usize) -> Result<TokenType, String> {
+    fn peek_token_type(&mut self, offset: usize) -> Result<TokenType, BcError> {
         Ok(self.lexer.try_peek_token(offset)?.token_type)
     }
 
     /// Parses the program fully, returning Err on lexical/syntax error or `"quit"`.
-    pub fn try_parse_program(&mut self) -> Result<Vec<Stmt>, String> {
+    pub fn try_parse_program(&mut self) -> Result<Vec<Stmt>, BcError> {
         let mut items = Vec::new();
         while self.current_token.token_type != TokenType::Eof {
             if let Some(item) = self.parse_input_item()? {
@@ -666,15 +673,15 @@ impl Parser {
     /// Parses the program fully (entry point).
     pub fn parse_program(&mut self) -> Vec<Stmt> {
         self.try_parse_program().unwrap_or_else(|e| {
-            if e == "quit" {
+            if e == BcError::Quit {
                 panic!("quit");
             }
-            panic!("{}", e);
+            panic!("{:?}", e);
         })
     }
 
     /// Parses a single top-level item (statement block or function definition).
-    fn parse_input_item(&mut self) -> Result<Option<Stmt>, String> {
+    fn parse_input_item(&mut self) -> Result<Option<Stmt>, BcError> {
         if self.current_token.token_type == TokenType::Define {
             return Ok(Some(self.parse_function()?));
         }
@@ -694,7 +701,7 @@ impl Parser {
     }
 
     /// Parses a list of statements separated by semicolons.
-    fn parse_semicolon_list(&mut self) -> Result<Vec<Stmt>, String> {
+    fn parse_semicolon_list(&mut self) -> Result<Vec<Stmt>, BcError> {
         let mut stmts = Vec::new();
         loop {
             let t = self.current_token.token_type;
@@ -719,7 +726,7 @@ impl Parser {
     }
 
     /// Parses a list of statements within a block (with newline and semicolon separations).
-    fn parse_statement_list(&mut self) -> Result<Vec<Stmt>, String> {
+    fn parse_statement_list(&mut self) -> Result<Vec<Stmt>, BcError> {
         let mut stmts = Vec::new();
         loop {
             self.skip_newlines()?;
@@ -747,7 +754,7 @@ impl Parser {
     }
 
     /// Skips sequence of newline tokens.
-    fn skip_newlines(&mut self) -> Result<(), String> {
+    fn skip_newlines(&mut self) -> Result<(), BcError> {
         while self.current_token.token_type == TokenType::Newline {
             self.eat(TokenType::Newline)?;
         }
@@ -755,7 +762,7 @@ impl Parser {
     }
 
     /// Parses a statement.
-    fn parse_statement(&mut self) -> Result<Stmt, String> {
+    fn parse_statement(&mut self) -> Result<Stmt, BcError> {
         let t = self.current_token.token_type;
         match t {
             TokenType::String => {
@@ -767,7 +774,7 @@ impl Parser {
                 self.eat(TokenType::Break)?;
                 Ok(Stmt::Break)
             }
-            TokenType::Quit => Err("quit".to_string()),
+            TokenType::Quit => Err(BcError::Quit),
             TokenType::Return => {
                 self.eat(TokenType::Return)?;
                 if self.current_token.token_type == TokenType::Lparen {
@@ -829,7 +836,7 @@ impl Parser {
     }
 
     /// Parses a function definition `define f(x) { ... }`.
-    fn parse_function(&mut self) -> Result<Stmt, String> {
+    fn parse_function(&mut self) -> Result<Stmt, BcError> {
         self.eat(TokenType::Define)?;
         if self.current_token.token_type != TokenType::Letter {
             return self.error("expected function name (letter)");
@@ -857,7 +864,7 @@ impl Parser {
     }
 
     /// Parses optional parameters/autos define list.
-    fn parse_opt_define_list(&mut self) -> Result<Vec<Param>, String> {
+    fn parse_opt_define_list(&mut self) -> Result<Vec<Param>, BcError> {
         if self.current_token.token_type == TokenType::Rparen {
             Ok(Vec::new())
         } else {
@@ -866,7 +873,7 @@ impl Parser {
     }
 
     /// Parses a define list of parameters or auto variables.
-    fn parse_define_list(&mut self) -> Result<Vec<Param>, String> {
+    fn parse_define_list(&mut self) -> Result<Vec<Param>, BcError> {
         let mut lst = Vec::new();
         loop {
             if self.current_token.token_type != TokenType::Letter {
@@ -895,7 +902,7 @@ impl Parser {
     }
 
     /// Parses auto list declarations `auto a, b[]`.
-    fn parse_opt_auto_define_list(&mut self) -> Result<Vec<Param>, String> {
+    fn parse_opt_auto_define_list(&mut self) -> Result<Vec<Param>, BcError> {
         if self.current_token.token_type != TokenType::Auto {
             return Ok(Vec::new());
         }
@@ -913,7 +920,7 @@ impl Parser {
     }
 
     /// Parses expressions, including relational ones.
-    fn parse_relational_expression(&mut self) -> Result<Expr, String> {
+    fn parse_relational_expression(&mut self) -> Result<Expr, BcError> {
         let left = self.parse_expression()?;
         if self.current_token.token_type == TokenType::RelOp {
             let op = self.current_token.value.clone();
@@ -926,12 +933,12 @@ impl Parser {
     }
 
     /// Parses arithmetic expressions.
-    fn parse_expression(&mut self) -> Result<Expr, String> {
+    fn parse_expression(&mut self) -> Result<Expr, BcError> {
         self.parse_expr_precedence(0)
     }
 
     /// Implements Precedence Climbing algorithm.
-    fn parse_expr_precedence(&mut self, min_prec: i8) -> Result<Expr, String> {
+    fn parse_expr_precedence(&mut self, min_prec: i8) -> Result<Expr, BcError> {
         let mut left = self.parse_prefix()?;
         loop {
             let (op_prec, op_class, next_min_prec) = self.get_infix_info(&self.current_token);
@@ -967,7 +974,7 @@ impl Parser {
     }
 
     /// Parses prefixes (unary operators).
-    fn parse_prefix(&mut self) -> Result<Expr, String> {
+    fn parse_prefix(&mut self) -> Result<Expr, BcError> {
         let t = self.current_token.token_type;
         if t == TokenType::Minus {
             self.eat(TokenType::Minus)?;
@@ -984,7 +991,7 @@ impl Parser {
     }
 
     /// Parses primary expressions (literals, variables, built-ins, calls).
-    fn parse_primary(&mut self) -> Result<Expr, String> {
+    fn parse_primary(&mut self) -> Result<Expr, BcError> {
         let t = self.current_token.token_type;
         match t {
             TokenType::Number => {
@@ -1041,7 +1048,7 @@ impl Parser {
     }
 
     /// Parses variables, arrays, or register accesses.
-    fn parse_named_expression(&mut self) -> Result<Expr, String> {
+    fn parse_named_expression(&mut self) -> Result<Expr, BcError> {
         let t = self.current_token.token_type;
         match t {
             TokenType::Scale => {
@@ -1073,7 +1080,7 @@ impl Parser {
     }
 
     /// Parses optional function call argument list.
-    fn parse_opt_argument_list(&mut self) -> Result<Vec<ExprOrArray>, String> {
+    fn parse_opt_argument_list(&mut self) -> Result<Vec<ExprOrArray>, BcError> {
         if self.current_token.token_type == TokenType::Rparen {
             Ok(Vec::new())
         } else {
@@ -1082,7 +1089,7 @@ impl Parser {
     }
 
     /// Parses function call argument list.
-    fn parse_argument_list(&mut self) -> Result<Vec<ExprOrArray>, String> {
+    fn parse_argument_list(&mut self) -> Result<Vec<ExprOrArray>, BcError> {
         let mut args = Vec::new();
         loop {
             if self.current_token.token_type == TokenType::Letter
@@ -1218,7 +1225,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "unterminated string")]
+    #[should_panic(expected = "quit")]
+    fn test_parse_program_panics_with_quit() {
+        let _ = Parser::new(Lexer::new("quit\n")).parse_program();
+    }
+
+    #[test]
+    #[should_panic(expected = "illegal character")]
     fn test_lexer_unterminated_string() {
         let mut lexer = Lexer::new("\"unterminated");
         let _ = lexer.get_next_token();
@@ -1436,12 +1449,12 @@ mod tests {
 
     #[test]
     fn test_lexer_crlf_continuation_and_newline_token_line() {
-        // 1. Newline token line calculation
+        // 1. A newline token reports the line after it, as GNU bc does for diagnostics
         let mut lexer_nl = Lexer::new("a\n");
         let _ = lexer_nl.get_next_token(); // a
         let tok_nl = lexer_nl.get_next_token(); // \n
         assert_eq!(tok_nl.token_type, TokenType::Newline);
-        assert_eq!(tok_nl.line, 1);
+        assert_eq!(tok_nl.line, 2);
 
         // 2. String token with CRLF backslash continuation
         let mut lexer_str = Lexer::new("\"hello \\\r\n world\"");
@@ -1552,7 +1565,7 @@ mod tests {
         assert!(parser_syntax.try_parse_program().is_err());
 
         let mut parser_quit = Parser::try_new(Lexer::new("quit\n")).unwrap();
-        assert_eq!(parser_quit.try_parse_program(), Err("quit".to_string()));
+        assert_eq!(parser_quit.try_parse_program(), Err(BcError::Quit));
 
         // Verify statement & primary expression variants in try_parse_program
         let mut parser_variants = Parser::try_new(Lexer::new(

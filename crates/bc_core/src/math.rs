@@ -6,6 +6,7 @@
 //! coefficients paired with a scale factor. Also implements transcendental
 //! functions using series expansions.
 
+use crate::error::RuntimeError;
 use crate::verified_kernels::{
     verified_add_sub_scales, verified_alphanumeric_char_val, verified_bcnum_length,
     verified_bessel_negative_order_parity, verified_decimal_scale_shift,
@@ -103,9 +104,9 @@ impl BCNum {
     }
 
     /// Divides self by other under scale, returning Err on division by zero.
-    pub fn try_div(&self, other: &Self, global_scale: usize) -> Result<Self, &'static str> {
+    pub fn try_div(&self, other: &Self, global_scale: usize) -> Result<Self, RuntimeError> {
         if other.coeff.is_zero() {
-            return Err("division by zero");
+            return Err(RuntimeError::DivideByZero);
         }
         let (sr, shift) = verified_div_scale_and_shift(self.scale, other.scale, global_scale);
         let coeff = if shift >= 0 {
@@ -125,7 +126,10 @@ impl BCNum {
     }
 
     /// Computes self % other under scale, returning Err on division by zero.
-    pub fn try_mod_op(&self, other: &Self, global_scale: usize) -> Result<Self, &'static str> {
+    pub fn try_mod_op(&self, other: &Self, global_scale: usize) -> Result<Self, RuntimeError> {
+        if other.coeff.is_zero() {
+            return Err(RuntimeError::ModuloByZero);
+        }
         let q = self.try_div(other, global_scale)?;
         let prod_coeff = &q.coeff * &other.coeff;
         let prod_scale = q.scale + other.scale;
@@ -140,7 +144,7 @@ impl BCNum {
     }
 
     /// Raises self to the power of other under scale, returning Err on division by zero.
-    pub fn try_pow(&self, other: &Self, global_scale: usize) -> Result<Self, &'static str> {
+    pub fn try_pow(&self, other: &Self, global_scale: usize) -> Result<Self, RuntimeError> {
         let b_val = if other.scale > 0 {
             &other.coeff / BigInt::from(10).pow(other.scale as u32)
         } else {
@@ -193,9 +197,9 @@ impl BCNum {
     }
 
     /// Computes the square root of self under scale, returning Err on negative input.
-    pub fn try_sqrt(&self, global_scale: usize) -> Result<Self, &'static str> {
+    pub fn try_sqrt(&self, global_scale: usize) -> Result<Self, RuntimeError> {
         if self.coeff < BigInt::zero() {
-            return Err("square root of negative number");
+            return Err(RuntimeError::NegativeSqrt);
         }
         let (sr, shift) = verified_sqrt_scale_and_shift(self.scale, global_scale);
         let num = &self.coeff * BigInt::from(10).pow(shift as u32);
@@ -1431,15 +1435,21 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Modulo by zero")]
+    fn test_mod_op_panics_on_zero_divisor() {
+        let _ = BCNum::from_string("1", 10).mod_op(&BCNum::zero(), 0);
+    }
+
+    #[test]
     fn test_fallible_math_operations() {
         let zero = BCNum::zero();
         let ten = BCNum::from_string("10", 10);
         let neg = BCNum::new(BigInt::from(-4), 0);
 
-        assert_eq!(ten.try_div(&zero, 0), Err("division by zero"));
-        assert_eq!(ten.try_mod_op(&zero, 0), Err("division by zero"));
-        assert_eq!(zero.try_pow(&neg, 0), Err("division by zero"));
-        assert_eq!(neg.try_sqrt(0), Err("square root of negative number"));
+        assert_eq!(ten.try_div(&zero, 0), Err(RuntimeError::DivideByZero));
+        assert_eq!(ten.try_mod_op(&zero, 0), Err(RuntimeError::ModuloByZero));
+        assert_eq!(zero.try_pow(&neg, 0), Err(RuntimeError::DivideByZero));
+        assert_eq!(neg.try_sqrt(0), Err(RuntimeError::NegativeSqrt));
 
         assert_eq!(
             ten.try_div(&BCNum::from_string("2", 10), 0),
