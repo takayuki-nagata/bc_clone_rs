@@ -74,6 +74,8 @@ package_qemu() {
 package_zephyr() {
     : "${WEST:?run scripts/setup_zephyr_workspace.sh and export its variables}"
     : "${ZEPHYR_BASE:?run scripts/setup_zephyr_workspace.sh and export its variables}"
+    # west, cmake and ninja come from the workspace venv.
+    export PATH="$(dirname "${WEST}"):${PATH}"
     local app="${REPO_ROOT}/examples/zephyr_app"
     local build="${REPO_ROOT}/target/zephyr-build"
     "${WEST}" -z "${ZEPHYR_BASE}" build -b qemu_riscv32 -p always -s "${app}" -d "${build}/qemu_selftest"

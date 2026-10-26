@@ -8,7 +8,7 @@ set -euo pipefail
 #   scripts/setup_zephyr_workspace.sh [WORKSPACE_DIR]     (default: ~/zephyrproject-bc)
 #
 # Installs, inside WORKSPACE_DIR:
-#   - a Python venv with west and Zephyr's base requirements;
+#   - a Python venv with west, cmake, ninja, and Zephyr's base requirements;
 #   - Zephyr ${ZEPHYR_VERSION} plus only the modules the app needs (hal_espressif for stamp_c3);
 #   - Zephyr SDK ${SDK_VERSION} with the riscv64 toolchain, unless ZEPHYR_SDK_INSTALL_DIR already
 #     points to an SDK.
@@ -21,11 +21,13 @@ WS="$(mkdir -p "${1:-${HOME}/zephyrproject-bc}" && cd "${1:-${HOME}/zephyrprojec
 
 echo "=== Zephyr ${ZEPHYR_VERSION} workspace in ${WS} ==="
 
-if [ ! -x "${WS}/.venv/bin/west" ]; then
+if [ ! -x "${WS}/.venv/bin/west" ] || [ ! -x "${WS}/.venv/bin/cmake" ]; then
     python3 -m venv "${WS}/.venv"
-    "${WS}/.venv/bin/pip" install --quiet --upgrade pip west
+    "${WS}/.venv/bin/pip" install --quiet --upgrade pip west cmake ninja
 fi
 WEST="${WS}/.venv/bin/west"
+# The SDK installer and Zephyr's build need cmake and ninja on PATH.
+export PATH="${WS}/.venv/bin:${PATH}"
 
 if [ ! -d "${WS}/.west" ]; then
     "${WEST}" init -m https://github.com/zephyrproject-rtos/zephyr --mr "${ZEPHYR_VERSION}" "${WS}"
@@ -54,7 +56,9 @@ ZEPHYR_TOOLCHAIN_VARIANT=zephyr"
 
 if [ -n "${GITHUB_ENV:-}" ]; then
     echo "${ENV_LINES}" >> "${GITHUB_ENV}"
+    echo "${WS}/.venv/bin" >> "${GITHUB_PATH}"
 fi
 echo ""
 echo "=== Export these before running the Zephyr build scripts ==="
 echo "${ENV_LINES}" | sed 's/^/export /'
+echo "export PATH=\"${WS}/.venv/bin:\${PATH}\""
