@@ -140,7 +140,8 @@ invariant (an internal error) instead of truncating it. Review any new code that
 | Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only). C-API NULL and zero-size guards hold. The CLI brace scanner is consistent. The C-FFI copy harness currently re-implements the copy pattern instead of calling the production code. |
 | UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, and `bc_cli` (strict provenance, symbolic alignment). |
 | Property tests | proptest — `crates/bc_core/tests/proptest_suite.rs` | Algebraic properties (add/sub, mul scale, the div/mod identity), integer base round-trips, and the parser/evaluator do not panic on bounded inputs. There is no value oracle yet, and scales are limited to ≤ 10. |
-| Differential tests | `crates/bc_cli/tests/integration_tests.rs`, `scripts/run_gnu_reference_tests.sh`, `scripts/run_posix_compliance_tests.sh` | stdout matches GNU `bc`. stderr is compared only as empty/non-empty, and exit codes are not compared yet. |
+| Differential tests | `crates/bc_cli/tests/integration_tests.rs`, `scripts/run_gnu_reference_tests.sh` | stdout, diagnostics (GNU's text without `adr=N`), and exit status match GNU bc, except for the documented differences. The math library is checked against GNU bc at `scale + 100`, truncated. |
+| POSIX conformance | `scripts/run_posix_compliance_tests.sh` | Expected outputs derived from POSIX.1-2024 (not from GNU bc). Each case runs in the default mode and with `-s`. `BC_BIN=bc` runs the same cases against GNU bc to sanity-check the expectations. |
 | Mutation testing | `cargo mutants` (`.cargo/mutants.toml`) | Diff-based in CI. Some exclusions are broader than the equivalent mutants they target. |
 | Coverage | `cargo llvm-cov` | Line coverage gate of 98% in CI. |
 

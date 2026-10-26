@@ -931,6 +931,11 @@ impl Parser {
         self.eat(TokenType::Return)?;
         if self.current_token.token_type == TokenType::Lparen {
             self.eat(TokenType::Lparen)?;
+            // POSIX: `return ()` is `return (0)`.
+            if self.current_token.token_type == TokenType::Rparen {
+                self.eat(TokenType::Rparen)?;
+                return Ok(Stmt::Return(None));
+            }
             let expr = self.parse_expression()?;
             self.eat(TokenType::Rparen)?;
             return Ok(Stmt::Return(Some(expr)));
@@ -1381,6 +1386,9 @@ mod tests {
                 other => panic!("{src:?}: {other:?}"),
             }
         }
+        // POSIX allows `return ()`, which returns 0.
+        let empty = Parser::new(Lexer::new("define f() {\nreturn ()\n}\n")).parse_program();
+        assert!(matches!(&empty[0], Stmt::FunctionDef(f) if f.body == vec![Stmt::Return(None)]));
         // Allowed: break in a loop inside a function, return inside a loop in a function.
         let ok = "define f() { while (1) { break }; for (i = 0; 1; i++) return (1) }\n";
         assert!(

@@ -78,7 +78,7 @@ exact are **truncated** (toward zero).
 | Requirement | Notes |
 |---|---|
 | `quit` stops execution at the point where it appears in the input, even inside a function definition or a compound statement | |
-| `return`, `return ()`, `return (e)`; `return ()` returns 0 | |
+| `return`, `return ()`, `return (e)`; `return ()` returns 0 | GNU bc rejects `return ()` (§5) |
 | Function parameters and `auto` variables are dynamically scoped | |
 | Arrays may be passed as parameters (`f(a[])`), including as the last parameter (Issue 8, Austin Group Defect 1230) | |
 | A relational expression is valid as the condition of `if`, of `while`, and as the middle clause of `for` | Other positions: §4 |
@@ -198,6 +198,8 @@ multi-letter identifiers.
 | Maximum `ibase`, digits | 36; digits `G`–`Z` are accepted | 16 (POSIX); only `0-9A-F` are digits, so `1G` is a syntax error |
 | `BC_SCALE_MAX` | 2 147 483 647 | 1 000 000 000 |
 | Exit status after errors | 0 | 1 (§3.1) |
+| `sqrt` of an exact value | `sqrt(1.000)` prints `1` | `1.0000` at `scale=4`, as POSIX's scale rule requires |
+| `return ()` | Syntax error | Returns 0, as POSIX's grammar allows |
 | Diagnostics | Include `adr=N` | No address |
 | Unsupported extensions | — | §4 "Not supported" |
 | Command-line options | `-h -i -l -q -s -v -w` and long forms; options can be grouped | Only `-l`, `-s`, `-w`, one per argument; any other option is an error (status 1) |
