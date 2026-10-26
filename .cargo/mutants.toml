@@ -49,6 +49,8 @@ exclude_re = [
     # - Zero is handled before these sign checks, so `< 0` and `<= 0` agree.
     "replace < with <= in (decimal_exp|decimal_atan)",
     "replace < with <= in BCNum::format_obase",
+    # - With no fractional digits the fraction branch adds 0 / ibase^0, so `> 0` and `>= 0` agree.
+    "replace > with >= in BCNum::from_string",
     # - `x.scale > 0` vs `>= 0`: for scale 0 the divisor is 10^0 = 1 either way.
     "replace > with >= in (bc_exp|bc_bessel)",
     # - The last squaring in exponentiation by squaring is unused; doing it changes only speed.
