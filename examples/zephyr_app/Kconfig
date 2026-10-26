@@ -1,0 +1,12 @@
+# Copyright (c) 2026 Takayuki Nagata
+# SPDX-License-Identifier: MIT
+
+config BC_QEMU_REPL
+	bool "Start the interactive REPL on QEMU"
+	help
+	  On qemu_riscv32 the application normally runs the self-tests and then
+	  exits QEMU through the SiFive test device, which CI relies on. With this
+	  option it runs the self-tests and then starts the interactive REPL on the
+	  serial console, as it does on hardware.
+
+source "Kconfig.zephyr"

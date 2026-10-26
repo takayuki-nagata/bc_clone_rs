@@ -145,3 +145,42 @@ jobs:
 
 
 
+
+  zephyr:
+    name: Zephyr RTOS (QEMU RISC-V 32 tests, M5Stamp C3 build)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imac-unknown-none-elf, riscv32imc-unknown-none-elf
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-misc ninja-build
+
+      - name: Cache Zephyr Workspace
+        uses: actions/cache@v4
+        with:
+          path: ~/zephyrproject-bc
+          key: zephyr-${{ hashFiles('scripts/setup_zephyr_workspace.sh') }}
+
+      - name: Set Up Pinned Zephyr Workspace
+        run: bash scripts/setup_zephyr_workspace.sh "${HOME}/zephyrproject-bc"
+
+      - name: Run Zephyr Tests on QEMU RISC-V 32
+        run: bash scripts/run_zephyr_tests.sh
+
+      - name: Build and Smoke-Test the Zephyr Release Package
+        run: |
+          bash scripts/package_release.sh ci dist zephyr
+          mkdir smoke && tar -C smoke -xzf dist/*-zephyr.tar.gz
+          timeout 120 smoke/*/run-qemu-selftest.sh

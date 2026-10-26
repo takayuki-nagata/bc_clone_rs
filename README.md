@@ -46,6 +46,21 @@ time ./bc_clone -l <<< "scale=10000;4*a(1)"
 2. **Advanced Multiplication Complexity**: `bc_clone` leverages `num-bigint`'s **Karatsuba multiplication** ($O(N^{1.58})$ complexity) instead of the traditional $O(N^2)$ schoolbook multiplication used by standard `bc`.
 3. **Half-Angle Argument Reduction**: The arctangent implementation `a(x)` applies 4 iterations of the half-angle formula $x_{k+1} = \frac{x_k}{1 + \sqrt{1 + x_k^2}}$ to reduce the argument to $\approx 0.049$ before Taylor series evaluation. This guarantees rapid convergence (requiring only ~3,000 terms compared to over ~7,000 terms in standard `bc`).
 
+## Release Downloads
+
+Each [GitHub release](https://github.com/takayuki-nagata/bc_clone_rs/releases) provides:
+
+| Asset | Contents |
+|---|---|
+| `bc_clone-linux-x86_64`, `bc_clone-macos-*`, `bc_clone-windows-x86_64.exe` | The `bc_clone` command |
+| `bc_clone-<version>-wasm-web-app.zip` | The browser calculator; `./serve.sh`, then open `http://localhost:8080/www/` |
+| `bc_clone-<version>-m5stamp-c3-baremetal.tar.gz` | Bare-metal M5Stamp C3 (ESP32-C3) firmware; `./flash.sh` flashes it with `espflash` and opens the REPL |
+| `bc_clone-<version>-qemu-riscv32-baremetal.tar.gz` | Bare-metal RISC-V 32 self-test images; `./run.sh [imac\|imc]` runs them on QEMU |
+| `bc_clone-<version>-zephyr.tar.gz` | Zephyr RTOS images: `./run-qemu-repl.sh` / `./run-qemu-selftest.sh` on QEMU, `./flash-stamp-c3.sh` for M5Stamp C3 |
+
+Every archive contains a `README.txt` with its requirements. `scripts/package_release.sh` builds
+the same archives locally.
+
 ## Getting Started
 
 ### Prerequisites

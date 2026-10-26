@@ -157,12 +157,22 @@ The gaps listed above are tracked work for v0.4.0. Do not describe any layer as 
   `0x10_0000` to report the exit status.
 - **Zephyr** (`scripts/run_zephyr_tests.sh`): `examples/zephyr_app` builds the `bc_zephyr`
   staticlib through CMake. It is tested on `qemu_riscv32`; `stamp_c3` is the hardware target.
+  `scripts/setup_zephyr_workspace.sh` pins Zephyr v3.7.2 and SDK 0.16.8 for CI and releases.
+  `CONFIG_BC_QEMU_REPL=y` starts the REPL on QEMU instead of exiting after the self-tests.
 - **C API**: `bc_c_api` embeds a 64 KiB LLFF heap on `no_std` targets. Status codes are defined in
   `include/bc_core.h`.
 - **ESP32-C3** (`examples/m5stamp_c3`): built in CI by `scripts/build_m5stamp_c3.sh`. Flashing
   scripts exist for manual hardware testing.
 - **Wasm** (`scripts/build_wasm.sh`): runs the `bc_wasm` tests, Clippy for host and wasm32, and
   produces the bundle.
+
+## Release Packaging
+
+`scripts/package_release.sh VERSION OUT_DIR wasm|m5stamp|qemu|zephyr...` builds the example
+targets and archives each one with the scripts and `README.txt` from `packaging/<name>/`. The
+release workflow (`.github/workflows/release.yml`) runs it for every tag and smoke-tests the QEMU
+packages before uploading. When you change how an example is built or run, update its
+`packaging/` directory too.
 
 ## Agent Workflow Rules
 

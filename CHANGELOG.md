@@ -6,6 +6,15 @@ This release makes POSIX.1-2024 the authoritative specification and fixes the de
 reviewing the verification suite and testing against GNU `bc`. All behavior is specified in
 [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
+### Release assets
+- Releases now also include the example targets, each with run/flash scripts and a README:
+  the WebAssembly web app, the bare-metal M5Stamp C3 firmware, the bare-metal QEMU RISC-V 32
+  self-test images, and the Zephyr RTOS images (QEMU RISC-V 32 with self-test and REPL variants,
+  and M5Stamp C3). `scripts/package_release.sh` builds them.
+- `scripts/setup_zephyr_workspace.sh` creates a pinned Zephyr v3.7.2 / SDK 0.16.8 workspace.
+  CI now builds and tests the Zephyr application on QEMU on every push.
+- The Zephyr application has a `CONFIG_BC_QEMU_REPL` option to start the REPL on QEMU.
+
 ### Behavior changes
 - **Runtime errors no longer print Rust panic messages.** Errors use GNU `bc`'s wording without the
   bytecode address, e.g. `Runtime error (func=f): Divide by zero` and

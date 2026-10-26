@@ -63,3 +63,80 @@ jobs:
             target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  examples:
+    name: Package Wasm, M5Stamp C3 and QEMU RISC-V 32 builds
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rust-src, clippy
+          targets: riscv32imac-unknown-none-elf, riscv32imc-unknown-none-elf, wasm32-unknown-unknown
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Packaging and Test Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-misc zip
+          cargo install wasm-bindgen-cli --version 0.2.127
+
+      - name: Build and Package
+        run: bash scripts/package_release.sh "${{ github.ref_name }}" dist wasm m5stamp qemu
+
+      - name: Smoke-Test the Packaged QEMU Binaries
+        run: |
+          mkdir smoke && tar -C smoke -xzf dist/*-qemu-riscv32-baremetal.tar.gz
+          smoke/*/run.sh imac
+          smoke/*/run.sh imc
+
+      - name: Upload Packages to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  zephyr:
+    name: Package Zephyr RTOS builds
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v7
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imac-unknown-none-elf, riscv32imc-unknown-none-elf
+
+      - name: Install Build Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-misc ninja-build
+
+      - name: Set Up Pinned Zephyr Workspace
+        run: bash scripts/setup_zephyr_workspace.sh "${HOME}/zephyrproject-bc"
+
+      - name: Build and Package
+        run: bash scripts/package_release.sh "${{ github.ref_name }}" dist zephyr
+
+      - name: Smoke-Test the Packaged QEMU Self-Test
+        run: |
+          mkdir smoke && tar -C smoke -xzf dist/*-zephyr.tar.gz
+          timeout 120 smoke/*/run-qemu-selftest.sh
+
+      - name: Upload Packages to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

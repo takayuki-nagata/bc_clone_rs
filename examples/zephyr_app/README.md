@@ -13,8 +13,15 @@ All application logic, self-test verification, formatted output, and interactive
 
 ## Prerequisites
 
-1. Zephyr SDK and `west` tool:
-   - [Zephyr Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)
+1. A Zephyr v3.7.2 workspace with the Zephyr SDK and `west`. The pinned setup that CI and the
+   release workflow use creates one, including Zephyr SDK 0.16.8 with the riscv64 toolchain:
+   ```bash
+   bash scripts/setup_zephyr_workspace.sh ~/zephyrproject-bc
+   # then export the WEST, ZEPHYR_BASE, ZEPHYR_SDK_INSTALL_DIR and ZEPHYR_TOOLCHAIN_VARIANT
+   # values the script prints
+   ```
+   Any existing workspace also works; see the
+   [Zephyr Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html).
 2. Rust RISC-V 32 baremetal targets:
    ```bash
    rustup target add riscv32imac-unknown-none-elf riscv32imc-unknown-none-elf
@@ -27,6 +34,17 @@ To build and run the test suite on QEMU:
 ```bash
 bash scripts/run_zephyr_tests.sh
 ```
+
+On QEMU the application normally runs the self-tests and exits through the SiFive test device.
+To get the interactive REPL on QEMU instead, build with `CONFIG_BC_QEMU_REPL=y`:
+
+```bash
+west build -b qemu_riscv32 -s examples/zephyr_app -d build_repl -- -DCONFIG_BC_QEMU_REPL=y
+qemu-system-riscv32 -M virt -cpu rv32 -bios none -m 256 -nographic -kernel build_repl/zephyr/zephyr.elf
+```
+
+Prebuilt QEMU and M5Stamp C3 images with run and flash scripts are attached to each GitHub release
+(`bc_clone-<version>-zephyr.tar.gz`).
 
 ## Building for M5Stamp C3 (`stamp_c3`)
 

@@ -37,7 +37,7 @@ extern void zephyr_rust_main(bool is_qemu);
 
 int main(void)
 {
-#if defined(CONFIG_BOARD_QEMU_RISCV32)
+#if defined(CONFIG_BOARD_QEMU_RISCV32) && !defined(CONFIG_BC_QEMU_REPL)
     zephyr_rust_main(true);
 #else
     zephyr_rust_main(false);
