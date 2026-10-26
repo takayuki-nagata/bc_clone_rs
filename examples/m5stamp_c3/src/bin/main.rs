@@ -10,7 +10,7 @@ use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use bc_core::verified_kernels::verified_zephyr_classify_char;
-use bc_core::{BcWriter, Evaluator, STDIN_SOURCE};
+use bc_core::{BcWriter, Evaluator, STDIN_SOURCE, UnitAccumulator};
 use core::cell::RefCell;
 use core::fmt::Write;
 use embedded_io::Read;
@@ -18,6 +18,9 @@ use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_println::{print, println};
+
+/// Longest input line the serial REPL accepts (see `bc_zephyr::REPL_MAX_LINE`).
+const REPL_MAX_LINE: usize = 1024;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -221,6 +224,7 @@ fn main() -> ! {
     );
 
     let mut line_buf = Vec::new();
+    let mut acc = UnitAccumulator::new();
     let mut rx_byte = [0u8; 1];
 
     loop {
@@ -233,17 +237,18 @@ fn main() -> ! {
         match verified_zephyr_classify_char(byte) {
             1 => {
                 print!("\r\n");
-                if !line_buf.is_empty() {
-                    if let Ok(input_str) = core::str::from_utf8(&line_buf) {
-                        let mut code_to_eval = String::from(input_str);
-                        code_to_eval.push('\n');
-
-                        eval_bc_non_panicking(&code_to_eval, &mut evaluator);
+                line_buf.push(b'\n');
+                // Only printable ASCII is buffered, so the line is always valid UTF-8.
+                if let Ok(line) = core::str::from_utf8(&line_buf) {
+                    // Lines are grouped into input units exactly as in the CLI. There is no
+                    // process to exit on bare metal, so `quit` only ends the current unit.
+                    if let Some((unit, first_line)) = acc.push_line(line) {
+                        evaluator.run_unit(&unit, STDIN_SOURCE, first_line);
                         evaluator.quit_flag = false;
                     }
-                    line_buf.clear();
                 }
-                print!("bc> ");
+                line_buf.clear();
+                print!("{}", if acc.is_pending() { "... " } else { "bc> " });
             }
             2 if !line_buf.is_empty() => {
                 // Backspace / Delete
@@ -251,11 +256,13 @@ fn main() -> ! {
                 print!("\x08 \x08");
             }
             3 => {
-                // Ctrl+C: Cancel current line
+                // Ctrl+C: Cancel current line and any pending multi-line unit
                 line_buf.clear();
+                acc.clear();
                 print!("^C\r\nbc> ");
             }
-            4 => {
+            // Characters beyond REPL_MAX_LINE are ignored so typing cannot exhaust the heap.
+            4 if line_buf.len() < REPL_MAX_LINE => {
                 // Printable ASCII characters
                 line_buf.push(byte);
                 print!("{}", byte as char);

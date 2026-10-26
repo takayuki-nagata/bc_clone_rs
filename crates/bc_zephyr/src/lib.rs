@@ -13,7 +13,7 @@ use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
 use bc_core::verified_kernels::verified_zephyr_classify_char;
-use bc_core::{BcWriter, Evaluator, STDIN_SOURCE};
+use bc_core::{BcWriter, Evaluator, STDIN_SOURCE, UnitAccumulator, UnitOutcome};
 use core::cell::RefCell;
 use core::fmt::Write;
 
@@ -313,6 +313,7 @@ pub fn run_repl_with<G, P, S, W>(
     let err_buf = SharedBuffer::default();
     let mut evaluator = Evaluator::new(true, Box::new(out_buf.clone()), Box::new(err_buf.clone()));
     let mut line_buf = String::new();
+    let mut acc = UnitAccumulator::new();
     let mut steps = 0;
 
     loop {
@@ -337,26 +338,23 @@ pub fn run_repl_with<G, P, S, W>(
         match verified_zephyr_classify_char(b) {
             1 => {
                 print_str("\r\n");
-                if !line_buf.is_empty() {
-                    line_buf.push('\n');
-                    eval_bc_non_panicking(&line_buf, &mut evaluator);
-
-                    let out = out_buf.0.borrow().clone();
-                    if !out.is_empty() {
-                        print_str(&out);
-                        out_buf.0.borrow_mut().clear();
-                    }
-                    let err = err_buf.0.borrow().clone();
-                    if !err.is_empty() {
-                        print_str(&err);
-                        err_buf.0.borrow_mut().clear();
-                    }
-                    line_buf.clear();
-                    if evaluator.quit_flag {
-                        break;
+                line_buf.push('\n');
+                // Lines are grouped into input units exactly as in the CLI, so multi-line
+                // blocks and POSIX function definitions work.
+                let outcome = acc
+                    .push_line(&line_buf)
+                    .map(|(unit, first_line)| evaluator.run_unit(&unit, STDIN_SOURCE, first_line));
+                line_buf.clear();
+                for buf in [&out_buf, &err_buf] {
+                    let text = core::mem::take(&mut *buf.0.borrow_mut());
+                    if !text.is_empty() {
+                        print_str(&text);
                     }
                 }
-                print_str("bc> ");
+                if outcome == Some(UnitOutcome::Quit) {
+                    break;
+                }
+                print_str(if acc.is_pending() { "... " } else { "bc> " });
             }
             2 if !line_buf.is_empty() => {
                 line_buf.pop();
@@ -364,9 +362,11 @@ pub fn run_repl_with<G, P, S, W>(
             }
             3 => {
                 line_buf.clear();
+                acc.clear();
                 print_str("^C\r\nbc> ");
             }
-            4 => {
+            // Characters beyond REPL_MAX_LINE are ignored so typing cannot exhaust the heap.
+            4 if line_buf.len() < REPL_MAX_LINE => {
                 line_buf.push(b as char);
                 putc(b as char);
             }
@@ -374,6 +374,10 @@ pub fn run_repl_with<G, P, S, W>(
         }
     }
 }
+
+/// Longest input line the serial REPL accepts. Further characters are ignored (not echoed) so
+/// that typing cannot exhaust the 64 KiB heap.
+pub const REPL_MAX_LINE: usize = 1024;
 
 /// Runs the interactive serial REPL loop using Zephyr hardware shims.
 pub fn run_repl() {
@@ -566,6 +570,36 @@ mod tests {
         assert!(!out.contains("59"));
     }
 
+    fn run_repl_script(script: &str) -> String {
+        let mut input: Vec<i32> = script.bytes().map(i32::from).collect();
+        input.push(-2);
+        let output = core::cell::RefCell::new(String::new());
+        run_repl_with(
+            || input.remove(0),
+            |c| output.borrow_mut().push(c),
+            |s| output.borrow_mut().push_str(s),
+            |_ms| {},
+            None,
+        );
+        output.into_inner()
+    }
+
+    #[test]
+    fn test_repl_multi_line_units_and_line_limit() {
+        let out = run_repl_script("define f(x) {\rreturn (x * 2)\r}\rf(21)\r");
+        assert!(out.contains("... "));
+        assert!(out.contains("42\n"));
+
+        let long = "1".repeat(REPL_MAX_LINE + 50);
+        let out = run_repl_script(&format!("{long}\r"));
+        let echoed = out.matches('1').count();
+        assert!(echoed <= 2 * REPL_MAX_LINE + 2, "echo is capped");
+        assert!(out.contains(&"1".repeat(REPL_MAX_LINE)));
+        assert!(!out.contains(&"1".repeat(REPL_MAX_LINE + 1)));
+
+        assert!(run_repl_script("quit\r1\r").ends_with("\r\n"));
+    }
+
     #[test]
     fn test_repl_with_interactive_flow() {
         let mut input_chars: Vec<i32> = vec![
@@ -652,7 +686,8 @@ mod tests {
             None,
         );
         assert!(out.contains("(standard_in) 1: illegal character: @"));
-        assert!(out.contains("(standard_in) 1: syntax error"));
+        // Line numbers count across the whole session, as in the CLI.
+        assert!(out.contains("(standard_in) 2: syntax error"));
         assert!(out.contains("Runtime error (func=(main)): Divide by zero"));
         assert!(out.contains("7\n"));
     }

@@ -8,7 +8,8 @@
 //! (`docs/COMPATIBILITY.md` §3).
 //!
 //! Inputs where GNU bc knowingly deviates from POSIX (§5) are not generated: `sqrt` of exactly 0
-//! or 1, `ibase` above 16, and the `-l` library (checked by an oracle test instead).
+//! or 1, odd powers that can produce GNU's negative zero, syntax errors (GNU's yacc recovery),
+//! `ibase` above 16, and the `-l` library (checked by an oracle test instead).
 //! Set `PROPTEST_CASES` to run more cases, e.g. for a long fuzzing session.
 
 #![cfg(not(miri))]
@@ -49,7 +50,11 @@ fn expr() -> impl Strategy<Value = String> {
         prop_oneof![
             4 => (inner.clone(), prop::sample::select(vec!["+", "-", "*", "/", "%"]), inner.clone())
                 .prop_map(|(l, op, r)| format!("({l} {op} {r})")),
-            1 => (inner.clone(), -3i32..6).prop_map(|(b, e)| format!("({b} ^ {e})")),
+            // Odd powers only of non-negative literals: GNU bc turns a negative result that
+            // truncates to zero into a "-0" that compares below 0 (§5).
+            1 => (inner.clone(), prop::sample::select(vec![-2, 0, 2, 4]))
+                .prop_map(|(b, e)| format!("({b} ^ {e})")),
+            1 => (number(), -3i32..6).prop_map(|(b, e)| format!("({b} ^ {e})")),
             // Parenthesized so that `-` never merges with a following `--` into a syntax error:
             // after a syntax error GNU bc's yacc recovery may also swallow the next line (§5).
             1 => inner.clone().prop_map(|e| format!("-({e})")),
@@ -115,6 +120,8 @@ proptest! {
     #![proptest_config(ProptestConfig {
         cases: 300,
         fork: false,
+        // The generator is tuned over time, so persisted seeds would not reproduce old failures.
+        failure_persistence: None,
         .. ProptestConfig::default()
     })]
 

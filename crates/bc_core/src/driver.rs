@@ -82,6 +82,11 @@ impl UnitAccumulator {
         self.take()
     }
 
+    /// Whether lines of an incomplete unit are waiting for more input (e.g. an open `{`).
+    pub fn is_pending(&self) -> bool {
+        !self.buf.is_empty()
+    }
+
     /// Discards any partially accumulated unit (used after an interrupt).
     pub fn clear(&mut self) {
         self.buf.clear();
@@ -231,6 +236,7 @@ mod tests {
         assert_eq!(acc.push_line("1 + \\\n"), None);
         assert_eq!(acc.push_line("2\n"), Some(("1 + \\\n2\n".to_string(), 1)));
         assert_eq!(acc.push_line("{\n"), None);
+        assert!(acc.is_pending());
         assert_eq!(acc.push_line("3\n"), None);
         assert_eq!(acc.push_line("}\n"), Some(("{\n3\n}\n".to_string(), 3)));
         assert_eq!(acc.push_line("4"), Some(("4".to_string(), 6)));

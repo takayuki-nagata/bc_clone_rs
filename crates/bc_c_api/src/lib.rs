@@ -128,6 +128,27 @@ impl BcWriter for CallbackWriter {
     }
 }
 
+/// Copies `bytes` into `out_buf` as a NUL-terminated C string.
+///
+/// Returns `true` if `bytes` and the terminator fit in `buf_size` bytes. Otherwise writes an
+/// empty string (a single NUL) and returns `false`. Never writes past `out_buf[buf_size - 1]`
+/// (verified by the Kani harness `proof_write_c_string`).
+///
+/// # Safety
+/// `out_buf` must be valid for writes of `buf_size` bytes, and `buf_size >= 1`.
+unsafe fn write_c_string(bytes: &[u8], out_buf: *mut c_char, buf_size: usize) -> bool {
+    if verified_c_ffi_check_buf_capacity(bytes.len(), buf_size) {
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf.cast::<u8>(), bytes.len());
+            *out_buf.add(bytes.len()) = 0;
+        }
+        true
+    } else {
+        unsafe { *out_buf = 0 };
+        false
+    }
+}
+
 /// Evaluates `code_str` against `ev` without panicking. Errors are reported to `ev`'s stderr
 /// writer and evaluation continues with the next input unit (`docs/COMPATIBILITY.md` §3.1).
 /// Returns `BcStatus::ErrExecution` if any unit failed.
@@ -183,32 +204,15 @@ pub unsafe extern "C" fn bc_eval(
     if status != BcStatus::Ok {
         let err_captured = err_shared.0.borrow().clone();
         let err_bytes = err_captured.as_bytes();
-        if verified_c_ffi_check_buf_capacity(err_bytes.len(), buf_size) {
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    err_bytes.as_ptr(),
-                    out_buf.cast::<u8>(),
-                    err_bytes.len(),
-                );
-                *out_buf.add(err_bytes.len()) = 0;
-            }
-        } else {
-            unsafe {
-                *out_buf = 0;
-            }
-        }
+        // A diagnostic that does not fit is dropped; the buffer then holds an empty string.
+        unsafe { write_c_string(err_bytes, out_buf, buf_size) };
         return status;
     }
 
     let captured = out_shared.0.borrow().clone();
     let bytes = captured.as_bytes();
-    if !verified_c_ffi_check_buf_capacity(bytes.len(), buf_size) {
+    if !unsafe { write_c_string(bytes, out_buf, buf_size) } {
         return BcStatus::ErrBufferTooSmall;
-    }
-
-    unsafe {
-        core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf.cast::<u8>(), bytes.len());
-        *out_buf.add(bytes.len()) = 0;
     }
 
     BcStatus::Ok
@@ -330,32 +334,15 @@ pub unsafe extern "C" fn bc_session_eval(
     if status != BcStatus::Ok {
         let err_captured = sess.err_shared.0.borrow().clone();
         let err_bytes = err_captured.as_bytes();
-        if verified_c_ffi_check_buf_capacity(err_bytes.len(), buf_size) {
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    err_bytes.as_ptr(),
-                    out_buf.cast::<u8>(),
-                    err_bytes.len(),
-                );
-                *out_buf.add(err_bytes.len()) = 0;
-            }
-        } else {
-            unsafe {
-                *out_buf = 0;
-            }
-        }
+        // A diagnostic that does not fit is dropped; the buffer then holds an empty string.
+        unsafe { write_c_string(err_bytes, out_buf, buf_size) };
         return status;
     }
 
     let captured = sess.out_shared.0.borrow().clone();
     let bytes = captured.as_bytes();
-    if !verified_c_ffi_check_buf_capacity(bytes.len(), buf_size) {
+    if !unsafe { write_c_string(bytes, out_buf, buf_size) } {
         return BcStatus::ErrBufferTooSmall;
-    }
-
-    unsafe {
-        core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf.cast::<u8>(), bytes.len());
-        *out_buf.add(bytes.len()) = 0;
     }
 
     BcStatus::Ok
@@ -1007,33 +994,35 @@ mod tests {
 mod kani_proofs {
     use super::*;
 
-    /// Verifies that the C-FFI output buffer copy pattern (`copy_nonoverlapping` + NUL terminator)
-    /// guarded by `verified_c_ffi_check_buf_capacity` never overflows `out_buf` and always
-    /// writes a valid trailing NUL (`0`) within `0..buf_size`.
+    /// Verifies the production `write_c_string` helper used by every C entry point: for any
+    /// source length and buffer size it writes the bytes and a NUL only when they fit, never
+    /// touches memory at or beyond `buf_size`, and otherwise leaves an empty string.
     #[kani::proof]
-    fn proof_c_ffi_buffer_copy_safety() {
-        let src_bytes: [u8; 16] = kani::any();
-        let mut dst_buf: [c_char; 16] = kani::any();
-        let out_len: usize = kani::any();
+    fn proof_write_c_string() {
+        const CAP: usize = 8;
+        let src: [u8; CAP] = kani::any();
+        let len: usize = kani::any();
         let buf_size: usize = kani::any();
+        kani::assume(len <= CAP);
+        kani::assume(buf_size >= 1 && buf_size <= CAP);
+        let mut dst: [c_char; CAP] = kani::any();
+        let before = dst;
 
-        kani::assume(out_len <= 16);
-        kani::assume(buf_size <= 16);
+        let ok = unsafe { write_c_string(&src[..len], dst.as_mut_ptr(), buf_size) };
 
-        if verified_c_ffi_check_buf_capacity(out_len, buf_size) {
-            let out_ptr = dst_buf.as_mut_ptr();
-            unsafe {
-                core::ptr::copy_nonoverlapping(src_bytes.as_ptr(), out_ptr.cast::<u8>(), out_len);
-                *out_ptr.add(out_len) = 0;
-            }
-            assert_eq!(dst_buf[out_len], 0);
-            if out_len > 0 {
-                let check_idx: usize = kani::any();
-                kani::assume(check_idx < out_len);
-                assert_eq!(dst_buf[check_idx] as u8, src_bytes[check_idx]);
+        assert_eq!(ok, len < buf_size);
+        let idx: usize = kani::any();
+        kani::assume(idx < CAP);
+        if idx >= buf_size {
+            assert_eq!(dst[idx], before[idx]);
+        }
+        if ok {
+            assert_eq!(dst[len], 0);
+            if idx < len {
+                assert_eq!(dst[idx] as u8, src[idx]);
             }
         } else {
-            assert!(out_len >= buf_size);
+            assert_eq!(dst[0], 0);
         }
     }
 

@@ -201,6 +201,7 @@ multi-letter identifiers.
 | Exit status after errors | 0 | 1 (§3.1) |
 | `sqrt` of an exact value | `sqrt(1.000)` prints `1` | `1.0000` at `scale=4`, as POSIX's scale rule requires |
 | `return ()` | Syntax error | Returns 0, as POSIX's grammar allows |
+| Negative result of `^` that truncates to zero | A "negative zero": `scale=6; (-0.008264)^3` prints `-0` and is `< 0` | `0`, equal to 0 |
 | Diagnostics | Include `adr=N` | No address |
 | Recovery after a syntax error | yacc error recovery; may report several errors per line and sometimes also discard the following line | One diagnostic, then the rest of the input unit is discarded (§3.1) |
 | Unsupported extensions | — | §4 "Not supported" |

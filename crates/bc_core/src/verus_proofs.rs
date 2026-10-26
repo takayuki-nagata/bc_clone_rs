@@ -1,10 +1,32 @@
 // SPDX-License-Identifier: MIT
 
-//! Formal verification specifications, lemmas, and verified core algorithms for `bc_core` using Verus.
+//! Verus specifications, lemmas, and *design models* for `bc_core`.
 //!
-//! This module is verified by the Verus SMT prover (`scripts/run_verus_verification.sh`)
-//! and compiled only under `#[cfg(verus_keep_ghost)]`, ensuring zero overhead or coverage impact
-//! on standard `#![no_std]` and embedded target builds.
+//! Verified by `scripts/run_verus_verification.sh` and compiled only under
+//! `cfg(verus_keep_ghost)`.
+//!
+//! **What is proved here and what is not.** Spec functions (`spec fn`) and lemmas (`proof fn`)
+//! state mathematical facts, e.g. about `SpecBCNum`. The executable `verified_*` functions in
+//! this file are **design models**: production code does not call them. Many use fixed-width
+//! integers or small bounds where production uses `BigInt`. Their proofs show that the
+//! *algorithm* is sound, not that `math.rs` or `eval.rs` implements it correctly. Production code
+//! is covered by:
+//! - the kernels in `verified_kernels.rs`, which production code calls directly and which are
+//!   verified with their real bodies;
+//! - Kani harnesses on production helpers (e.g. `bc_c_api::write_c_string`);
+//! - tests that check production behavior against exact references (`tests/proptest_suite.rs`,
+//!   the GNU differential and oracle tests in `bc_cli`).
+//!
+//! Model → production correspondence (production line numbers are not tracked):
+//! `verified_pow_binary_loop` → `BCNum::try_pow`; `verified_obase_frac_*` and
+//! `verified_multi_digit_obase_padding` → `BCNum::format_obase`; `verified_trig_range_reduction`
+//! → `math::reduce_angle`; `verified_exp_ln2_reduction`, `verified_ln_cayley_transform`,
+//! `verified_atan_inversion_reduction`, `verified_taylor_series_convergence_loop` → the
+//! `decimal_*` series; `verified_scope_guard_lifecycle` → `eval::ScopeGuard` (production
+//! additionally keeps a global frame at the bottom of every stack, which the model assumes as
+//! `old(stack).len() >= 1`); `verified_lexer_*` → `parser::Lexer`; `verified_cli_parse_args` →
+//! `bc_cli::run_app`; `verified_c_ffi_copy_nul_terminated` → `bc_c_api::write_c_string`;
+//! `verified_zephyr_repl_edit_step` → `bc_zephyr::run_repl_with`.
 
 use crate::verified_kernels::*;
 use vstd::prelude::*;
