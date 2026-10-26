@@ -5,30 +5,26 @@
 [![Version](https://img.shields.io/badge/version-v0.3.0-blue.svg)](https://github.com/takayuki-nagata/bc_clone_rs/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A production-grade, POSIX-compliant arbitrary-precision calculator implemented in pure, idiomatic Rust (`bc_clone_rs`), generating the `bc_clone` executable binary. This project is a complete rewrite/reimplementation of the original Python-based `bc_clone_py`.
+An arbitrary-precision calculator implementing the POSIX.1-2024 `bc` utility in Rust (`bc_clone_rs`), producing the `bc_clone` executable. The engine is `#![no_std]` and also runs as a C library, on Zephyr RTOS, on bare-metal RISC-V, and in the browser via WebAssembly. It is a rewrite of the earlier Python implementation [`bc_clone_py`](https://github.com/takayuki-nagata/bc_clone_py).
 
 > [!NOTE]
 > **AI Agent Notice**: This repository is developed by AI coding agents under human direction. Versions v0.1.0–v0.3.0 were written by **Antigravity** (Google DeepMind); from v0.4.0 development continues with **Claude Code** (Anthropic). See [AGENTS.md](AGENTS.md) for the design and verification architecture.
 
 ## Features
 
-- **POSIX-Compliant Math with GNU Extensions**: Fully supports dynamic scoping, registers, variable/array stacks, and functions matching standard `bc` specifications, as well as popular GNU `bc` extensions (bare `return`, assignment operators `+=`, `-=`, etc., and array parameter passing `f(a[])`).
-- **`#![no_std]` + `alloc` Core Engine with Fallible Execution API**: The core calculator engine (`bc_core`) is fully decoupled from the OS and standard library (`std`), exposing non-panicking `Result`-based APIs (`try_new`, `try_parse_program`, `try_execute`, `try_evaluate`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`) alongside standard wrappers. This guarantees safe syntax/runtime error recovery without unwinding across C-FFI (`bc_c_api`), embedded RTOS (`bc_zephyr`), bare-metal RISC-V 32 (`bc_qemu_riscv32`, `examples/m5stamp_c3`), and WebAssembly (`wasm32-unknown-unknown`).
-- **Arbitrary-Precision Arithmetic**: Implements high-performance arbitrary-precision decimal operations on top of `num-bigint` without external C library dependencies.
-- **Transcendental Library**: Supports the standard math library functions (`-l` flag):
-  - Sine (`s(x)`) and Cosine (`c(x)`)
-  - Arctangent (`a(x)`)
-  - Natural Logarithm (`l(x)`)
-  - Exponential (`e(x)`)
-  - Bessel function of integer order (`j(n, x)`)
-- **Arbitrary Base Conversions**: Arbitrary input base (`ibase`) up to 16, and arbitrary output base (`obase`) up to any integer base.
-- **Robust Interactive REPL**: Interactive mode with 70-character POSIX line wrapping, multi-line brace and backslash-newline accumulation, SIGINT (Ctrl+C) handling, and input base range warnings.
-- **3-Layer Formal & Dynamic Verification (`Verus` + `Kani` + `Miri`) & Property-Based Testing (`proptest`)**:
-  - **Verus SMT Prover**: 31 core arithmetic, scaling, lexing, parsing, scoping, CLI, C-FFI, and RTOS kernels (`crates/bc_core/src/verified_kernels.rs`) are directly coupled between production `#![no_std]` code and Z3 SMT formal verification (`crates/bc_core/src/verus_proofs.rs`, `149 verified, 0 errors`).
-  - **Kani Bounded Model Checker**: 14 bit-precise CBMC proof harnesses across `bc_core`, `bc_c_api`, and `bc_clone` cross-verify all 31 kernels, C-FFI raw pointer writes, and CLI slice indexing against machine-word overflows and out-of-bounds panics across symbolic inputs (`scripts/run_kani_verification.sh`).
-  - **Miri UB & Memory-Leak Verifier**: Executes all 103 unit tests across `bc_c_api`, `bc_core`, `bc_zephyr`, and `bc_clone` at full mathematical precision under strict provenance and symbolic alignment checking (`scripts/run_miri_tests.sh`), guaranteeing zero Undefined Behavior, Tree Borrows compliance, and zero memory leaks across FFI sessions, fallible error recovery, and panic unwinding.
-  - **Property-Based Testing (`proptest`)**: Verifies multi-limb `BigInt` / `BCNum` algebraic laws, base-conversion roundtrips, transcendental mathematical identities, and fallible parser/evaluator resilience across randomized inputs (`crates/bc_core/tests/proptest_suite.rs`).
-- **High-Quality Standards**: 100% warning-free under `cargo clippy -- -D warnings`, fully formatted via `cargo fmt`, 98.2%+ line coverage (`cargo llvm-cov`), 0 surviving mutants (`cargo mutants`), and thoroughly documented with `rustdoc`.
+- **POSIX.1-2024 `bc`**: the behavior is specified in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), which lists each POSIX requirement, the implementation-defined limits (`BC_SCALE_MAX`, `BC_BASE_MAX`, `BC_DIM_MAX`, …), the choices made where POSIX leaves behavior undefined, and every known difference from GNU `bc` 1.08.
+- **GNU-compatible extensions and diagnostics**: multi-letter names, comparisons as statements, `return x`, one-line function bodies. `-s` rejects these extensions and `-w` warns about them, as in GNU `bc`. Error messages use GNU `bc`'s wording, and processing continues after an error. The exit status is 1 if any error occurred.
+- **Exact math library (`-l`)**: `s`, `c`, `a`, `l`, `e`, `j` return the exact value truncated to `scale`, including for very large arguments (checked against a high-precision oracle).
+- **`#![no_std]` + `alloc` engine** (`bc_core`) with a typed, non-panicking error API (`BcError`) and one input-unit driver shared by every front end: CLI, C API (`bc_c_api`), Zephyr (`bc_zephyr`), bare-metal RISC-V (`bc_qemu_riscv32`, `examples/m5stamp_c3`), and WebAssembly (`examples/wasm_web_app`).
+- **Arbitrary-precision arithmetic** on `num-bigint`, with no C library dependencies.
+- **Interactive REPL** with multi-line input, 70-column POSIX line wrapping, and Ctrl+C handling.
+- **Layered verification** (details in [AGENTS.md](AGENTS.md#verification-stack--what-is-and-is-not-covered)):
+  - **Verus** proves the contracts of the small kernels in `crates/bc_core/src/verified_kernels.rs`, which production code calls directly.
+  - **Kani** model-checks those kernels and the C-FFI output helper.
+  - **Miri** checks the unit tests for undefined behavior.
+  - **Property tests** check the arithmetic against an exact reference.
+  - **Differential tests** check random programs against GNU `bc`, and a **POSIX conformance suite** checks the cases derived from the standard.
+  - **Mutation testing** checks that the tests detect injected faults.
 
 ## Performance & Benchmarks
 
@@ -75,17 +71,21 @@ Run the calculator interactively:
 ./target/release/bc_clone
 ```
 
-Run with the transcendental math library enabled (sets `scale` to 20 by default):
+Options (each must be a separate argument):
+
+| Option | Meaning |
+|---|---|
+| `-l` | Load the math library (`s c a l e j`) and set `scale` to 20 |
+| `-s` | Process exactly the POSIX language: GNU extensions are errors |
+| `-w` | Warn about GNU extensions |
+
+Pass scripts/files to evaluate sequentially (standard input is read after them):
 
 ```bash
-./target/release/bc_clone -l
+./target/release/bc_clone -l script1.bc script2.bc
 ```
 
-Pass scripts/files to evaluate sequentially:
-
-```bash
-./target/release/bc_clone script1.bc script2.bc
-```
+The exit status is 0 if all input was processed without error, and 1 otherwise.
 
 #### Examples
 
@@ -110,7 +110,7 @@ Pass scripts/files to evaluate sequentially:
    define f(x) {
        auto a
        a = x * 2
-       return a
+       return (a)
    }
    f(5)
    10
@@ -129,24 +129,35 @@ cargo clippy -- -D warnings
 
 ### Running Tests
 
-We implement unit, property-based (`proptest`), and integration tests (135 tests across all workspace crates and `bc_wasm`), E2E differential integration tests (26 test suites in `crates/bc_cli/tests/integration_tests.rs`), official GNU `bc` 1.08.2 reference test suite validation (`scripts/run_gnu_reference_tests.sh`), and POSIX IEEE Std 1003.1 compliance test suite validation (`scripts/run_posix_compliance_tests.sh`).
-
-To run standard unit and integration tests:
+The integration tests compare `bc_clone` with GNU `bc`, so `bc` (GNU `bc` 1.08) and coreutils `timeout` must be on `PATH`.
 
 ```bash
 cargo test
+```
+
+This runs:
+- the unit tests of every crate;
+- the property tests (`crates/bc_core/tests/proptest_suite.rs`);
+- the differential integration tests (`crates/bc_cli/tests/integration_tests.rs`);
+- 300 random programs compared with GNU `bc` (`crates/bc_cli/tests/differential_proptest.rs`).
+
+For a longer differential fuzzing session:
+
+```bash
+PROPTEST_CASES=100000 cargo test -p bc_clone --test differential_proptest
+```
+
+To run the POSIX.1-2024 conformance suite (each case in the default mode and with `-s`):
+
+```bash
+bash scripts/run_posix_compliance_tests.sh
+BC_BIN=bc bash scripts/run_posix_compliance_tests.sh   # sanity-check the expectations against GNU bc
 ```
 
 To run the official GNU `bc 1.08.2` reference test suite:
 
 ```bash
 bash scripts/run_gnu_reference_tests.sh
-```
-
-To run the POSIX IEEE Std 1003.1 compliance test suite:
-
-```bash
-bash scripts/run_posix_compliance_tests.sh
 ```
 
 To run the automated Baremetal RISC-V 32 test suite on QEMU:
@@ -210,49 +221,11 @@ bash scripts/serve_wasm.sh
 # Open http://localhost:8080/www/ in your browser
 ```
 
-### Formal Verification (Verus)
+### Formal Verification (Verus, Kani, Miri)
 
-`bc_clone_rs` uses the [Verus](https://github.com/verus-lang/verus) deductive verification tool (backed by the Z3 SMT solver) to mathematically prove the absence of integer overflows, slice out-of-bounds panics, division-by-zero in internal transforms, non-termination in power/series loops, and violations of POSIX `bc` scale/formatting invariants.
-
-- **Single Source of Truth (`crates/bc_core/src/verified_kernels.rs`)**: 31 pure functions and state machines are defined once via `dual_verified!` and `dual_verified_repl_scanner!`. Under Verus (`#[cfg(verus_keep_ghost)]`), they expand inside `verus! { ... }` with full `requires`, `ensures`, `invariant`, and `decreases` contracts; under standard Cargo builds (`#[cfg(not(verus_keep_ghost))]`), the exact same function bodies compile as zero-overhead `#[inline]` `#![no_std]` Rust functions called directly across `bc_core`, `bc_cli`, `bc_c_api`, and `bc_zephyr`.
-- **High-Order Proof Suite (`crates/bc_core/src/verus_proofs.rs`)**: Contains Ghost mathematical models (`SpecBCNum`, `SpecDecimal`), inductive lemmas (`proof fn`), and 12 verification target areas (`149 verified, 0 errors`), including:
-  1. POSIX `bc` scale rules & fixed-point arithmetic (`add`, `sub`, `mul`, `div`, `sqrt`, `mod`)
-  2. Non-decimal `obase` fractional digit loop termination & minimality ($\text{obase}^k \ge 10^{\text{scale}}$)
-  3. POSIX 70-character line wrapping (`WrappedStdout` $\text{col} \le 68$) & `Lexer` lookahead/advance bounds safety
-  4. Binary exponentiation (`BCNum::pow`) $\mathcal{O}(\log b)$ loop termination & scale invariants
-  5. Base conversion (`ibase`/`obase`) digit bounds, hex LUT indexing safety, and multi-digit zero-padding width
-  6. Transcendental math (`Decimal`) roundtrip losslessness & `sin`/`cos`/`exp` argument reduction
-  7. `Evaluator` cross-scale relational total order, register clamping (`ibase`/`obase`), and `ScopeGuard` dynamic stack restoration theorem
-  8. `Parser` Pratt precedence climbing hierarchy & `Lexer` number/identifier scanning invariants
-  9. `BCNum::length` & `atan` / `ln` (Cayley transform) / `bessel` mathematical identities
-  10. `Evaluator` prefix/postfix `++`/`--` semantics & `break`/`return`/`quit` control-flow short-circuiting
-  11. CLI REPL block completeness scanner, C-FFI NUL buffer capacity safety, and Zephyr RTOS line editor
-  12. `Decimal` fixed-point unit identities, Taylor series convergence termination, and POSIX CLI option parser
-
-To run the Verus formal verification suite locally:
-
-```bash
-bash scripts/run_verus_verification.sh
-```
-
-### Bounded Model Checking (Kani) & Undefined Behavior Verification (Miri)
-
-To complement Verus's unbounded mathematical proofs with bit-precise machine-word model checking and dynamic memory/FFI safety verification:
-
-- **Kani Bounded Model Checking (`scripts/run_kani_verification.sh`)**: Verifies 14 symbolic proof harnesses (`#[kani::proof]`) across `bc_core` (`crates/bc_core/src/kani_proofs.rs`), `bc_c_api`, and `bc_clone` using CBMC/CaDiCaL. Proves the absence of bit-level arithmetic overflows, slice/UTF-8 boundary panics, and C-FFI buffer overruns across all symbolic input bit patterns.
-- **Miri Undefined Behavior & Leak Verification (`scripts/run_miri_tests.sh`)**: Runs all 103 unit tests across `bc_c_api`, `bc_core`, `bc_zephyr`, and `bc_clone` under `cargo +nightly miri test` with `-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check`, verifying `unsafe extern "C"` FFI pointers, `BcSession` (`Box::into_raw` / `Box::from_raw`) lifecycles, `num-bigint` heap allocations, and `ScopeGuard` dynamic scope restoration across both fallible returns and panic unwinding at full mathematical precision.
-
-To run Kani bounded model checking locally:
-
-```bash
-bash scripts/run_kani_verification.sh
-```
-
-To run Miri UB and memory-safety verification locally:
-
-```bash
-bash scripts/run_miri_tests.sh
-```
+- **Verus** (`bash scripts/run_verus_verification.sh`): proves the `requires`/`ensures` contracts of the kernels in `crates/bc_core/src/verified_kernels.rs`. These include the POSIX scale rules, register clamping, the 70-column wrapping step, lexer bounds, Pratt precedence, CLI option classification, and the REPL block scanner. The kernels are defined once with `dual_verified!` and called directly by production code. The evaluator keeps every scale at most `BC_SCALE_MAX`, which establishes the kernels' preconditions at run time. `crates/bc_core/src/verus_proofs.rs` adds lemmas and *design models* of larger algorithms. Production code does not call those models; the module documentation maps each one to the code and tests that cover its production counterpart.
+- **Kani** (`bash scripts/run_kani_verification.sh`): bounded model checking of the kernels over all bit patterns, of the C-FFI helper `write_c_string` (never writes beyond the caller's buffer, always NUL-terminates), and of the C-API NULL guards.
+- **Miri** (`bash scripts/run_miri_tests.sh`): runs the unit tests of every host crate under strict provenance and symbolic alignment checks, and the C API again under Tree Borrows.
 
 ### Coverage Measurement
 
@@ -297,7 +270,7 @@ cargo mutants
 ## CI/CD Pipeline
 
 The project includes two GitHub Actions workflows:
-- **CI Workflow (`.github/workflows/ci.yml`)**: Automatically checks formatting, lints with clippy (host and bare-metal `riscv32` targets), runs all unit/integration tests, executes POSIX and GNU reference test suites, runs bare-metal QEMU RISC-V 32 and Zephyr RTOS tests, runs Verus SMT formal verification (`149 verified, 0 errors`), runs Kani bounded model checking (`14 harnesses`), runs Miri UB and memory-leak verification, enforces a 98%+ line coverage gate (`cargo llvm-cov`), executes diff-based mutation testing (`cargo mutants --in-diff`), and runs security audit checks on every push and pull request.
+- **CI Workflow (`.github/workflows/ci.yml`)**: On every push and pull request, checks formatting and Clippy (host, RISC-V and Wasm targets), runs all tests with a 98% line-coverage gate, the GNU reference and POSIX conformance suites, the bare-metal QEMU RISC-V 32 tests, the ESP32-C3 and Wasm builds, Verus, Kani, Miri, `cargo audit`, and diff-based mutation testing (`cargo mutants --in-diff`).
 - **Release Workflow (`.github/workflows/release.yml`)**: Cross-compiles optimized binaries for Linux, macOS, and Windows and attaches them to a new GitHub Release automatically whenever a version tag (e.g. `v1.0.0`) is pushed.
 
 ## License

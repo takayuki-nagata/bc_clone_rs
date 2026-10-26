@@ -1,39 +1,34 @@
 # Configuration for cargo-mutants
 # https://mutants.rs/config.html
 
-# Balanced timeout configuration: allow transcendental math loops to finish while capping infinite loops
+# Allow transcendental math loops to finish while capping infinite loops.
 minimum_test_timeout = 5
 timeout_multiplier = 2.0
 
-# Command used to run tests
 test_tool = "cargo"
 
-# Exclude formal verification proof-only files compiled only under `cargo kani` or `verus`
+# Many evaluator and parser mutants are only observable end to end, through the GNU
+# differential tests and the POSIX suite in bc_clone, so every mutant runs the whole workspace.
+test_workspace = true
+
+# Proof-only files compiled only under `cargo kani` or `verus`.
 exclude_globs = [
     "crates/bc_core/src/kani_proofs.rs",
     "crates/bc_core/src/verus_proofs.rs",
 ]
 
-# Exclude semantically equivalent mutants:
-# 1. Over-precision guard calculation mutants in transcendental functions (bc_exp, bc_sin, bc_cos, bc_atan, bc_ln)
-# 2. Trait default / no-op flush methods returning Ok(())
-# 3. no_std embedded-only heap initialization in C-API (executed only on embedded targets, not during host cargo test)
-# 4. Kani bounded model checking harnesses (`#[cfg(kani)] mod kani_proofs`, executed via `cargo kani`)
-# 5. Cursor/loop-progress mutations in Lexer/Parser/Evaluator that cause infinite `while` / EOF loops (`TIMEOUT`)
+# Only mutants that are semantically equivalent or untestable on the host. Keep each pattern
+# as narrow as possible and give the reason.
 exclude_re = [
+    # bc_exp: `int_approx / 2` and `x.scale / ...` only size the extra guard digits; `*` adds more
+    # guard digits, which cannot change a result truncated to `scale`.
     "replace / with \\* in bc_exp",
-    "replace \\+ with \\* in bc_sin",
-    "replace \\+ with \\* in bc_cos",
-    "replace \\+ with \\* in bc_atan",
-    "replace \\+ with \\* in bc_ln",
-    "replace \\+ with \\* in bc_exp",
+    # The default `BcWriter::flush` and test writers' flush are no-ops by design.
     "flush.* -> core::fmt::Result with Ok\\(Default::default\\(\\)\\)",
+    # Heap initialization runs only on no_std embedded targets, never in host tests.
     "init_heap_if_needed",
+    # Cursor-advance mutants never move past the current character, so every test that lexes
+    # input hangs; cargo-mutants would report timeouts rather than misses.
     "in Lexer::advance_char",
     "replace Lexer::advance_char with \\(\\)",
-    "replace Parser::eat -> Result<\\(\\), String> with Ok\\(\\(\\)\\)",
-    "replace Parser::parse_input_item -> Result<Option<Stmt>, String> with Ok\\(None\\)",
-    "delete match arm \"\\+\" in Evaluator::try_evaluate",
-    "replace != with == in Evaluator::try_evaluate",
-    "kani_proofs::",
 ]

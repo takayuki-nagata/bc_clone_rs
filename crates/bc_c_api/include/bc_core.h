@@ -2,7 +2,8 @@
  * SPDX-License-Identifier: MIT
  *
  * C-API interface for bc_core (bc_clone_rs)
- * High-performance POSIX-compliant arbitrary-precision calculator engine.
+ * Arbitrary-precision calculator engine implementing POSIX.1-2024 bc
+ * (behavior: docs/COMPATIBILITY.md).
  */
 
 #ifndef BC_CORE_H
@@ -37,12 +38,18 @@ typedef void (*bc_output_cb_t)(const char *str, void *user_data);
 /**
  * Evaluates a bc expression or script string and writes the output into a buffer.
  *
+ * Like the bc command, evaluation continues after an error with the next input unit (a line,
+ * or a multi-line construct).
+ *
  * @param code Null-terminated string containing the bc code to evaluate.
  * @param math_enabled If true, preloads standard math functions (s, c, a, l, e, j).
- * @param default_scale Initial fractional digit scale (e.g. 0 to 20).
- * @param out_buf Buffer where the output result string will be stored (null-terminated).
+ * @param default_scale Initial scale; values above 1000000000 are clamped to it.
+ * @param out_buf Receives a null-terminated string: the standard output on success, or the
+ *        diagnostics on BC_STATUS_ERR_EXECUTION. If that text does not fit, out_buf holds an
+ *        empty string. Nothing is ever written at or beyond out_buf[buf_size].
  * @param buf_size Total size of out_buf in bytes.
- * @return BC_STATUS_OK on success, or an error status code.
+ * @return BC_STATUS_OK; BC_STATUS_ERR_EXECUTION if any syntax or runtime error occurred;
+ *         BC_STATUS_ERR_BUFFER_TOO_SMALL if the output did not fit; or BC_STATUS_ERR_NULL_PTR.
  */
 bc_status_t bc_eval(
     const char *code,
