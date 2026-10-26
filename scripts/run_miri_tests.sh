@@ -29,17 +29,20 @@ cargo "+${MIRI_TOOLCHAIN}" miri --version
 
 export MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check -Zmiri-disable-isolation"
 
-echo "--- [1/4] Verifying bc_c_api (Unsafe C-FFI, raw pointers, sessions, callbacks) ---"
+echo "--- [1/5] Verifying bc_c_api (Unsafe C-FFI, raw pointers, sessions, callbacks) ---"
 cargo "+${MIRI_TOOLCHAIN}" miri test --package bc_c_api --lib
 
-echo "--- [2/4] Verifying bc_core (BigInt math, Parser, Evaluator, ScopeGuard unwinding) ---"
+echo "--- [2/5] Verifying bc_core (BigInt math, Parser, Evaluator, ScopeGuard unwinding) ---"
 cargo "+${MIRI_TOOLCHAIN}" miri test --package bc_core --lib
 
-echo "--- [3/4] Verifying bc_zephyr (RTOS C-FFI shims, SharedBuffer, interactive REPL) ---"
+echo "--- [3/5] Verifying bc_zephyr (RTOS C-FFI shims, SharedBuffer, interactive REPL) ---"
 cargo "+${MIRI_TOOLCHAIN}" miri test --package bc_zephyr --lib
 
-echo "--- [4/4] Verifying bc_clone CLI (catch_unwind, AtomicBool signal state, REPL loop) ---"
+echo "--- [4/5] Verifying bc_clone CLI (catch_unwind, AtomicBool signal state, REPL loop) ---"
 cargo "+${MIRI_TOOLCHAIN}" miri test --package bc_clone --bin bc_clone
+
+echo "--- [5/5] Re-checking bc_c_api (the crate with unsafe code) under Tree Borrows ---"
+MIRIFLAGS="${MIRIFLAGS} -Zmiri-tree-borrows" cargo "+${MIRI_TOOLCHAIN}" miri test --package bc_c_api --lib
 
 echo ""
 echo "=== All Miri Undefined Behavior & Memory Leak Checks Passed (0 errors)! ==="
