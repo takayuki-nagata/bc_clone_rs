@@ -38,6 +38,7 @@ pub mod num;
 pub mod power;
 pub mod convert;
 pub mod lexer;
+pub mod parser;
 pub mod top;
 
 use top::{ExecInput, ExecOptions, NOT_MODELED, exec_run};
