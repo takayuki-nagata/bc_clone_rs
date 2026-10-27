@@ -1,0 +1,288 @@
+// SPDX-License-Identifier: MIT
+
+//! Mathematical (L0) specification of `bc` numbers over the unbounded integers.
+//!
+//! These definitions are the meaning of every number in the executable specification
+//! (`crates/bc_spec`) and the reference point for the design models in `verus_proofs.rs`.
+//! They use only `vstd`, so `crates/bc_spec` includes this file with `#[path]`. Compiled only
+//! under `cfg(verus_keep_ghost)`.
+
+use vstd::prelude::*;
+
+verus! {
+
+/// Mathematical specification of $10^n$ over arbitrary-precision natural numbers.
+pub open spec fn pow10(n: nat) -> int
+    decreases n,
+{
+    if n == 0 {
+        1
+    } else {
+        10 * pow10((n - 1) as nat)
+    }
+}
+
+/// Lemma: $10^n \ge 1$ for all $n \ge 0$.
+pub proof fn lemma_pow10_pos(n: nat)
+    ensures
+        pow10(n) >= 1,
+    decreases n,
+{
+    if n > 0 {
+        lemma_pow10_pos((n - 1) as nat);
+    }
+}
+
+/// Lemma: $10^{a + b} == 10^a \cdot 10^b$ for all $a, b \ge 0$.
+pub proof fn lemma_pow10_add(a: nat, b: nat)
+    ensures
+        pow10(a + b) == pow10(a) * pow10(b),
+    decreases a,
+{
+    if a == 0 {
+        assert(0 + b == b);
+        assert(pow10(0) == 1);
+    } else {
+        lemma_pow10_add((a - 1) as nat, b);
+        assert((a - 1) as nat + b == (a + b - 1) as nat);
+        assert(pow10(a) * pow10(b) == (10 * pow10((a - 1) as nat)) * pow10(b));
+        assert((10 * pow10((a - 1) as nat)) * pow10(b) == 10 * (pow10((a - 1) as nat) * pow10(b)))
+            by (nonlinear_arith);
+    }
+}
+
+/// Abstract specification model of `BCNum` representing $\text{coeff} \times 10^{-\text{scale}}$.
+pub ghost struct SpecBCNum {
+    pub coeff: int,
+    pub scale: nat,
+}
+
+impl SpecBCNum {
+    /// Returns the numerator when normalized to `target_scale` ($\ge \text{self.scale}$).
+    pub open spec fn scaled_coeff(self, target_scale: nat) -> int
+        recommends
+            target_scale >= self.scale,
+    {
+        self.coeff * pow10((target_scale - self.scale) as nat)
+    }
+
+    /// Mathematical specification of `BCNum::add`.
+    pub open spec fn spec_add(self, other: SpecBCNum) -> SpecBCNum {
+        let sr = if self.scale >= other.scale { self.scale } else { other.scale };
+        SpecBCNum {
+            coeff: self.scaled_coeff(sr) + other.scaled_coeff(sr),
+            scale: sr,
+        }
+    }
+
+    /// Mathematical specification of `BCNum::sub`.
+    pub open spec fn spec_sub(self, other: SpecBCNum) -> SpecBCNum {
+        let sr = if self.scale >= other.scale { self.scale } else { other.scale };
+        SpecBCNum {
+            coeff: self.scaled_coeff(sr) - other.scaled_coeff(sr),
+            scale: sr,
+        }
+    }
+}
+
+/// Proof that `BCNum` addition is commutative and subtraction is the exact inverse of addition
+/// when scales match or are bounded by `other.scale <= self.scale`.
+pub proof fn lemma_bcnum_add_sub_properties(a: SpecBCNum, b: SpecBCNum)
+    ensures
+        a.spec_add(b) == b.spec_add(a),
+        a.scale >= b.scale ==> a.spec_add(b).spec_sub(b) == a,
+{
+    let sr = if a.scale >= b.scale { a.scale } else { b.scale };
+    if a.scale >= b.scale {
+        assert(sr == a.scale);
+        assert((sr - a.scale) as nat == 0);
+        assert(pow10(0) == 1);
+        assert(a.scaled_coeff(sr) == a.coeff);
+        let sum = a.spec_add(b);
+        assert(sum.scale == a.scale);
+        assert(sum.scaled_coeff(sr) == sum.coeff);
+    }
+}
+
+/// POSIX specification for multiplication scale:
+/// $\min(a + b, \max(\text{global\_scale}, \max(a, b)))$.
+pub open spec fn spec_posix_mul_scale(a: nat, b: nat, global_scale: nat) -> nat {
+    let max_ab = if a >= b { a } else { b };
+    let max_all = if global_scale >= max_ab { global_scale } else { max_ab };
+    if a + b <= max_all {
+        a + b
+    } else {
+        max_all
+    }
+}
+
+/// Proof of POSIX `bc` modulo identity and truncation error bound:
+/// When `q = (a * 10^shift) / b` (integer truncating division for `a >= 0, b > 0`),
+/// the remainder `r = a * 10^shift - q * b` satisfies `0 <= r < b`.
+pub proof fn lemma_truncating_div_mod_bounds(num: int, den: int)
+    requires
+        num >= 0,
+        den > 0,
+    ensures
+        0 <= num - (num / den) * den,
+        num - (num / den) * den < den,
+        (num / den) * den + (num % den) == num,
+{
+    assert((num / den) * den + (num % den) == num) by (nonlinear_arith)
+        requires
+            num >= 0,
+            den > 0,
+    ;
+    assert(0 <= num % den && num % den < den) by (nonlinear_arith)
+        requires
+            num >= 0,
+            den > 0,
+    ;
+}
+
+/// Mathematical specification of integer exponentiation $\text{base}^{\text{exp}}$.
+pub open spec fn spec_pow_int(base: int, exp: nat) -> int
+    decreases exp,
+{
+    if exp == 0 {
+        1
+    } else {
+        base * spec_pow_int(base, (exp - 1) as nat)
+    }
+}
+
+/// Lemma: Inductive step for binary exponentiation (exponentiation by squaring):
+/// - If `exp` is even ($\text{exp} > 0$), $\text{base}^{\text{exp}} == (\text{base} \cdot \text{base})^{\text{exp} / 2}$.
+/// - If `exp` is odd, $\text{base}^{\text{exp}} == \text{base} \cdot (\text{base} \cdot \text{base})^{\text{exp} / 2}$.
+pub proof fn lemma_pow_int_squaring(base: int, exp: nat)
+    requires
+        exp > 0,
+    ensures
+        exp % 2 == 0 ==> spec_pow_int(base, exp) == spec_pow_int(base * base, exp / 2),
+        exp % 2 == 1 ==> spec_pow_int(base, exp) == base * spec_pow_int(base * base, exp / 2),
+    decreases exp,
+{
+    reveal_with_fuel(spec_pow_int, 2);
+    if exp == 1 {
+        assert(1nat % 2 == 1);
+        assert(1nat / 2 == 0);
+        assert(spec_pow_int(base * base, 0) == 1);
+    } else if exp % 2 == 1 {
+        let prev = (exp - 1) as nat;
+        assert(prev > 0);
+        assert(prev % 2 == 0);
+        assert(prev / 2 == exp / 2);
+        lemma_pow_int_squaring(base, prev);
+        assert(spec_pow_int(base, exp) == base * spec_pow_int(base, prev));
+    } else {
+        let prev = (exp - 1) as nat;
+        assert(prev % 2 == 1);
+        assert(prev / 2 == (exp / 2 - 1) as nat);
+        lemma_pow_int_squaring(base, prev);
+        assert(spec_pow_int(base, exp) == base * spec_pow_int(base, prev));
+        assert(spec_pow_int(base, prev) == base * spec_pow_int(base * base, prev / 2));
+        let sub_pow = spec_pow_int(base * base, prev / 2);
+        assert(base * (base * sub_pow) == (base * base) * sub_pow) by (nonlinear_arith);
+        assert(spec_pow_int(base * base, exp / 2) == (base * base) * sub_pow);
+    }
+}
+
+/// POSIX specification for positive-exponent power scale:
+/// $\min(a \cdot b, \max(\text{global\_scale}, a))$.
+pub open spec fn spec_posix_pow_scale(a: nat, b: nat, global_scale: nat) -> nat {
+    let max_gs = if global_scale >= a { global_scale } else { a };
+    if a * b <= max_gs {
+        a * b
+    } else {
+        max_gs
+    }
+}
+
+/// Normalized left-hand numerator when comparing `a` and `b` (`eval.rs:208-217`).
+pub open spec fn spec_rel_norm_lhs(a: SpecBCNum, b: SpecBCNum) -> int {
+    if a.scale >= b.scale {
+        a.coeff
+    } else {
+        a.coeff * pow10((b.scale - a.scale) as nat)
+    }
+}
+
+/// Normalized right-hand numerator when comparing `a` and `b` (`eval.rs:208-217`).
+pub open spec fn spec_rel_norm_rhs(a: SpecBCNum, b: SpecBCNum) -> int {
+    if a.scale > b.scale {
+        b.coeff * pow10((a.scale - b.scale) as nat)
+    } else {
+        b.coeff
+    }
+}
+
+/// Relational predicates (`<`, `==`, `>`) over `SpecBCNum`.
+pub open spec fn spec_bcnum_lt(a: SpecBCNum, b: SpecBCNum) -> bool {
+    spec_rel_norm_lhs(a, b) < spec_rel_norm_rhs(a, b)
+}
+
+pub open spec fn spec_bcnum_eq(a: SpecBCNum, b: SpecBCNum) -> bool {
+    spec_rel_norm_lhs(a, b) == spec_rel_norm_rhs(a, b)
+}
+
+pub open spec fn spec_bcnum_gt(a: SpecBCNum, b: SpecBCNum) -> bool {
+    spec_rel_norm_lhs(a, b) > spec_rel_norm_rhs(a, b)
+}
+
+/// Proof that `Evaluator`'s relational comparison forms a strict trichotomous total order
+/// and agrees with common-scale normalization `max(a.scale, b.scale)`.
+pub proof fn lemma_bcnum_relational_total_order(a: SpecBCNum, b: SpecBCNum)
+    ensures
+        // 1. Equivalence with scaling to `sr = max(a.scale, b.scale)`
+        spec_rel_norm_lhs(a, b) == a.scaled_coeff(if a.scale >= b.scale { a.scale } else { b.scale }),
+        spec_rel_norm_rhs(a, b) == b.scaled_coeff(if a.scale >= b.scale { a.scale } else { b.scale }),
+        // 2. Reflexivity
+        spec_bcnum_eq(a, a),
+        !spec_bcnum_lt(a, a),
+        // 3. Symmetry of equality and antisymmetry of `<` / `>`
+        spec_bcnum_eq(a, b) <==> spec_bcnum_eq(b, a),
+        spec_bcnum_lt(a, b) <==> spec_bcnum_gt(b, a),
+        // 4. Strict trichotomy: exactly one of `<`, `==`, `>` holds
+        (spec_bcnum_lt(a, b) && !spec_bcnum_eq(a, b) && !spec_bcnum_gt(a, b))
+            || (!spec_bcnum_lt(a, b) && spec_bcnum_eq(a, b) && !spec_bcnum_gt(a, b))
+            || (!spec_bcnum_lt(a, b) && !spec_bcnum_eq(a, b) && spec_bcnum_gt(a, b)),
+{
+    assert((a.scale - a.scale) as nat == 0);
+    assert((b.scale - b.scale) as nat == 0);
+    assert(pow10(0) == 1);
+}
+
+/// Truncation toward zero of `a / b` for `b > 0` (Verus's `/` floors for a positive divisor).
+pub open spec fn trunc_div(a: int, b: int) -> int {
+    if a >= 0 {
+        a / b
+    } else {
+        -((-a) / b)
+    }
+}
+
+/// The floor quotient is unique: `q·d <= n < q·d + d` determines `n / d`.
+pub proof fn lemma_floor_div_unique(n: int, d: int, q: int)
+    requires
+        d > 0,
+        q * d <= n,
+        n < q * d + d,
+    ensures
+        n / d == q,
+{
+    assert((n / d) * d + n % d == n && 0 <= n % d && n % d < d) by (nonlinear_arith)
+        requires
+            d > 0,
+    ;
+    let q2 = n / d;
+    assert(q2 == q) by (nonlinear_arith)
+        requires
+            d > 0,
+            q * d <= n,
+            n < q * d + d,
+            q2 * d <= n,
+            n < q2 * d + d,
+    ;
+}
+
+} // verus!

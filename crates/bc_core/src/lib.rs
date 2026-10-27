@@ -37,6 +37,8 @@ pub mod math;
 mod mathlib;
 #[cfg(not(verus_keep_ghost))]
 pub mod parser;
+#[cfg(verus_keep_ghost)]
+pub mod spec_num;
 pub mod verified_kernels;
 #[cfg(verus_keep_ghost)]
 pub mod verus_proofs;
