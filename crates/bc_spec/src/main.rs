@@ -35,6 +35,8 @@ use vstd::prelude::*;
 #[path = "../../bc_core/src/spec_num.rs"]
 pub mod spec_num;
 pub mod num;
+pub mod power;
+pub mod convert;
 pub mod top;
 
 use top::{ExecInput, ExecOptions, NOT_MODELED, exec_run};

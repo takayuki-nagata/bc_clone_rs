@@ -319,4 +319,46 @@ pub open spec fn spec_mod(a: SpecBCNum, b: SpecBCNum, global_scale: nat) -> Spec
     a.spec_sub(SpecBCNum { coeff: q.coeff * b.coeff, scale: q.scale + b.scale })
 }
 
+/// The integer part of `b`, truncated toward zero (the exponent of `^`).
+pub open spec fn spec_int_part(b: SpecBCNum) -> int {
+    spec_tdiv(b.coeff, pow10(b.scale))
+}
+
+/// `a ^ b` when no error applies (`BCNum::try_pow`): the exact power of the coefficient has
+/// scale `scale(a) * |n|`; a non-negative power is truncated to the POSIX power scale, and a
+/// negative one is `1 / a^|n|` at `scale`.
+pub open spec fn spec_pow(a: SpecBCNum, b: SpecBCNum, global_scale: nat) -> SpecBCNum {
+    let e = spec_int_part(b);
+    let n = (if e >= 0 { e } else { -e }) as nat;
+    let r = spec_pow_int(a.coeff, n);
+    let exact = a.scale * n;
+    if e >= 0 {
+        let sr = spec_posix_pow_scale(a.scale, n, global_scale);
+        SpecBCNum { coeff: spec_tdiv(r, pow10((exact - sr) as nat)), scale: sr }
+    } else {
+        spec_div(SpecBCNum { coeff: 1, scale: 0 }, SpecBCNum { coeff: r, scale: exact }, global_scale)
+    }
+}
+
+/// `r` is the integer square root of `n`.
+pub open spec fn is_isqrt(n: int, r: int) -> bool {
+    r >= 0 && r * r <= n && n < (r + 1) * (r + 1)
+}
+
+/// `k` is the number of decimal digits of `n > 0`.
+pub open spec fn is_digit_count(n: int, k: nat) -> bool {
+    k >= 1 && pow10((k - 1) as nat) <= n && n < pow10(k)
+}
+
+/// The value of big-endian digits `ds` in `base`, continuing from `acc`.
+pub open spec fn spec_horner(acc: int, ds: Seq<u8>, base: int) -> int
+    decreases ds.len(),
+{
+    if ds.len() == 0 {
+        acc
+    } else {
+        spec_horner(acc * base + ds[0], ds.drop_first(), base)
+    }
+}
+
 } // verus!

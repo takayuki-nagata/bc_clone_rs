@@ -225,7 +225,7 @@ pub open spec fn max_len(a: Seq<u8>, b: Seq<u8>) -> nat {
 }
 
 
-proof fn lemma_cons_digit(d: u8, r: Seq<u8>)
+pub proof fn lemma_cons_digit(d: u8, r: Seq<u8>)
     ensures
         mag_val(seq![d].add(r)) == d as int + 10 * mag_val(r),
         seq![d].add(r).len() == r.len() + 1,
@@ -235,7 +235,7 @@ proof fn lemma_cons_digit(d: u8, r: Seq<u8>)
     assert(s[0] == d);
 }
 
-proof fn lemma_split(a: Seq<u8>)
+pub proof fn lemma_split(a: Seq<u8>)
     requires wf_mag(a),
     ensures
         a.len() > 0 ==> mag_val(a) == a[0] as int + 10 * mag_val(a.drop_first()),
