@@ -285,4 +285,38 @@ pub proof fn lemma_floor_div_unique(n: int, d: int, q: int)
     ;
 }
 
+/// Truncating integer division (toward zero), as `BigInt` `/` computes it, for any nonzero `b`.
+pub open spec fn spec_tdiv(a: int, b: int) -> int {
+    let q = (if a >= 0 { a } else { -a }) / (if b >= 0 { b } else { -b });
+    if (a < 0) != (b < 0) { -q } else { q }
+}
+
+/// `a * b` truncated toward zero to the POSIX multiplication scale (`BCNum::mul`).
+pub open spec fn spec_mul(a: SpecBCNum, b: SpecBCNum, global_scale: nat) -> SpecBCNum {
+    let sr = spec_posix_mul_scale(a.scale, b.scale, global_scale);
+    SpecBCNum {
+        coeff: spec_tdiv(a.coeff * b.coeff, pow10((a.scale + b.scale - sr) as nat)),
+        scale: sr,
+    }
+}
+
+/// `a / b` for `b != 0`: the quotient truncated toward zero at `global_scale` digits.
+pub open spec fn spec_div(a: SpecBCNum, b: SpecBCNum, global_scale: nat) -> SpecBCNum {
+    let shift = b.scale + global_scale - a.scale;
+    SpecBCNum {
+        coeff: if shift >= 0 {
+            spec_tdiv(a.coeff * pow10(shift as nat), b.coeff)
+        } else {
+            spec_tdiv(a.coeff, b.coeff * pow10((-shift) as nat))
+        },
+        scale: global_scale,
+    }
+}
+
+/// `a % b` for `b != 0`: `a - (a / b) * b`, where the product keeps its exact scale.
+pub open spec fn spec_mod(a: SpecBCNum, b: SpecBCNum, global_scale: nat) -> SpecBCNum {
+    let q = spec_div(a, b, global_scale);
+    a.spec_sub(SpecBCNum { coeff: q.coeff * b.coeff, scale: q.scale + b.scale })
+}
+
 } // verus!
