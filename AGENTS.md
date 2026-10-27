@@ -60,7 +60,9 @@ graph TD
   POSIX scale rules. The scale and shift computations are delegated to kernels in
   `verified_kernels.rs`.
 - Fallible API: `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`. The panicking wrappers (`div`,
-  `pow`, …) exist for tests and internal convenience only.
+  `pow`, …) are compiled only under `cfg(test)`, as are `Lexer::get_next_token`,
+  `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`, `Evaluator::evaluate`, and
+  `Evaluator::execute`.
 - Output for `obase != 10` uses exact `BigInt` arithmetic. The number of fractional digits is the
   smallest `k` with `obase^k >= 10^scale`, so no floating point or `libm` is needed.
 - `Decimal { value: BigInt, prec: usize }` is a fixed-point helper used only by the math library.
@@ -94,6 +96,11 @@ results are *not* exact at the requested scale.
 ### Error handling contract
 - `bc_core` itself never needs to panic on user input. Every syntax or runtime error must be
   reachable as an `Err` from the `try_*` APIs.
+- `lib.rs` denies `clippy::unwrap_used`, `expect_used`, `panic`, and the lossy-cast lints outside
+  tests. Every remaining exception is an `#[allow(..., reason = "...")]` that names the invariant
+  justifying it (`pow10`, the bit-length estimate in `decimal_ln`, and the Verus-proved casts in
+  `verified_kernels.rs`). Do not replace an `unwrap` with a silent default (`unwrap_or(0)`):
+  return an error or derive the value so that no default is needed.
 - Front ends must not rely on unwinding: `catch_unwind` does not work under `panic = "abort"` or on
   `wasm32-unknown-unknown`.
 - Errors are typed: `BcError` (`Quit`, `Syntax`, `Runtime { kind: RuntimeError, func }`) in

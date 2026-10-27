@@ -18,9 +18,20 @@
 - `j(n,x)` with an order outside the 64-bit range no longer computes `J_0`
   (`j(10^20,1)` printed `.765…`), and `j(-9223372036854775808,1)` no longer aborts. Large orders
   whose result truncates to 0 return 0; other orders outside the range are `argument too large`.
+- `bc_core` no longer panics when an embedder empties a scope stack through the public
+  `Evaluator::variables` / `Evaluator::arrays` fields.
 - Command-line options follow the XBD 12.2 Utility Syntax Guidelines, as POSIX requires: options
   may be grouped (`-lw`), `--` ends the options, and `-` is a file operand. Long options are
   reported as `bc: unrecognized option '--name'`.
+
+### API changes (`bc_core`)
+- The panicking convenience wrappers (`BCNum::div`, `mod_op`, `pow`, `sqrt`,
+  `Lexer::get_next_token`, `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`,
+  `Evaluator::evaluate`, `Evaluator::execute`) are removed from the public API. Use the `try_*`
+  forms, which return every error as an `Err`.
+- `math::bc_exp` and `math::bc_bessel` return `Result<BCNum, RuntimeError>`; the new
+  `RuntimeError::MathArgumentTooLarge` is reported as `argument too large`.
+- `bc_core` denies `unwrap`, `expect`, `panic!`, and lossy integer casts outside tests.
 
 ## v0.4.0 — 2026-10-26
 

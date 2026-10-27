@@ -21,13 +21,31 @@ use alloc::vec::Vec;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive, Zero};
 
+/// |shift| for a shift from `verified_div_scale_and_shift`, which is at most 2·`BC_SCALE_MAX`
+/// (< 2^31) because every scale is at most `BC_SCALE_MAX`. A value that does not fit in `usize`
+/// saturates, so that `pow10` reports the broken invariant.
+fn shift_magnitude(shift: i64) -> usize {
+    usize::try_from(shift.unsigned_abs()).unwrap_or(usize::MAX)
+}
+
 /// Returns 10^n.
 ///
 /// Every `BCNum` scale is at most `BC_SCALE_MAX` (10^9), so the decimal shifts derived from
 /// scales stay below `u32::MAX`. A larger `n` means that invariant was broken, which is a bug.
+#[allow(
+    clippy::expect_used,
+    reason = "a shift above u32::MAX means the BC_SCALE_MAX invariant is broken (a bug), \
+              which must not be computed with a truncated exponent"
+)]
 pub(crate) fn pow10(n: usize) -> BigInt {
     let exp = u32::try_from(n).expect("decimal shift exceeds u32: BCNum scale invariant violated");
     BigInt::from(10).pow(exp)
+}
+
+/// The value of an output digit `d`, 0 <= d < obase <= `BC_BASE_MAX` < 2^31. Such a `BigInt`
+/// has no 32-bit limb when it is zero and exactly one otherwise.
+fn digit_value(d: &BigInt) -> usize {
+    d.iter_u32_digits().next().map_or(0, |limb| limb as usize)
 }
 
 /// Arbitrary-precision decimal number representation for bc.
@@ -83,8 +101,7 @@ impl BCNum {
             for b in frac_part.bytes() {
                 frac_numerator = frac_numerator * ibase + digit(b);
             }
-            let frac_denominator = BigInt::from(ibase)
-                .pow(u32::try_from(scale_val).expect("numeric literal has too many digits"));
+            let frac_denominator = num_traits::pow(BigInt::from(ibase), scale_val);
             let num = (int_val * &frac_denominator + frac_numerator) * pow10(scale_val);
             num / frac_denominator
         } else {
@@ -132,16 +149,17 @@ impl BCNum {
         }
         let (sr, shift) = verified_div_scale_and_shift(self.scale, other.scale, global_scale);
         let coeff = if shift >= 0 {
-            let num = &self.coeff * pow10(shift.unsigned_abs() as usize);
+            let num = &self.coeff * pow10(shift_magnitude(shift));
             num / &other.coeff
         } else {
-            let den = &other.coeff * pow10(shift.unsigned_abs() as usize);
+            let den = &other.coeff * pow10(shift_magnitude(shift));
             &self.coeff / den
         };
         Ok(Self::new(coeff, sr))
     }
 
     /// Divides self by other under scale.
+    #[cfg(test)]
     pub fn div(&self, other: &Self, global_scale: usize) -> Self {
         self.try_div(other, global_scale)
             .unwrap_or_else(|msg| panic!("{}", msg))
@@ -164,6 +182,7 @@ impl BCNum {
     }
 
     /// Computes self % other under scale.
+    #[cfg(test)]
     pub fn mod_op(&self, other: &Self, global_scale: usize) -> Self {
         self.try_mod_op(other, global_scale)
             .unwrap_or_else(|msg| panic!("{}", msg))
@@ -213,6 +232,7 @@ impl BCNum {
     }
 
     /// Raises self to the power of other under scale.
+    #[cfg(test)]
     pub fn pow(&self, other: &Self, global_scale: usize) -> Self {
         self.try_pow(other, global_scale)
             .unwrap_or_else(|msg| panic!("{}", msg))
@@ -230,6 +250,7 @@ impl BCNum {
     }
 
     /// Computes the square root of self under scale.
+    #[cfg(test)]
     pub fn sqrt(&self, global_scale: usize) -> Self {
         self.try_sqrt(global_scale)
             .unwrap_or_else(|msg| panic!("{}", msg))
@@ -274,7 +295,7 @@ impl BCNum {
                 let mut temp = int_part;
                 let ob = BigInt::from(obase);
                 while !temp.is_zero() {
-                    let rem = (&temp % &ob).to_usize().unwrap();
+                    let rem = digit_value(&(&temp % &ob));
                     digits.push(b"0123456789ABCDEF"[rem] as char);
                     temp /= &ob;
                 }
@@ -329,7 +350,7 @@ impl BCNum {
             for _ in 0..num_digits {
                 num *= &ob;
                 let d = &num / &den;
-                frac_digits.push(d.to_usize().unwrap());
+                frac_digits.push(digit_value(&d));
                 num %= &den;
             }
 
@@ -725,8 +746,13 @@ fn decimal_ln(x: &Decimal, prec: usize) -> Decimal {
         prec: p,
     };
 
-    let bits = x_p.value.bits() as i64;
-    let mut k = bits - (p as i64 * 3321928 / 1000000);
+    // x_p has p <= 2·BC_SCALE_MAX + 15 fractional digits and an integer part of at most as many
+    // digits, so its bit length and p·3.32 are far below i64::MAX.
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "bounded by the BC_SCALE_MAX invariant"
+    )]
+    let mut k = x_p.value.bits() as i64 - (p as i64 * 3321928 / 1000000);
     let mut m = if k >= 0 {
         Decimal {
             value: &x_p.value >> k,

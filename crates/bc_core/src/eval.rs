@@ -212,11 +212,9 @@ impl Evaluator {
     /// Reads the current value of a resolved target.
     fn load(&mut self, place: &Place) -> BCNum {
         match place {
-            Place::Variable(name) => self.variable_stack(name.clone()).last().unwrap().clone(),
+            Place::Variable(name) => self.variable_top(name.clone()).clone(),
             Place::Element(name, index) => self
-                .array_stack(name.clone())
-                .last()
-                .unwrap()
+                .array_top(name.clone())
                 .get(index)
                 .cloned()
                 .unwrap_or_else(BCNum::zero),
@@ -229,13 +227,10 @@ impl Evaluator {
     fn store(&mut self, place: Place, val: &BCNum) -> BCNum {
         match place {
             Place::Variable(name) => {
-                *self.variable_stack(name).last_mut().unwrap() = val.clone();
+                *self.variable_top(name) = val.clone();
             }
             Place::Element(name, index) => {
-                self.array_stack(name)
-                    .last_mut()
-                    .unwrap()
-                    .insert(index, val.clone());
+                self.array_top(name).insert(index, val.clone());
             }
             Place::Register(reg) => {
                 let stored = self.store_register(reg, val);
@@ -251,6 +246,27 @@ impl Evaluator {
             Register::Ibase => self.ibase,
             Register::Obase => self.obase,
         }
+    }
+
+    /// The innermost frame of a scope stack. The evaluator keeps a global frame at the bottom of
+    /// every stack; a stack emptied through the public `variables`/`arrays` fields gets a fresh
+    /// one from `init`, so this never fails.
+    fn top_frame<T>(stack: &mut Vec<T>, init: impl FnOnce() -> T) -> &mut T {
+        if stack.is_empty() {
+            stack.push(init());
+        }
+        let top = stack.len() - 1;
+        &mut stack[top]
+    }
+
+    /// The current value of variable `name`.
+    fn variable_top(&mut self, name: String) -> &mut BCNum {
+        Self::top_frame(self.variable_stack(name), BCNum::zero)
+    }
+
+    /// The current frame of array `name`.
+    fn array_top(&mut self, name: String) -> &mut BTreeMap<BigInt, BCNum> {
+        Self::top_frame(self.array_stack(name), BTreeMap::new)
     }
 
     /// The scope stack of variable `name`, created with its global frame (0) if needed.
@@ -338,23 +354,12 @@ impl Evaluator {
     pub fn try_evaluate(&mut self, node: &Expr) -> Result<BCNum, BcError> {
         match node {
             Expr::Number(value) => self.literal(value),
-            Expr::Variable(name) => {
-                let stack = self
-                    .variables
-                    .entry(name.clone())
-                    .or_insert_with(|| vec![BCNum::zero()]);
-                Ok(stack.last().cloned().unwrap_or_else(BCNum::zero))
-            }
+            Expr::Variable(name) => Ok(self.variable_top(name.clone()).clone()),
             Expr::ArrayAccess(name, index_expr) => {
                 let idx = self.try_evaluate(index_expr)?;
                 let idx_val = Self::array_index(name, &idx)?;
-                let stack = self
-                    .arrays
-                    .entry(name.clone())
-                    .or_insert_with(|| vec![BTreeMap::new()]);
-                Ok(stack
-                    .last()
-                    .unwrap()
+                Ok(self
+                    .array_top(name.clone())
                     .get(&idx_val)
                     .cloned()
                     .unwrap_or_else(BCNum::zero))
@@ -459,28 +464,24 @@ impl Evaluator {
                 Ok(if *is_prefix { stored } else { old_val })
             }
             Expr::Call(name, args) => {
-                if self.functions.contains_key(name) {
-                    let func = self.functions.get(name).unwrap().clone();
+                if let Some(func) = self.functions.get(name).cloned() {
                     if args.len() != func.params.len() {
                         return Err(RuntimeError::ParameterMismatch.into());
                     }
 
+                    /// A parameter value, evaluated before any frame is pushed.
+                    enum ArgValue {
+                        Array(BTreeMap<BigInt, BCNum>),
+                        Scalar(BCNum),
+                    }
                     let mut evaluated_args = Vec::new();
                     for (i, arg) in args.iter().enumerate() {
                         let param = &func.params[i];
                         if param.is_array {
                             if let ExprOrArray::ArrayArg(arg_name) = arg {
-                                let arr_stack = self
-                                    .arrays
-                                    .entry(arg_name.clone())
-                                    .or_insert_with(|| vec![BTreeMap::new()]);
-                                let arr_copy = arr_stack.last().unwrap().clone();
-                                evaluated_args.push((
-                                    true,
-                                    param.name.clone(),
-                                    Some(arr_copy),
-                                    None,
-                                ));
+                                let arr_copy = self.array_top(arg_name.clone()).clone();
+                                evaluated_args
+                                    .push((param.name.clone(), ArgValue::Array(arr_copy)));
                             } else {
                                 return Err(RuntimeError::ParameterTypeMismatch(
                                     param.name.clone(),
@@ -489,7 +490,7 @@ impl Evaluator {
                             }
                         } else if let ExprOrArray::Expr(expr) = arg {
                             let val = self.try_evaluate(expr)?;
-                            evaluated_args.push((false, param.name.clone(), None, Some(val)));
+                            evaluated_args.push((param.name.clone(), ArgValue::Scalar(val)));
                         } else {
                             return Err(
                                 RuntimeError::ParameterTypeMismatch(param.name.clone()).into()
@@ -500,11 +501,10 @@ impl Evaluator {
                     // Every name keeps its global frame at the bottom of its stack, so popping
                     // the function's frames in `ScopeGuard::drop` never leaves an empty stack
                     // (a name first seen as a parameter or `auto` stays usable afterwards).
-                    for (is_arr, pname, arr_opt, val_opt) in evaluated_args {
-                        if is_arr {
-                            self.array_stack(pname).push(arr_opt.unwrap());
-                        } else {
-                            self.variable_stack(pname).push(val_opt.unwrap());
+                    for (pname, value) in evaluated_args {
+                        match value {
+                            ArgValue::Array(arr) => self.array_stack(pname).push(arr),
+                            ArgValue::Scalar(val) => self.variable_stack(pname).push(val),
                         }
                     }
 
@@ -586,6 +586,7 @@ impl Evaluator {
     }
 
     /// Evaluates an AST expression node and returns a BCNum.
+    #[cfg(test)]
     pub fn evaluate(&mut self, node: &Expr) -> BCNum {
         self.try_evaluate(node).unwrap_or_else(|e| panic!("{}", e))
     }
@@ -687,6 +688,7 @@ impl Evaluator {
     }
 
     /// Executes an AST statement node.
+    #[cfg(test)]
     pub fn execute(&mut self, node: &Stmt) {
         self.try_execute(node).unwrap_or_else(|e| panic!("{}", e))
     }
@@ -741,6 +743,30 @@ mod tests {
         let out = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
         let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
         (out, err)
+    }
+
+    #[test]
+    fn test_emptied_public_scope_stacks_do_not_panic() {
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stdout = TestWriter {
+            buf: stdout_buf.clone(),
+        };
+        let stderr = TestWriter {
+            buf: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let mut eval = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
+        // An embedder may leave an empty stack in the public fields; reads see the global
+        // default and writes recreate the frame.
+        eval.variables.insert("x".to_string(), Vec::new());
+        eval.arrays.insert("a".to_string(), Vec::new());
+        eval.arrays.insert("b".to_string(), Vec::new());
+        let summary = eval.run_source(
+            "x; a[0]; x += 2; x; a[1] = 3; a[1]\ndefine f(c[]) {\nreturn (c[0])\n}\nf(b[])\n",
+            "(test)",
+        );
+        assert_eq!(summary.errors, 0);
+        let out = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
+        assert_eq!(out, "0\n0\n2\n3\n0\n");
     }
 
     #[test]

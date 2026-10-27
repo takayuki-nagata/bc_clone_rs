@@ -9,6 +9,16 @@
 //! - When compiled under standard Cargo / `rustc` (`#[cfg(not(verus_keep_ghost))]`),
 //!   `dual_verified!` strips only the ghost specification clauses and compiles the exact
 //!   same function body as an `#[inline]` `#![no_std]` Rust function.
+//!
+//! The integer casts in the kernel bodies are lossless: each kernel's `ensures` clause states
+//! the result over mathematical integers, so Verus proves that no cast wraps or truncates for
+//! inputs that satisfy its `requires` clause (and Kani re-checks them bit-precisely).
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    reason = "proved lossless by the Verus contracts (see the module documentation)"
+)]
 
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;

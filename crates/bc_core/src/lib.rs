@@ -3,6 +3,20 @@
 //! Arbitrary-precision bc engine library compatible with no_std + alloc.
 
 #![no_std]
+// `bc_core` must not panic on any input (AGENTS.md, "Error handling contract"): no unwrapping,
+// no explicit panics, and no lossy integer casts outside tests. Each remaining exception carries
+// an `allow` with the invariant that justifies it.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap
+    )
+)]
 
 extern crate alloc;
 

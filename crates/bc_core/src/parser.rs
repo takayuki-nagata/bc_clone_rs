@@ -559,6 +559,7 @@ impl Lexer {
     }
 
     /// Obtains the next token, consuming it from the buffer or stream.
+    #[cfg(test)]
     pub fn get_next_token(&mut self) -> Token {
         self.try_get_next_token()
             .unwrap_or_else(|e| panic!("{:?}", e))
@@ -579,6 +580,7 @@ impl Lexer {
     }
 
     /// Peeks a token at a given offset forward.
+    #[cfg(test)]
     pub fn peek_token(&mut self, offset: usize) -> &Token {
         self.try_peek_token(offset)
             .unwrap_or_else(|e| panic!("{:?}", e))
@@ -705,6 +707,7 @@ impl Parser {
     }
 
     /// Creates a new Parser from the Lexer.
+    #[cfg(test)]
     pub fn new(lexer: Lexer) -> Self {
         Self::try_new(lexer).unwrap_or_else(|e| panic!("{:?}", e))
     }
@@ -795,6 +798,7 @@ impl Parser {
     }
 
     /// Parses the program fully (entry point).
+    #[cfg(test)]
     pub fn parse_program(&mut self) -> Vec<Stmt> {
         self.try_parse_program().unwrap_or_else(|e| {
             if e == BcError::Quit {
