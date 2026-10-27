@@ -28,7 +28,8 @@
 //! does not go through are listed here: (none yet).
 //!
 //! **Not modeled** (the oracle exits with `NOT_MODELED`): `-l`, the interactive REPL and SIGINT,
-//! unreadable files, memory exhaustion.
+//! unreadable files, memory exhaustion. `BC_SPEC_MAX_DEPTH` sets `max_depth` (default 100000,
+//! the release build of `bc_clone`).
 
 use vstd::prelude::*;
 
@@ -39,6 +40,8 @@ pub mod power;
 pub mod convert;
 pub mod lexer;
 pub mod parser;
+pub mod output;
+pub mod eval;
 pub mod top;
 
 use top::{ExecInput, ExecOptions, NOT_MODELED, exec_run};
@@ -54,7 +57,8 @@ fn not_modeled(what: &str) -> ! {
 
 /// Parses the command line like `bc_clone` (XBD 12.2: grouped flags, `--`, `-` as an operand).
 fn parse_args(args: &[String]) -> (ExecOptions, Vec<String>) {
-    let mut opts = ExecOptions { reject_extensions: false, warn_extensions: false };
+    let max_depth = std::env::var("BC_SPEC_MAX_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(100_000);
+    let mut opts = ExecOptions { reject_extensions: false, warn_extensions: false, max_depth };
     let mut files = Vec::new();
     let mut operands_only = false;
     for arg in args {
@@ -93,6 +97,9 @@ fn oracle_main() {
     inputs.push(ExecInput { name: b"(standard_in)".to_vec(), text: stdin });
 
     let outcome = exec_run(&opts, &inputs);
+    if outcome.not_modeled {
+        not_modeled("out of fuel");
+    }
     use std::io::Write;
     let _ = std::io::stdout().write_all(&outcome.stdout);
     let _ = std::io::stderr().write_all(&outcome.stderr);
