@@ -110,6 +110,7 @@ impl Evaluator {
         // A unit starts at the top level; this also recovers if a front end caught a panic in
         // the middle of the previous unit.
         self.eval_depth = 0;
+        self.invocation_ibase = None;
         let policy = self.extension_policy;
         let max_depth = self.max_depth;
         let mut extension_uses = Vec::new();

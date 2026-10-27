@@ -26,6 +26,10 @@
   limit (`docs/COMPATIBILITY.md` §2), reported as `nesting too deep`. The CLI evaluates on a
   512 MiB-stack thread with a limit of 100 000 levels; embedders set `Evaluator::max_depth` or
   call the new `bc_session_set_max_depth`. The Zephyr main stack grows to 96 KiB.
+- Numeric constants in a function body are interpreted in the `ibase` in effect when the
+  function was invoked, as POSIX requires, even if the body changes `ibase`:
+  `define f() { ibase = 16; return (10) }; f()` printed 16 and now prints 10, as GNU `bc` does.
+- Documented behavior: a name repeated in a function's parameter and `auto` lists is accepted.
 - Command-line options follow the XBD 12.2 Utility Syntax Guidelines, as POSIX requires: options
   may be grouped (`-lw`), `--` ends the options, and `-` is a file operand. Long options are
   reported as `bc: unrecognized option '--name'`.

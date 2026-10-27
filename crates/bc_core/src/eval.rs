@@ -106,6 +106,9 @@ pub struct Evaluator {
     pub max_depth: usize,
     /// Expressions and statements currently being evaluated.
     pub(crate) eval_depth: usize,
+    /// `ibase` when the innermost executing function was invoked (`None` at top level). POSIX:
+    /// numeric constants within a function are interpreted in this base.
+    pub(crate) invocation_ibase: Option<usize>,
 }
 
 /// An assignment target whose array subscript has already been evaluated.
@@ -121,6 +124,7 @@ struct ScopeGuard<'a> {
     params: &'a [Param],
     prev_return_flag: bool,
     prev_return_value: BCNum,
+    prev_invocation_ibase: Option<usize>,
 }
 
 impl<'a> Drop for ScopeGuard<'a> {
@@ -128,6 +132,7 @@ impl<'a> Drop for ScopeGuard<'a> {
         self.evaluator.call_stack.pop();
         self.evaluator.return_flag = self.prev_return_flag;
         self.evaluator.return_value = self.prev_return_value.clone();
+        self.evaluator.invocation_ibase = self.prev_invocation_ibase;
 
         for auto in self.autos.iter().rev() {
             if auto.is_array {
@@ -175,6 +180,7 @@ impl Evaluator {
             call_stack: Vec::new(),
             max_depth: DEFAULT_MAX_DEPTH,
             eval_depth: 0,
+            invocation_ibase: None,
         }
     }
 
@@ -345,10 +351,11 @@ impl Evaluator {
         v
     }
 
-    /// Converts a numeric literal in the current `ibase`. A literal with more than
+    /// Converts a numeric literal: at top level in the current `ibase`, and in a function body
+    /// in the `ibase` in effect when the function was invoked (POSIX). A literal with more than
     /// `BC_SCALE_MAX` fractional digits is rejected to keep the scale invariant.
     fn literal(&self, digits: &str) -> Result<BCNum, BcError> {
-        let num = BCNum::from_string(digits, self.ibase);
+        let num = BCNum::from_string(digits, self.invocation_ibase.unwrap_or(self.ibase));
         if num.scale > BC_SCALE_MAX {
             return Err(RuntimeError::ScaleTooLarge.into());
         }
@@ -552,12 +559,14 @@ impl Evaluator {
                     self.return_value = BCNum::zero();
 
                     self.call_stack.push(name.clone());
+                    let prev_invocation_ibase = self.invocation_ibase.replace(self.ibase);
                     let guard = ScopeGuard {
                         evaluator: self,
                         autos: &func.autos,
                         params: &func.params,
                         prev_return_flag,
                         prev_return_value,
+                        prev_invocation_ibase,
                     };
 
                     for stmt in &func.body {

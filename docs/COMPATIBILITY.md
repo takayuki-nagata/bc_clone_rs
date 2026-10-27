@@ -80,6 +80,7 @@ exact are **truncated** (toward zero).
 | `quit` stops execution at the point where it appears in the input, even inside a function definition or a compound statement | |
 | `return`, `return ()`, `return (e)`; `return ()` returns 0 | GNU bc rejects `return ()` (§5) |
 | Function parameters and `auto` variables are dynamically scoped | |
+| Numeric constants in a function body are interpreted in the `ibase` in effect when the function is invoked (POSIX: "The values of numeric constants within a function shall be interpreted in the base specified by the value of the `ibase` register when the function is invoked") | The base is fixed for the whole call: in `define f() { ibase = 16; return (10) }`, `f()` returns 10 when called with `ibase` 10. At top level each constant uses the current `ibase` |
 | Arrays may be passed as parameters (`f(a[])`), including as the last parameter (Issue 8, Austin Group Defect 1230) | |
 | A relational expression is valid as the condition of `if`, of `while`, and as the middle clause of `for` | Other positions: §4 |
 | An expression statement is printed unless it is an assignment | As in GNU's grammar, an assignment binds to the named expression right before it: `a + b = 3` is `a + (b = 3)` and is printed; `-a = 5` is `-(a = 5)` and is not printed; `(a = 5)` is printed |
@@ -167,6 +168,7 @@ address (`adr=N`).
 | `e(x)` with x <= −2.3026·(`scale`+1) | 0, without computing e^x: 2.3026 > ln 10, so the result is below 10^−(`scale`+1) |
 | `j(n,x)` with \|n\| >= 3·⌈\|x\|⌉ and \|n\| >= 4·(`scale`+1) | 0, without computing the series: \|J_n(x)\| <= (e\|x\|/(2\|n\|))^\|n\| <= 2^−\|n\| < 10^−`scale` |
 | `e(x)` or `j(n,x)` outside the limits of §2 | Runtime error `argument too large` |
+| A name repeated in a function's parameter and `auto` lists (`define f(x) { auto x ...`, `define f(x, x)`) | Each occurrence pushes a frame in order, so the last one is visible in the body (`auto x` starts at 0 and hides the parameter); all are popped on return. GNU rejects such a definition |
 | `l(x)` with `x <= 0` | Returns −(10^scale − 1) for the caller's `scale`, like GNU's library (`scale=3; l(0)` → `-999.000`) |
 
 ### 3.4 Accuracy of the math library
@@ -214,6 +216,7 @@ multi-letter identifiers.
 | Exit status after errors | 0 | 1 (§3.1) |
 | `sqrt` of an exact value | `sqrt(1.000)` prints `1` | `1.0000` at `scale=4`, as POSIX's scale rule requires |
 | `return ()` | Syntax error | Returns 0, as POSIX's grammar allows |
+| A name repeated in the parameter and `auto` lists | Syntax error (`duplicate parameter names`, …) | Accepted (§3.3) |
 | Negative result of `^` that truncates to zero | A "negative zero": `scale=6; (-0.008264)^3` prints `-0` and is `< 0` | `0`, equal to 0 |
 | Diagnostics | Include `adr=N` | No address |
 | Recovery after a syntax error | yacc error recovery; may report several errors per line and sometimes also discard the following line | One diagnostic, then the rest of the input unit is discarded (§3.1) |

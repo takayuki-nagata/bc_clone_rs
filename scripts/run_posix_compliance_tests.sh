@@ -81,6 +81,10 @@ check "a single digit assigned to ibase is hexadecimal" "" $'ibase = 16\nibase =
 check "a single digit assigned to obase is hexadecimal" "" $'obase = A\n10\n' $'10\n'
 check "ibase 2" "" $'ibase = 2\n1010\n' $'10\n'
 check "ibase 16 with a fraction" "" $'ibase = 16\n0.8\n' $'.5\n'
+check "constants in a function use the ibase at invocation" "" \
+    $'define f() {\nreturn (10)\n}\nibase = 16\nf()\n' $'16\n'
+check "a function's constants keep the ibase of its invocation" "" \
+    $'define f() {\nibase = 16\nreturn (10 + 11)\n}\nf()\n10\n' $'21\n16\n'
 
 # --- Expressions: scale of results -------------------------------------------------------------------
 check "results are truncated, not rounded" "" $'scale = 0\n3.2 / 1\n' $'3\n'

@@ -952,3 +952,19 @@ fn test_deep_nesting_and_recursion() {
         assert_eq!(code, i32::from(!err.is_empty()), "{label}");
     }
 }
+
+/// Numeric constants in a function body use the `ibase` in effect when the function was
+/// invoked (POSIX), even after the body assigns `ibase`; top-level constants use the current one.
+#[test]
+fn test_ibase_of_function_constants() {
+    let programs = [
+        "define f() {\nibase = 16\nreturn (10)\n}\nf()\n10",
+        "define f() {\nreturn (10)\n}\nibase = 16\nf()",
+        "define g() {\nreturn (10)\n}\ndefine f() {\nibase = 16\nreturn (g() + 10)\n}\nf()",
+        "define f(x) {\nreturn (x + 10)\n}\nf(ibase = 16)\n10",
+        "define f() {\nibase = 2\n1/0\n}\nf()\n10\n11",
+    ];
+    for prog in &programs {
+        check_differential(prog, &[]);
+    }
+}
