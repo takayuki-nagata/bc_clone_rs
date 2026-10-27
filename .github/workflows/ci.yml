@@ -100,8 +100,15 @@ jobs:
             rustup toolchain install "$REQUIRED_TOOLCHAIN" --profile minimal --no-self-update
           fi
 
-      - name: Run Verus Formal Verification (bc_core)
+      - name: Run Verus Formal Verification (bc_core, bc_spec)
         run: bash scripts/run_verus_verification.sh
+
+      - name: Differential Tests and POSIX Suite against the Executable Specification
+        run: |
+          bash scripts/build_spec_oracle.sh --no-verify target/bc_spec_oracle
+          BC_SPEC_ORACLE="$PWD/target/bc_spec_oracle" BC_SPEC_ORACLE_REQUIRED=1 \
+            cargo test --package bc_clone --test spec_differential
+          BC_BIN="$PWD/target/bc_spec_oracle" bash scripts/run_posix_compliance_tests.sh
 
       - name: Run Kani Bounded Model Checking Verification
         run: bash scripts/run_kani_verification.sh

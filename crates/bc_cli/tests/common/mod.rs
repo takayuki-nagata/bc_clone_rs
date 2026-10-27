@@ -5,6 +5,8 @@
 
 #![allow(dead_code)]
 
+pub mod generators;
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -17,10 +19,21 @@ const TIME_LIMIT_SECS: &str = "20";
 /// Runs `cmd_name args...` with `input` on stdin under a time limit and returns
 /// `(exit status, stdout, stderr)`.
 pub fn run_command(cmd_name: &str, args: &[&str], input: &str) -> (i32, String, String) {
+    run_command_bytes(cmd_name, args, &[], input.as_bytes())
+}
+
+/// Like [`run_command`], with raw input bytes and extra environment variables.
+pub fn run_command_bytes(
+    cmd_name: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+    input: &[u8],
+) -> (i32, String, String) {
     let mut child = Command::new("timeout")
         .arg(TIME_LIMIT_SECS)
         .arg(cmd_name)
         .args(args)
+        .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -29,9 +42,7 @@ pub fn run_command(cmd_name: &str, args: &[&str], input: &str) -> (i32, String, 
 
     {
         let stdin = child.stdin.as_mut().expect("failed to get stdin");
-        stdin
-            .write_all(input.as_bytes())
-            .expect("failed to write to stdin");
+        stdin.write_all(input).expect("failed to write to stdin");
     }
 
     let output = child.wait_with_output().expect("failed to wait for output");
@@ -90,6 +101,18 @@ pub fn check_differential(program: &str, flags: &[&str]) {
 /// Like [`check_differential`], but returns `false` without comparing when GNU bc exceeds the
 /// time limit (GNU's algorithms are slower for some inputs, e.g. large powers of fractions).
 pub fn check_differential_unless_gnu_times_out(program: &str, flags: &[&str]) -> bool {
+    check_against_gnu(env!("CARGO_BIN_EXE_bc_clone"), &[], program, flags)
+}
+
+/// Runs `program` through GNU bc and the bc implementation `bin_path` (with the environment
+/// `envs`), comparing as [`check_differential`] does. Returns `false` without comparing when
+/// GNU bc exceeds the time limit.
+pub fn check_against_gnu(
+    bin_path: &str,
+    envs: &[(&str, &str)],
+    program: &str,
+    flags: &[&str],
+) -> bool {
     let input = if program.ends_with('\n') {
         program.to_string()
     } else {
@@ -103,8 +126,8 @@ pub fn check_differential_unless_gnu_times_out(program: &str, flags: &[&str]) ->
     let expected_err = normalize_gnu_stderr(&bc_err);
     let expected_code = expected_exit_code(bc_code, &expected_err);
 
-    let bin_path = env!("CARGO_BIN_EXE_bc_clone");
-    let (clone_code, clone_out, clone_err) = run_command(bin_path, flags, &input);
+    let (clone_code, clone_out, clone_err) =
+        run_command_bytes(bin_path, flags, envs, input.as_bytes());
 
     assert_eq!(
         clone_out, bc_out,

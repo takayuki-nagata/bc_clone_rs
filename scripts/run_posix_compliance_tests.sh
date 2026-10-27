@@ -22,6 +22,7 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 
 PASSED=0
 FAILED=0
+SKIPPED=0
 
 # check <name> <flags> <stdin> <expected stdout> [expected status] [stderr: empty|nonempty]
 check() {
@@ -34,6 +35,12 @@ check() {
         out="$(cat "$WORK_DIR/out"; printf x)"
         out="${out%x}"
         err="$(cat "$WORK_DIR/err")"
+        # The executable specification (BC_BIN=target/bc_spec_oracle) exits with 125 on input it
+        # does not model, such as -l.
+        if [ "$code" -eq 125 ] && [[ "$err" == *"not modeled"* ]]; then
+            SKIPPED=$((SKIPPED + 1))
+            continue
+        fi
         ok=1
         [ "$out" == "$expected" ] || ok=0
         if [ "$status" == "nonzero" ]; then [ "$code" -ne 0 ] || ok=0; else [ "$code" -eq "$status" ] || ok=0; fi
@@ -143,6 +150,9 @@ echo "=== POSIX.1-2024 bc Conformance Test Summary (each case in default and -s 
 echo "Total Evaluated Runs : ${TOTAL}"
 echo "Passed               : ${PASSED}"
 echo "Failed               : ${FAILED}"
+if [ "$SKIPPED" -ne 0 ]; then
+    echo "Skipped (not modeled): ${SKIPPED}"
+fi
 
 if [ "$FAILED" -ne 0 ]; then
     echo "POSIX Compliance Test Suite FAILED!"
