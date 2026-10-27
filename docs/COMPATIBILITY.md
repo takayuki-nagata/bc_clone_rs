@@ -100,6 +100,7 @@ requirement; §3.4 defines the one `bc_clone` meets.
 | `BC_DIM_MAX` | 16 777 216 | Valid subscripts are 0..16 777 215 (POSIX: 0..`BC_DIM_MAX`−1), the same range GNU `bc` accepts. |
 | `BC_STRING_MAX` | 2 147 483 647 | Same value as GNU `bc`. |
 | Exponent of `^` | The integer part must fit in a signed 64-bit integer | Same as GNU's "MAX Exponent". |
+| Nesting depth | `bc_clone` CLI: 100 000 (20 000 in debug builds); library default (`DEFAULT_MAX_DEPTH`): 128; Zephyr: 80; QEMU bare metal: 1000. Set with `Evaluator::max_depth` or `bc_session_set_max_depth` | Bounds the native stack. A statement, an expression operator or operand, and each pending function call count as levels: the syntax tree of an input unit may be at most this deep (otherwise the syntax error `nesting too deep`), and at most this many levels may be evaluated at once (otherwise the runtime error `nesting too deep`). A call `f(n - 1)` in `return (...)` takes 2 levels, so the CLI allows recursion about 50 000 deep. GNU `bc` has no fixed limit |
 | Argument of `e(x)` | The integer part of \|x\| must be at most 2 000 000 000 (`EXP_ARG_MAX`), unless the result truncates to 0 | e^x then has at most about 8.7·10^8 integer digits, and the working precision stays within `MAX_VERIFIED_SCALE` |
 | Order of `j(n,x)` | Must fit in a signed 64-bit integer (excluding its minimum), unless the result truncates to 0 | A larger order that is not provably 0 needs \|x\| > 3·10^18, which cannot be computed |
 | Exact scale of `a ^ b` | `scale(a) · \|b\|` must not exceed `BC_SCALE_MAX` | `bc_clone` computes the exact power and then truncates it. GNU truncates intermediate results, so it can evaluate `0.5 ^ 2000000000` (slowly). |
@@ -142,8 +143,9 @@ The message texts follow GNU `bc`: `Divide by zero`, `Modulo by zero`, `divide b
 negative power),
 `Square root of a negative number`, `Parameter type mismatch parameter <p>.`,
 `Function <f> not defined.`, `Parameter number mismatch`, `Array <a> subscript out of bounds.`,
-`exponent too large in raise`, `scale too large`, and `argument too large` (math library; not in
-GNU). Unlike GNU, `bc_clone` does not print a bytecode
+`exponent too large in raise`, `scale too large`, `argument too large` (math library), and
+`nesting too deep` (§2). The last two are not in GNU. Input nested too deeply to parse is reported
+as `<source> <line>: nesting too deep` instead of `syntax error`. Unlike GNU, `bc_clone` does not print a bytecode
 address (`adr=N`).
 
 ### 3.3 Out-of-range and undefined operations

@@ -82,7 +82,9 @@ echo "=== Building Zephyr Application for qemu_riscv32 ==="
 
 echo ""
 echo "=== Running Zephyr Application on QEMU RISC-V 32 ==="
-OUTPUT=$(qemu-system-riscv32 \
+# The self-tests exit QEMU through the SiFive test device; the timeout only guards against a
+# firmware that hangs.
+OUTPUT=$(timeout 600 qemu-system-riscv32 \
     -M virt \
     -cpu rv32 \
     -bios none \

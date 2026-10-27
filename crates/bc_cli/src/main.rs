@@ -7,7 +7,7 @@
 
 use core::fmt::Write as FmtWrite;
 use std::io::{BufRead, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use bc_core::verified_kernels::{
     CLI_ARG_END_OF_OPTIONS, CLI_ARG_OPT_CLUSTER, CLI_ARG_OPT_INVALID, CLI_ARG_OPT_L, CLI_ARG_OPT_S,
@@ -15,7 +15,8 @@ use bc_core::verified_kernels::{
     verified_cli_initial_scale, verified_repl_block_completeness,
 };
 use bc_core::{
-    BcWriter, Evaluator, ExtensionPolicy, RunSummary, STDIN_SOURCE, UnitAccumulator, UnitOutcome,
+    BcWriter, DEFAULT_MAX_DEPTH, Evaluator, ExtensionPolicy, RunSummary, STDIN_SOURCE,
+    UnitAccumulator, UnitOutcome,
 };
 
 /// Adapter converting any `std::io::Write + Send` into a `bc_core::BcWriter`.
@@ -272,6 +273,7 @@ where
         }
     }
     let mut evaluator = create_evaluator(math_enabled, stdout_writer, stderr_writer);
+    evaluator.max_depth = MAX_DEPTH.load(Ordering::SeqCst);
     evaluator.set_scale(verified_cli_initial_scale(math_enabled));
     evaluator.extension_policy = extension_policy;
 
@@ -323,16 +325,56 @@ fn install_panic_hook() {
     }));
 }
 
+/// Stack reserved for the thread that parses and evaluates the input. Only the pages actually
+/// used are committed.
+const ENGINE_STACK_SIZE: usize = 512 << 20;
+
+/// Nesting limit on that stack (`docs/COMPATIBILITY.md` §2). One level takes at most about
+/// 1.9 KB of stack in release builds and 16 KB in debug builds (measured on x86-64), so the
+/// limit uses less than 40% (release) or 65% (debug) of `ENGINE_STACK_SIZE`.
+const ENGINE_MAX_DEPTH: usize = if cfg!(debug_assertions) {
+    20_000
+} else {
+    100_000
+};
+
+/// Nesting limit that [`run_app`] gives its evaluator: [`DEFAULT_MAX_DEPTH`] unless the input
+/// runs on the large engine thread.
+static MAX_DEPTH: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_DEPTH);
+
+/// Runs [`run_app`] on the process's standard streams.
+fn run_on_stdio(args: &[String], is_interactive: bool) -> i32 {
+    let stdin = std::io::stdin();
+    run_app(
+        args,
+        stdin.lock(),
+        std::io::stdout(),
+        std::io::stderr(),
+        is_interactive,
+    )
+}
+
 fn main() {
     install_panic_hook();
 
     let args: Vec<String> = std::env::args().collect();
     use std::io::IsTerminal;
     let is_interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    let stderr = std::io::stderr();
-    std::process::exit(run_app(&args, stdin.lock(), stdout, stderr, is_interactive));
+    MAX_DEPTH.store(ENGINE_MAX_DEPTH, Ordering::SeqCst);
+    let engine_args = args.clone();
+    let status = match std::thread::Builder::new()
+        .name(String::from("bc"))
+        .stack_size(ENGINE_STACK_SIZE)
+        .spawn(move || run_on_stdio(&engine_args, is_interactive))
+    {
+        Ok(engine) => engine.join().unwrap_or(1),
+        Err(_) => {
+            // The large stack could not be reserved: run on this thread's default stack.
+            MAX_DEPTH.store(DEFAULT_MAX_DEPTH, Ordering::SeqCst);
+            run_on_stdio(&args, is_interactive)
+        }
+    };
+    std::process::exit(status);
 }
 
 #[cfg(test)]

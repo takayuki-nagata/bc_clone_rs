@@ -20,6 +20,12 @@
   whose result truncates to 0 return 0; other orders outside the range are `argument too large`.
 - `bc_core` no longer panics when an embedder empties a scope stack through the public
   `Evaluator::variables` / `Evaluator::arrays` fields.
+- Deep nesting no longer crashes with a stack overflow. Programs such as a 20 000-term sum, 10 000
+  nested parentheses, or recursion 10 000 calls deep aborted the process (and could corrupt
+  memory on embedded targets). Statements, expressions, and pending calls now have a nesting
+  limit (`docs/COMPATIBILITY.md` §2), reported as `nesting too deep`. The CLI evaluates on a
+  512 MiB-stack thread with a limit of 100 000 levels; embedders set `Evaluator::max_depth` or
+  call the new `bc_session_set_max_depth`. The Zephyr main stack grows to 96 KiB.
 - Command-line options follow the XBD 12.2 Utility Syntax Guidelines, as POSIX requires: options
   may be grouped (`-lw`), `--` ends the options, and `-` is a file operand. Long options are
   reported as `bc: unrecognized option '--name'`.

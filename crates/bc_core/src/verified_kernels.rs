@@ -503,6 +503,16 @@ dual_verified! {
         base_prec + extra_prec + 15
     }
 
+    /// Verified nesting-limit check (`parser.rs` and `eval.rs`): whether `depth` enclosing
+    /// levels plus `height` more stay within `max_depth`, computed without overflow.
+    pub fn verified_nesting_within_limit(depth: usize, height: usize, max_depth: usize) -> (res: bool)
+        ensures [
+            res == ((depth as int) + (height as int) <= (max_depth as int)),
+        ]
+    {
+        height <= max_depth && depth <= max_depth - height
+    }
+
     /// Verified control-flow short-circuit check (`eval.rs:Evaluator::execute`).
     pub fn verified_should_abort_execution(
         break_flag: bool,

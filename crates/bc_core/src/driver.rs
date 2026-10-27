@@ -107,10 +107,15 @@ impl Evaluator {
     /// `source` names the input in syntax diagnostics (a file name, or [`STDIN_SOURCE`]) and
     /// `first_line` is the line number of the unit's first line within that source.
     pub fn run_unit(&mut self, unit: &str, source: &str, first_line: usize) -> UnitOutcome {
+        // A unit starts at the top level; this also recovers if a front end caught a panic in
+        // the middle of the previous unit.
+        self.eval_depth = 0;
         let policy = self.extension_policy;
+        let max_depth = self.max_depth;
         let mut extension_uses = Vec::new();
         let parsed = Parser::try_new(Lexer::new(unit)).and_then(|mut parser| {
             parser.set_extension_policy(policy);
+            parser.set_max_depth(max_depth);
             let stmts = parser.try_parse_program();
             extension_uses = parser.take_extension_uses();
             stmts
@@ -199,6 +204,7 @@ impl Evaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::DEFAULT_MAX_DEPTH;
     use alloc::boxed::Box;
     use alloc::rc::Rc;
     use alloc::string::ToString;
@@ -228,6 +234,77 @@ mod tests {
         let out = out.0.borrow().clone();
         let err = err.0.borrow().clone();
         (summary, out, err)
+    }
+
+    #[test]
+    fn nesting_beyond_max_depth_is_an_error_not_an_overflow() {
+        let rep = |s: &str, n: usize| s.repeat(n);
+        let max = DEFAULT_MAX_DEPTH;
+        // Each statement nests 3 levels before its expression (statement, expression, operand)
+        // and a call nests 2 more, so these are the largest inputs within the limit.
+        let max_parens = max - 3;
+        let max_calls = max / 2 - 3;
+        let recursion = |n: usize| {
+            alloc::format!(
+                "define f(n) {{\nif (n == 0) return (0)\nreturn (f(n - 1))\n}}\nf({n})\n"
+            )
+        };
+        let cases = [
+            (
+                alloc::format!("{}1{}\n", rep("(", max_parens), rep(")", max_parens)),
+                "1\n",
+                "",
+            ),
+            (
+                alloc::format!(
+                    "{}1{}\n",
+                    rep("(", max_parens + 1),
+                    rep(")", max_parens + 1)
+                ),
+                "",
+                "(standard_in) 1: nesting too deep\n",
+            ),
+            // A left-associative chain grows the tree without recursion in the parser.
+            (
+                alloc::format!("1{}\n", rep("+1", max_parens)),
+                &alloc::format!("{}\n", max_parens + 1),
+                "",
+            ),
+            (
+                alloc::format!("1{}\n", rep("+1", max_parens + 1)),
+                "",
+                "(standard_in) 1: nesting too deep\n",
+            ),
+            (
+                alloc::format!("{}1{}\n", rep("{", max_parens), rep("}", max_parens)),
+                "1\n",
+                "",
+            ),
+            (
+                alloc::format!("{}1\n", rep("if (1) ", max_parens + 1)),
+                "",
+                "(standard_in) 1: nesting too deep\n",
+            ),
+            (recursion(max_calls), "0\n", ""),
+            (
+                recursion(max_calls + 1),
+                "",
+                "Runtime error (func=f): nesting too deep\n",
+            ),
+        ];
+        for (text, out, err) in &cases {
+            let (summary, actual_out, actual_err) = run(text);
+            assert_eq!(
+                (actual_out.as_str(), actual_err.as_str()),
+                (*out, *err),
+                "{text}"
+            );
+            assert_eq!(summary.errors, usize::from(!err.is_empty()));
+        }
+
+        // After an error the next unit starts at depth 0 again.
+        let (_, out, _) = run(&alloc::format!("{}\n2\n", recursion(max_calls + 1)));
+        assert_eq!(out, "2\n");
     }
 
     #[test]

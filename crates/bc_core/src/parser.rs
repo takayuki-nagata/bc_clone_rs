@@ -9,7 +9,7 @@ use crate::error::BcError;
 use crate::verified_kernels::{
     TOK_ASSIGN_OP, TOK_EXP_OP, TOK_MUL_OP, TOK_PLUS_MINUS, verified_is_bc_digit,
     verified_is_ident_continue, verified_lexer_advance_step, verified_lexer_peek_char_index,
-    verified_lexer_peek_token_index, verified_pratt_infix_info,
+    verified_lexer_peek_token_index, verified_nesting_within_limit, verified_pratt_infix_info,
 };
 use alloc::boxed::Box;
 use alloc::format;
@@ -690,7 +690,27 @@ pub struct Parser {
     extension_policy: ExtensionPolicy,
     /// Uses of extensions as `(line, description)`, recorded unless the policy is `Allow`.
     extension_uses: Vec<(usize, String)>,
+    /// Number of enclosing statements and expression levels being parsed.
+    depth: usize,
+    /// Line of the last consumed token.
+    last_line: usize,
+    /// Largest nesting depth of the syntax tree (`docs/COMPATIBILITY.md` §2).
+    max_depth: usize,
 }
+
+/// The height of an expression tree: 1 for a leaf. Statements and expressions are nested at
+/// most `max_depth` levels deep, which bounds the recursion of everything that walks the tree
+/// (parsing, evaluation, `Clone`, and `Drop`).
+type Height = usize;
+
+/// Diagnostic for input nested deeper than the limit (`docs/COMPATIBILITY.md` §3.2).
+pub const NESTING_TOO_DEEP: &str = "nesting too deep";
+
+/// Default nesting limit for parsing and evaluation (`docs/COMPATIBILITY.md` §2). One level
+/// takes at most about 1.9 KB of stack in an x86-64 release build and 800 bytes on RV32, so the
+/// default suits a stack of 256 KiB or more. Front ends set `Evaluator::max_depth` for their own
+/// stack.
+pub const DEFAULT_MAX_DEPTH: usize = 128;
 
 impl Parser {
     /// Creates a new Parser from the Lexer, returning Err on initial lexical error.
@@ -703,7 +723,43 @@ impl Parser {
             in_function: false,
             extension_policy: ExtensionPolicy::Allow,
             extension_uses: Vec::new(),
+            depth: 0,
+            last_line: 1,
+            max_depth: DEFAULT_MAX_DEPTH,
         })
+    }
+
+    /// Sets the nesting limit (see [`DEFAULT_MAX_DEPTH`]).
+    pub fn set_max_depth(&mut self, max_depth: usize) {
+        self.max_depth = max_depth;
+    }
+
+    /// Reports input nested deeper than `max_depth`, on the line of the last consumed token
+    /// (the limit is often detected when the current token is already the next line's).
+    fn too_deep<T>(&self) -> Result<T, BcError> {
+        Err(BcError::Syntax {
+            line: self.last_line,
+            message: String::from(NESTING_TOO_DEEP),
+            detail: String::from(NESTING_TOO_DEEP),
+        })
+    }
+
+    /// Enters one level of nesting. The caller decrements `depth` when it leaves the level.
+    fn enter_nesting(&mut self) -> Result<(), BcError> {
+        if !verified_nesting_within_limit(self.depth, 1, self.max_depth) {
+            return self.too_deep();
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    /// Checks that a subtree of height `height` below the current level is within the limit.
+    fn check_height(&self, height: Height) -> Result<Height, BcError> {
+        if verified_nesting_within_limit(self.depth, height, self.max_depth) {
+            Ok(height)
+        } else {
+            self.too_deep()
+        }
     }
 
     /// Creates a new Parser from the Lexer.
@@ -771,6 +827,7 @@ impl Parser {
     /// Consumes a token of the expected type, otherwise raises error.
     fn eat(&mut self, token_type: TokenType) -> Result<(), BcError> {
         if self.current_token.token_type == token_type {
+            self.last_line = self.current_token.line;
             self.current_token = self.lexer.try_get_next_token()?;
             Ok(())
         } else {
@@ -890,7 +947,15 @@ impl Parser {
     }
 
     /// Parses a statement.
+    /// Parses one statement as one level of nesting (see [`Height`]).
     fn parse_statement(&mut self) -> Result<Stmt, BcError> {
+        self.enter_nesting()?;
+        let result = self.parse_statement_inner();
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_statement_inner(&mut self) -> Result<Stmt, BcError> {
         let t = self.current_token.token_type;
         match t {
             TokenType::String => {
@@ -1082,11 +1147,12 @@ impl Parser {
 
     /// Parses expressions, including relational ones.
     fn parse_relational_expression(&mut self) -> Result<Expr, BcError> {
-        let left = self.parse_expression()?;
+        let (left, left_h) = self.parse_expression_h()?;
         if self.current_token.token_type == TokenType::RelOp {
             let op = self.current_token.value.clone();
             self.eat(TokenType::RelOp)?;
-            let right = self.parse_expression()?;
+            let (right, right_h) = self.parse_expression_h()?;
+            self.check_height(1 + left_h.max(right_h))?;
             Ok(Expr::RelationalOp(op, Box::new(left), Box::new(right)))
         } else {
             Ok(left)
@@ -1095,12 +1161,26 @@ impl Parser {
 
     /// Parses arithmetic expressions.
     fn parse_expression(&mut self) -> Result<Expr, BcError> {
+        Ok(self.parse_expression_h()?.0)
+    }
+
+    /// Parses an arithmetic expression and returns it with its height (see [`Height`]).
+    fn parse_expression_h(&mut self) -> Result<(Expr, Height), BcError> {
         self.parse_expr_precedence(0)
     }
 
-    /// Implements Precedence Climbing algorithm.
-    fn parse_expr_precedence(&mut self, min_prec: i8) -> Result<Expr, BcError> {
-        let mut left = self.parse_prefix()?;
+    /// Implements Precedence Climbing algorithm. Each call is one level of nesting: it is
+    /// counted on entry, so deeply nested input is rejected before its tree is built, and the
+    /// height of the result is checked against `max_depth` (`docs/COMPATIBILITY.md` §2).
+    fn parse_expr_precedence(&mut self, min_prec: i8) -> Result<(Expr, Height), BcError> {
+        self.enter_nesting()?;
+        let result = self.parse_expr_precedence_inner(min_prec);
+        self.depth -= 1;
+        result
+    }
+
+    fn parse_expr_precedence_inner(&mut self, min_prec: i8) -> Result<(Expr, Height), BcError> {
+        let (mut left, mut height) = self.parse_prefix()?;
         loop {
             let (op_prec, op_class, next_min_prec) = self.get_infix_info(&self.current_token);
             if op_prec < min_prec {
@@ -1116,10 +1196,12 @@ impl Parser {
             let op_val = self.current_token.value.clone();
             self.eat(self.current_token.token_type)?;
 
-            let right = self.parse_expr_precedence(next_min_prec)?;
+            let (right, right_height) = self.parse_expr_precedence(next_min_prec)?;
+            // A left-associative chain grows without recursion, so its height is checked here.
+            height = self.check_height(1 + height.max(right_height))?;
             left = Expr::BinaryOp(op_val, Box::new(left), Box::new(right));
         }
-        Ok(left)
+        Ok((left, self.check_height(height)?))
     }
 
     /// Retrieves precedence info for binary and assignment operators.
@@ -1136,72 +1218,72 @@ impl Parser {
     }
 
     /// Parses prefixes (unary operators).
-    fn parse_prefix(&mut self) -> Result<Expr, BcError> {
+    fn parse_prefix(&mut self) -> Result<(Expr, Height), BcError> {
         let t = self.current_token.token_type;
         if t == TokenType::Minus {
             self.eat(TokenType::Minus)?;
-            let expr = self.parse_expr_precedence(5)?;
-            Ok(Expr::UnaryOp('-', Box::new(expr)))
+            let (expr, h) = self.parse_expr_precedence(5)?;
+            Ok((Expr::UnaryOp('-', Box::new(expr)), h + 1))
         } else if t == TokenType::IncrDecr {
             let op = self.current_token.value.clone();
             self.eat(TokenType::IncrDecr)?;
-            let target = self.parse_named_expression()?;
-            Ok(Expr::UpdateOp(op, true, Box::new(target)))
+            let (target, h) = self.parse_named_expression()?;
+            Ok((Expr::UpdateOp(op, true, Box::new(target)), h + 1))
         } else {
             self.parse_primary()
         }
     }
 
+    /// Parses `( expression )` after the keyword or name that precedes it.
+    fn parse_parenthesized(&mut self) -> Result<(Expr, Height), BcError> {
+        self.eat(TokenType::Lparen)?;
+        let inner = self.parse_expression_h()?;
+        self.eat(TokenType::Rparen)?;
+        Ok(inner)
+    }
+
     /// Parses primary expressions (literals, variables, built-ins, calls).
-    fn parse_primary(&mut self) -> Result<Expr, BcError> {
+    fn parse_primary(&mut self) -> Result<(Expr, Height), BcError> {
         let t = self.current_token.token_type;
         match t {
             TokenType::Number => {
                 let val = self.current_token.value.clone();
                 self.eat(TokenType::Number)?;
-                Ok(Expr::Number(val))
+                Ok((Expr::Number(val), 1))
             }
             TokenType::Lparen => {
-                self.eat(TokenType::Lparen)?;
-                let expr = self.parse_expression()?;
-                self.eat(TokenType::Rparen)?;
-                Ok(Expr::Paren(Box::new(expr)))
+                let (expr, h) = self.parse_parenthesized()?;
+                Ok((Expr::Paren(Box::new(expr)), h + 1))
             }
             TokenType::Length => {
                 self.eat(TokenType::Length)?;
-                self.eat(TokenType::Lparen)?;
-                let expr = self.parse_expression()?;
-                self.eat(TokenType::Rparen)?;
-                Ok(Expr::LengthCall(Box::new(expr)))
+                let (expr, h) = self.parse_parenthesized()?;
+                Ok((Expr::LengthCall(Box::new(expr)), h + 1))
             }
             TokenType::Sqrt => {
                 self.eat(TokenType::Sqrt)?;
-                self.eat(TokenType::Lparen)?;
-                let expr = self.parse_expression()?;
-                self.eat(TokenType::Rparen)?;
-                Ok(Expr::SqrtCall(Box::new(expr)))
+                let (expr, h) = self.parse_parenthesized()?;
+                Ok((Expr::SqrtCall(Box::new(expr)), h + 1))
             }
             TokenType::Scale if self.peek_token_type(0)? == TokenType::Lparen => {
                 self.eat(TokenType::Scale)?;
-                self.eat(TokenType::Lparen)?;
-                let expr = self.parse_expression()?;
-                self.eat(TokenType::Rparen)?;
-                Ok(Expr::ScaleCall(Box::new(expr)))
+                let (expr, h) = self.parse_parenthesized()?;
+                Ok((Expr::ScaleCall(Box::new(expr)), h + 1))
             }
             TokenType::Letter if self.peek_token_type(0)? == TokenType::Lparen => {
                 let name = self.eat_name()?;
                 self.eat(TokenType::Lparen)?;
-                let args = self.parse_opt_argument_list()?;
+                let (args, h) = self.parse_opt_argument_list()?;
                 self.eat(TokenType::Rparen)?;
-                Ok(Expr::Call(name, args))
+                Ok((Expr::Call(name, args), h + 1))
             }
             _ => {
-                let target = self.parse_named_expression()?;
+                let (target, target_h) = self.parse_named_expression()?;
                 match self.current_token.token_type {
                     TokenType::IncrDecr => {
                         let op = self.current_token.value.clone();
                         self.eat(TokenType::IncrDecr)?;
-                        Ok(Expr::UpdateOp(op, false, Box::new(target)))
+                        Ok((Expr::UpdateOp(op, false, Box::new(target)), target_h + 1))
                     }
                     // As in GNU bc's grammar, an assignment operator binds to the named
                     // expression right before it: `a + b = 3` is `a + (b = 3)` and `-a = 5`
@@ -1210,40 +1292,43 @@ impl Parser {
                         let op = self.current_token.value.clone();
                         self.eat(TokenType::AssignOp)?;
                         let (_, _, rhs_min_prec) = verified_pratt_infix_info(TOK_ASSIGN_OP);
-                        let value = self.parse_expr_precedence(rhs_min_prec)?;
-                        Ok(Expr::AssignOp(op, Box::new(target), Box::new(value)))
+                        let (value, value_h) = self.parse_expr_precedence(rhs_min_prec)?;
+                        Ok((
+                            Expr::AssignOp(op, Box::new(target), Box::new(value)),
+                            1 + target_h.max(value_h),
+                        ))
                     }
-                    _ => Ok(target),
+                    _ => Ok((target, target_h)),
                 }
             }
         }
     }
 
     /// Parses variables, arrays, or register accesses.
-    fn parse_named_expression(&mut self) -> Result<Expr, BcError> {
+    fn parse_named_expression(&mut self) -> Result<(Expr, Height), BcError> {
         let t = self.current_token.token_type;
         match t {
             TokenType::Scale => {
                 self.eat(TokenType::Scale)?;
-                Ok(Expr::RegisterAccess(Register::Scale))
+                Ok((Expr::RegisterAccess(Register::Scale), 1))
             }
             TokenType::Ibase => {
                 self.eat(TokenType::Ibase)?;
-                Ok(Expr::RegisterAccess(Register::Ibase))
+                Ok((Expr::RegisterAccess(Register::Ibase), 1))
             }
             TokenType::Obase => {
                 self.eat(TokenType::Obase)?;
-                Ok(Expr::RegisterAccess(Register::Obase))
+                Ok((Expr::RegisterAccess(Register::Obase), 1))
             }
             TokenType::Letter => {
                 let name = self.eat_name()?;
                 if self.current_token.token_type == TokenType::Lbracket {
                     self.eat(TokenType::Lbracket)?;
-                    let idx = self.parse_expression()?;
+                    let (idx, h) = self.parse_expression_h()?;
                     self.eat(TokenType::Rbracket)?;
-                    Ok(Expr::ArrayAccess(name, Box::new(idx)))
+                    Ok((Expr::ArrayAccess(name, Box::new(idx)), h + 1))
                 } else {
-                    Ok(Expr::Variable(name))
+                    Ok((Expr::Variable(name), 1))
                 }
             }
             _ => self.error(&format!("expected named expression, got {:?}", t)),
@@ -1251,17 +1336,18 @@ impl Parser {
     }
 
     /// Parses optional function call argument list.
-    fn parse_opt_argument_list(&mut self) -> Result<Vec<ExprOrArray>, BcError> {
+    fn parse_opt_argument_list(&mut self) -> Result<(Vec<ExprOrArray>, Height), BcError> {
         if self.current_token.token_type == TokenType::Rparen {
-            Ok(Vec::new())
+            Ok((Vec::new(), 0))
         } else {
             self.parse_argument_list()
         }
     }
 
-    /// Parses function call argument list.
-    fn parse_argument_list(&mut self) -> Result<Vec<ExprOrArray>, BcError> {
+    /// Parses function call argument list; the height is that of the highest argument.
+    fn parse_argument_list(&mut self) -> Result<(Vec<ExprOrArray>, Height), BcError> {
         let mut args = Vec::new();
+        let mut height = 0;
         loop {
             if self.current_token.token_type == TokenType::Letter
                 && self.peek_token_type(0)? == TokenType::Lbracket
@@ -1271,8 +1357,11 @@ impl Parser {
                 self.eat(TokenType::Lbracket)?;
                 self.eat(TokenType::Rbracket)?;
                 args.push(ExprOrArray::ArrayArg(name));
+                height = height.max(1);
             } else {
-                args.push(ExprOrArray::Expr(self.parse_expression()?));
+                let (arg, h) = self.parse_expression_h()?;
+                args.push(ExprOrArray::Expr(arg));
+                height = height.max(h);
             }
 
             if self.current_token.token_type == TokenType::Comma {
@@ -1281,7 +1370,7 @@ impl Parser {
                 break;
             }
         }
-        Ok(args)
+        Ok((args, height))
     }
 }
 

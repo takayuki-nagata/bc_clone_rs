@@ -110,6 +110,11 @@ results are *not* exact at the requested scale.
   diagnostics are written in the format of `docs/COMPATIBILITY.md` §3.2. Every front end (CLI,
   C API, Zephyr, QEMU, ESP32-C3, Wasm) uses this driver, so error recovery is identical on all
   targets.
+- Recursion is bounded: `Evaluator::max_depth` limits the depth of the syntax tree (checked while
+  parsing, so evaluation, `Clone`, and `Drop` of the tree stay within it) and the number of
+  nested `try_evaluate`/`try_execute` calls, including across function calls. Each front end
+  sets it for the stack it runs on; `bc_cli` runs the engine on a 512 MiB-stack thread. When
+  you add a recursive walk over the AST, it must stay within the same bound.
 - `bc_cli` additionally wraps each unit in `catch_unwind`. A panic there is a bug in `bc_core`; it
   is reported as `bc_clone: internal error: …` and counted as a failed unit.
 
@@ -166,6 +171,10 @@ The gaps listed above are tracked work for v0.4.0. Do not describe any layer as 
   staticlib through CMake. It is tested on `qemu_riscv32`; `stamp_c3` is the hardware target.
   `scripts/setup_zephyr_workspace.sh` pins Zephyr v3.7.2 and SDK 0.16.8 for CI and releases.
   `CONFIG_BC_QEMU_REPL=y` starts the REPL on QEMU instead of exiting after the self-tests.
+  The 96 KiB main stack (`prj.conf`) is sized for `bc_zephyr::ZEPHYR_MAX_DEPTH`; the self-tests
+  run at the nesting limit, so a larger per-level stack use shows up as a test failure there:
+  on QEMU, `CONFIG_HW_STACK_PROTECTION` turns an overflow into a fatal error, and `main.c`'s
+  fatal-error handler exits QEMU with a failure status.
 - **C API**: `bc_c_api` embeds a 64 KiB LLFF heap on `no_std` targets. Status codes are defined in
   `include/bc_core.h`.
 - **ESP32-C3** (`examples/m5stamp_c3`): built in CI by `scripts/build_m5stamp_c3.sh`. Flashing

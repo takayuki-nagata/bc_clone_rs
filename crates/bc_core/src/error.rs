@@ -24,6 +24,8 @@ pub enum RuntimeError {
     /// A math library argument whose result cannot be computed: `e(x)` with an integer part
     /// above `EXP_ARG_MAX`, or `j(n,x)` with an order outside `i64` that is not provably 0.
     MathArgumentTooLarge,
+    /// More nested evaluation (mostly recursion) than the evaluator's `max_depth` allows.
+    NestingTooDeep,
 }
 
 impl fmt::Display for RuntimeError {
@@ -44,6 +46,7 @@ impl fmt::Display for RuntimeError {
             Self::ExponentTooLarge => f.write_str("exponent too large in raise"),
             Self::ScaleTooLarge => f.write_str("scale too large"),
             Self::MathArgumentTooLarge => f.write_str("argument too large"),
+            Self::NestingTooDeep => f.write_str("nesting too deep"),
         }
     }
 }

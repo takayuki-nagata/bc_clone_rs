@@ -32,6 +32,24 @@ void zephyr_msleep(uint32_t ms)
     k_msleep(ms);
 }
 
+#if defined(CONFIG_BOARD_QEMU_RISCV32) && !defined(CONFIG_BC_QEMU_REPL)
+#include <zephyr/fatal.h>
+
+/*
+ * A fatal error (for example a stack overflow caught by CONFIG_HW_STACK_PROTECTION) ends the
+ * self-test run: exit QEMU with a failure status through the SiFive test device instead of
+ * halting, so that CI fails at once rather than hanging.
+ */
+void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
+{
+    ARG_UNUSED(esf);
+    printk("FATAL ERROR %u: bc_core self-tests aborted\n", reason);
+    *(volatile uint32_t *)0x100000 = 0x3333;
+    for (;;) {
+    }
+}
+#endif
+
 // Rust application entry point
 extern void zephyr_rust_main(bool is_qemu);
 

@@ -54,6 +54,10 @@ impl BcWriter for SharedBuffer {
     }
 }
 
+/// Nesting limit (`docs/COMPATIBILITY.md` §2). One level takes at most about 800 bytes of stack
+/// on RV32 (measured), and the stack is the rest of the 16 MiB RAM after the 2 MiB heap.
+const QEMU_MAX_DEPTH: usize = 1000;
+
 /// Evaluates a bc program string on baremetal RISC-V and returns the captured output string.
 fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> String {
     let out_buf = SharedBuffer::default();
@@ -64,6 +68,7 @@ fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> Strin
         Box::new(out_buf.clone()),
     );
     evaluator.set_scale(default_scale);
+    evaluator.max_depth = QEMU_MAX_DEPTH;
 
     evaluator.run_source(code, STDIN_SOURCE);
 
@@ -168,7 +173,37 @@ fn main() -> ! {
         ),
     ];
 
-    for (name, code, math_enabled, scale, expected) in test_cases {
+    // QEMU_MAX_DEPTH levels of nesting must run without overflowing the stack; one more is an
+    // error. A call nests 2 levels, a parenthesis or block 1 (plus 3 for the statement).
+    let recursion = |n: usize| {
+        alloc::format!(
+            "define f(n) {{\n  if (n == 0) return (0)\n  return (f(n - 1))\n}}\nf({n})\n"
+        )
+    };
+    let parens = |n: usize| alloc::format!("{}1{}\n", "(".repeat(n), ")".repeat(n));
+    let blocks = |n: usize| alloc::format!("{}1{}\n", "{".repeat(n), "}".repeat(n));
+    let max_calls = QEMU_MAX_DEPTH / 2 - 3;
+    let max_parens = QEMU_MAX_DEPTH - 3;
+    let deep_cases = [
+        ("Nesting Limit: Recursion", recursion(max_calls), "0"),
+        (
+            "Nesting Limit: Recursion Too Deep",
+            recursion(max_calls + 1),
+            "Runtime error (func=f): nesting too deep",
+        ),
+        ("Nesting Limit: Parentheses", parens(max_parens), "1"),
+        (
+            "Nesting Limit: Parentheses Too Deep",
+            parens(max_parens + 1),
+            "(standard_in) 1: nesting too deep",
+        ),
+        ("Nesting Limit: Blocks", blocks(max_parens), "1"),
+    ];
+    let deep_cases = deep_cases
+        .iter()
+        .map(|(name, code, expected)| (*name, code.as_str(), false, 0, *expected));
+
+    for (name, code, math_enabled, scale, expected) in test_cases.into_iter().chain(deep_cases) {
         let _ = write!(uart, "  Running: {:<35} ... ", name);
 
         let actual = eval_bc_string(code, math_enabled, scale);

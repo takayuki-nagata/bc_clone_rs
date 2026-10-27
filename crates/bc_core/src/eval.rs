@@ -17,11 +17,14 @@ use num_traits::{Signed, ToPrimitive};
 
 use crate::error::{BcError, RuntimeError};
 use crate::math::{BCNum, pow10};
-use crate::parser::{Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Param, Register, Stmt};
+use crate::parser::{
+    DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Param, Register, Stmt,
+};
 use crate::verified_kernels::{
     BC_BASE_MAX, BC_DIM_MAX, BC_SCALE_MAX, IBASE_MAX, verified_clamp_register,
-    verified_hex_char_val, verified_loop_post_body_action, verified_relational_scale_shifts,
-    verified_should_abort_execution, verified_wrapped_stdout_step,
+    verified_hex_char_val, verified_loop_post_body_action, verified_nesting_within_limit,
+    verified_relational_scale_shifts, verified_should_abort_execution,
+    verified_wrapped_stdout_step,
 };
 
 /// Abstract output writer trait compatible with both no_std and std environments.
@@ -95,6 +98,14 @@ pub struct Evaluator {
 
     /// Names of the user functions currently executing, innermost last (for diagnostics).
     call_stack: Vec<String>,
+
+    /// Nesting limit: the syntax tree of an input unit is at most this deep, and at most this
+    /// many expressions and statements (across function calls) are evaluated at once. It bounds
+    /// the native stack that parsing and evaluation use (`docs/COMPATIBILITY.md` §2), so a
+    /// front end sets it for the stack it runs on.
+    pub max_depth: usize,
+    /// Expressions and statements currently being evaluated.
+    pub(crate) eval_depth: usize,
 }
 
 /// An assignment target whose array subscript has already been evaluated.
@@ -162,6 +173,8 @@ impl Evaluator {
             quit_flag: false,
             extension_policy: ExtensionPolicy::Allow,
             call_stack: Vec::new(),
+            max_depth: DEFAULT_MAX_DEPTH,
+            eval_depth: 0,
         }
     }
 
@@ -352,6 +365,23 @@ impl Evaluator {
 
     /// Evaluates an AST expression node, returning Err on runtime math/call errors.
     pub fn try_evaluate(&mut self, node: &Expr) -> Result<BCNum, BcError> {
+        self.enter_eval()?;
+        let result = self.evaluate_node(node);
+        self.eval_depth -= 1;
+        result
+    }
+
+    /// Counts one more level of evaluation, failing with `NestingTooDeep` beyond `max_depth`.
+    /// Every caller decrements `eval_depth` when the level is left; `bc_core` does not unwind.
+    fn enter_eval(&mut self) -> Result<(), BcError> {
+        if !verified_nesting_within_limit(self.eval_depth, 1, self.max_depth) {
+            return Err(RuntimeError::NestingTooDeep.into());
+        }
+        self.eval_depth += 1;
+        Ok(())
+    }
+
+    fn evaluate_node(&mut self, node: &Expr) -> Result<BCNum, BcError> {
         match node {
             Expr::Number(value) => self.literal(value),
             Expr::Variable(name) => Ok(self.variable_top(name.clone()).clone()),
@@ -593,6 +623,13 @@ impl Evaluator {
 
     /// Executes an AST statement node, returning Err on runtime errors.
     pub fn try_execute(&mut self, node: &Stmt) -> Result<(), BcError> {
+        self.enter_eval()?;
+        let result = self.execute_node(node);
+        self.eval_depth -= 1;
+        result
+    }
+
+    fn execute_node(&mut self, node: &Stmt) -> Result<(), BcError> {
         if verified_should_abort_execution(self.break_flag, self.return_flag, self.quit_flag) {
             return Ok(());
         }

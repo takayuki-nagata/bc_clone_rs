@@ -144,6 +144,21 @@ void bc_session_reset(bc_session_t *session, bool math_enabled);
  */
 bc_status_t bc_session_set_extension_policy(bc_session_t *session, unsigned int policy);
 
+/** Default nesting limit of a session (see bc_session_set_max_depth). */
+#define BC_DEFAULT_MAX_DEPTH 128
+
+/**
+ * Sets how deeply statements, expressions, and function calls may nest in a session
+ * (see docs/COMPATIBILITY.md, section 2). Deeper input fails with "nesting too deep" instead of
+ * overflowing the stack. One level takes up to about 2 KB of stack; the default,
+ * BC_DEFAULT_MAX_DEPTH, suits a 256 KiB stack. The limit is kept by bc_session_reset.
+ *
+ * @param session Pointer to active bc session.
+ * @param max_depth Nesting limit, at least 1.
+ * @return BC_STATUS_OK, BC_STATUS_ERR_NULL_PTR, or BC_STATUS_ERR_EXECUTION for 0.
+ */
+bc_status_t bc_session_set_max_depth(bc_session_t *session, size_t max_depth);
+
 /**
  * Destroys a bc session and frees associated memory.
  *

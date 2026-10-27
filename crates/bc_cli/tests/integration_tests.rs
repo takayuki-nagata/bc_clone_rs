@@ -903,3 +903,52 @@ fn test_math_library_extreme_arguments() {
         assert_eq!(code, i32::from(!err.is_empty()), "{expr}");
     }
 }
+
+/// Deep nesting and deep recursion run on the CLI's large engine stack, and input beyond the
+/// nesting limit is an error rather than a stack overflow (`docs/COMPATIBILITY.md` §2). The
+/// sizes are within the limit of debug builds too.
+#[test]
+fn test_deep_nesting_and_recursion() {
+    let bin = env!("CARGO_BIN_EXE_bc_clone");
+    let recursion = |n: usize| {
+        format!("define f(n) {{\nif (n == 0) return (0)\nreturn (f(n - 1))\n}}\nf({n})\n")
+    };
+    let cases = [
+        (recursion(5_000), "0\n".to_string(), ""),
+        (
+            recursion(1_000_000),
+            String::new(),
+            "Runtime error (func=f): nesting too deep\n",
+        ),
+        (
+            format!("1{}\n", "+1".repeat(15_000)),
+            "15001\n".to_string(),
+            "",
+        ),
+        (
+            format!("{}1{}\n", "(".repeat(15_000), ")".repeat(15_000)),
+            "1\n".to_string(),
+            "",
+        ),
+        (
+            format!("1{}\n", "+1".repeat(300_000)),
+            String::new(),
+            "(standard_in) 1: nesting too deep\n",
+        ),
+        (
+            format!("{}1{}\n", "{".repeat(300_000), "}".repeat(300_000)),
+            String::new(),
+            "(standard_in) 1: nesting too deep\n",
+        ),
+    ];
+    for (input, out, err) in &cases {
+        let (code, stdout, stderr) = run_command(bin, &[], input);
+        let label = &input[..input.len().min(40)];
+        assert_eq!(
+            (stdout.as_str(), stderr.as_str()),
+            (out.as_str(), *err),
+            "{label}"
+        );
+        assert_eq!(code, i32::from(!err.is_empty()), "{label}");
+    }
+}

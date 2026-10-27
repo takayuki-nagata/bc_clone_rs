@@ -353,3 +353,17 @@ fn proof_multi_step_wrapped_stdout_and_lexer_cursor() {
     assert_eq!(pos, 8);
     assert!((1..=9).contains(&line));
 }
+
+/// `verified_nesting_within_limit` decides `depth + height <= max_depth` without overflowing,
+/// for all `usize` inputs.
+#[kani::proof]
+fn proof_verified_nesting_within_limit() {
+    let depth: usize = kani::any();
+    let height: usize = kani::any();
+    let max_depth: usize = kani::any();
+    let expected = (depth as u128) + (height as u128) <= (max_depth as u128);
+    assert_eq!(
+        verified_nesting_within_limit(depth, height, max_depth),
+        expected
+    );
+}

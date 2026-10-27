@@ -133,6 +133,12 @@ impl BcWriter for SharedBuffer {
 }
 
 /// Test case specification.
+/// Nesting limit of the Zephyr evaluators (`docs/COMPATIBILITY.md` §2). One level takes at most
+/// about 800 bytes of stack on RV32 (measured on QEMU), so 80 levels plus the evaluator's base
+/// usage (about 68 KB in all) stay within the 96 KiB main stack set in
+/// `examples/zephyr_app/prj.conf`, which still fits the ESP32-C3's DRAM.
+pub const ZEPHYR_MAX_DEPTH: usize = 80;
+
 pub struct TestCase {
     pub name: &'static str,
     pub code: &'static str,
@@ -220,6 +226,44 @@ pub const TEST_CASES: &[TestCase] = &[
         scale: 0,
         expected: "Runtime warning (func=(main)): scale too large, set to 1000000000\n1000000000",
     },
+    TestCase {
+        // ZEPHYR_MAX_DEPTH levels of nesting must fit the main stack (prj.conf); one more is
+        // an error, not a stack overflow. A call nests 2 levels, a parenthesis or block 1, and
+        // the statement 3.
+        name: "Nesting Limit: Recursion",
+        code: "define f(n) {\n  if (n == 0) return (0)\n  return (f(n - 1))\n}\nf(37)\n",
+        math_enabled: false,
+        scale: 0,
+        expected: "0",
+    },
+    TestCase {
+        name: "Nesting Limit: Recursion Too Deep",
+        code: "define f(n) {\n  if (n == 0) return (0)\n  return (f(n - 1))\n}\nf(38)\n",
+        math_enabled: false,
+        scale: 0,
+        expected: "Runtime error (func=f): nesting too deep",
+    },
+    TestCase {
+        name: "Nesting Limit: Parentheses",
+        code: "(((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))\n",
+        math_enabled: false,
+        scale: 0,
+        expected: "1",
+    },
+    TestCase {
+        name: "Nesting Limit: Parentheses Too Deep",
+        code: "((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))\n",
+        math_enabled: false,
+        scale: 0,
+        expected: "(standard_in) 1: nesting too deep",
+    },
+    TestCase {
+        name: "Nesting Limit: Blocks",
+        code: "{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{{1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}\n",
+        math_enabled: false,
+        scale: 0,
+        expected: "1",
+    },
 ];
 
 /// Evaluates `code` on `ev` without panicking, writing diagnostics to `ev.stderr_writer`.
@@ -239,6 +283,7 @@ pub fn run_single_test(tc: &TestCase) -> bool {
         Box::new(out_buf.clone()),
     );
     ev.set_scale(tc.scale);
+    ev.max_depth = ZEPHYR_MAX_DEPTH;
 
     eval_bc_non_panicking(tc.code, &mut ev);
 
@@ -273,6 +318,7 @@ pub fn run_test_suite(cases: &[TestCase]) -> bool {
         Box::new(ZephyrConsoleWriter),
         Box::new(ZephyrConsoleWriter),
     );
+    ev_cb.max_depth = ZEPHYR_MAX_DEPTH;
     eval_bc_non_panicking("2^16\n", &mut ev_cb);
 
     zephyr_println!("-------------------------------------------------");
@@ -312,6 +358,7 @@ pub fn run_repl_with<G, P, S, W>(
     let out_buf = SharedBuffer::default();
     let err_buf = SharedBuffer::default();
     let mut evaluator = Evaluator::new(true, Box::new(out_buf.clone()), Box::new(err_buf.clone()));
+    evaluator.max_depth = ZEPHYR_MAX_DEPTH;
     let mut line_buf = String::new();
     let mut acc = UnitAccumulator::new();
     let mut steps = 0;

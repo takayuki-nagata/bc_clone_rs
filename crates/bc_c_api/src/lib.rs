@@ -417,11 +417,37 @@ pub unsafe extern "C" fn bc_session_reset(session: *mut BcSession, math_enabled:
     let sess = unsafe { &mut *session };
     sess.out_shared.0.borrow_mut().clear();
     sess.err_shared.0.borrow_mut().clear();
+    // The nesting limit describes the caller's stack, not language state: keep it.
+    let max_depth = sess.evaluator.max_depth;
     sess.evaluator = Evaluator::new(
         math_enabled,
         Box::new(sess.out_shared.clone()),
         Box::new(sess.err_shared.clone()),
     );
+    sess.evaluator.max_depth = max_depth;
+}
+
+/// Sets a session's nesting limit (`docs/COMPATIBILITY.md` §2): how deeply statements,
+/// expressions, and function calls may nest. Deeper input is the error `nesting too deep`
+/// instead of a stack overflow. The default, `BC_DEFAULT_MAX_DEPTH` (128), suits a 256 KiB stack;
+/// one level takes up to about 2 KB of stack. It is kept by `bc_session_reset`.
+/// Returns `BcStatus::ErrExecution` for 0.
+///
+/// # Safety
+/// - `session` must be a valid pointer obtained from `bc_session_create` or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bc_session_set_max_depth(
+    session: *mut BcSession,
+    max_depth: usize,
+) -> BcStatus {
+    if session.is_null() {
+        return BcStatus::ErrNullPtr;
+    }
+    if max_depth == 0 {
+        return BcStatus::ErrExecution;
+    }
+    unsafe { &mut *session }.evaluator.max_depth = max_depth;
+    BcStatus::Ok
 }
 
 /// Sets how a session treats non-POSIX syntax (`docs/COMPATIBILITY.md` §4):
@@ -635,6 +661,55 @@ mod tests {
         unsafe { bc_session_destroy(session) };
         unsafe { bc_session_destroy(core::ptr::null_mut()) }; // Null safety
         unsafe { bc_session_reset(core::ptr::null_mut(), false) }; // Null safety
+    }
+
+    #[test]
+    fn test_bc_session_max_depth() {
+        let session = unsafe { bc_session_create(false) };
+        let mut buf = [0 as c_char; 256];
+        let read =
+            |buf: &[c_char]| unsafe { CStr::from_ptr(buf.as_ptr()).to_str().unwrap() }.to_string();
+        let deep = CString::new("((((((((1))))))))\n").unwrap();
+
+        // The default limit allows it; a limit of 4 rejects it as a syntax error.
+        assert_eq!(
+            unsafe { bc_session_eval(session, deep.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+            BcStatus::Ok
+        );
+        assert_eq!(read(&buf), "1\n");
+        assert_eq!(
+            unsafe { bc_session_set_max_depth(session, 4) },
+            BcStatus::Ok
+        );
+        assert_eq!(
+            unsafe { bc_session_eval(session, deep.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+            BcStatus::ErrExecution
+        );
+        assert_eq!(read(&buf), "(standard_in) 1: nesting too deep\n");
+
+        // The limit survives a reset; invalid arguments are rejected.
+        unsafe { bc_session_reset(session, false) };
+        assert_eq!(
+            unsafe { bc_session_eval(session, deep.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+            BcStatus::ErrExecution
+        );
+        assert_eq!(
+            unsafe { bc_session_set_max_depth(session, 0) },
+            BcStatus::ErrExecution
+        );
+        assert_eq!(
+            unsafe { bc_session_set_max_depth(core::ptr::null_mut(), 8) },
+            BcStatus::ErrNullPtr
+        );
+        unsafe { bc_session_destroy(session) };
+
+        // The header's BC_DEFAULT_MAX_DEPTH is the library default.
+        let header = include_str!("../include/bc_core.h");
+        let expected = format!(
+            "#define BC_DEFAULT_MAX_DEPTH {}\n",
+            bc_core::DEFAULT_MAX_DEPTH
+        );
+        assert!(header.contains(&expected));
     }
 
     #[test]
