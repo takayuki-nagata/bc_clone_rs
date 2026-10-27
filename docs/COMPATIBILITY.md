@@ -120,6 +120,11 @@ process may abort, as GNU `bc` does.
   diagnostic and then `7`.
 - **Syntax errors**: a diagnostic, then processing continues with the next input unit.
 - Dynamic scopes (parameters and `auto`) are restored when an error unwinds out of a function.
+- **Input that is not valid UTF-8**: POSIX requires the input files to be text files, so other
+  input is undefined. The CLI decodes each file and standard input as UTF-8 and replaces each
+  invalid sequence with U+FFFD. Outside a string, U+FFFD is an illegal character
+  (`illegal character: \357\277\275`) and processing continues with the next input unit. Inside
+  a string, it is printed as U+FFFD. GNU prints such bytes unchanged.
 - **Exit status**: 0 when all input was processed without any error. 1 when any syntax or runtime
   error occurred (processing still continues to the end), when an option is invalid, or when a file
   cannot be opened. Warnings do not change the exit status.

@@ -7,6 +7,10 @@
   `illegal character: ^@` and processing continues with the next unit. Other control characters
   are shown as `^X`, and DEL and non-ASCII characters as octal escapes (`\177`), as in GNU `bc`.
 - An unterminated string is reported at the line where it starts.
+- Input that is not valid UTF-8 is no longer discarded without a diagnostic. Invalid bytes are
+  reported as illegal characters and the rest of the input is processed, on standard input
+  (also interactively) and in files. A file that is not UTF-8 is no longer reported as
+  `cannot open file`.
 
 ## v0.4.0 — 2026-10-26
 

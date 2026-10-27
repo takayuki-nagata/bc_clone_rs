@@ -147,6 +147,12 @@ fn record(summary: &mut RunSummary, outcome: UnitOutcome) -> bool {
     }
 }
 
+/// Decodes input bytes as UTF-8. Invalid sequences become U+FFFD, which the lexer reports as an
+/// illegal character, so the rest of the input is still processed (`docs/COMPATIBILITY.md` §3.2).
+fn decode_input(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    String::from_utf8_lossy(bytes)
+}
+
 /// Processes a complete file or standard-input text, continuing after errors until its end
 /// or `quit` (`docs/COMPATIBILITY.md` §3.1).
 pub fn run_non_interactive_block(
@@ -187,11 +193,12 @@ pub fn run_interactive_loop<R: BufRead>(mut reader: R, evaluator: &mut Evaluator
             continue;
         }
 
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
+        let mut bytes = Vec::new();
+        match reader.read_until(b'\n', &mut bytes) {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
         }
+        let line = decode_input(&bytes);
         if CTRL_C_PRESSED.swap(false, Ordering::SeqCst) {
             acc.clear();
             continue;
@@ -261,8 +268,9 @@ where
 
     let mut errors = 0;
     for filename in &files {
-        match std::fs::read_to_string(filename) {
-            Ok(content) => {
+        match std::fs::read(filename) {
+            Ok(bytes) => {
+                let content = decode_input(&bytes);
                 let summary = run_non_interactive_block(&content, filename, &mut evaluator);
                 errors += summary.errors;
                 if summary.quit {
@@ -279,11 +287,16 @@ where
     let summary = if is_interactive {
         run_interactive_loop(stdin_reader, &mut evaluator)
     } else {
-        let mut content = String::new();
-        if stdin_reader.read_to_string(&mut content).is_err() {
+        let mut bytes = Vec::new();
+        if let Err(e) = stdin_reader.read_to_end(&mut bytes) {
+            let _ = writeln!(
+                evaluator.stderr_writer,
+                "bc: cannot read standard input: {}",
+                e
+            );
             return 1;
         }
-        run_non_interactive_block(&content, STDIN_SOURCE, &mut evaluator)
+        run_non_interactive_block(&decode_input(&bytes), STDIN_SOURCE, &mut evaluator)
     };
     i32::from(errors + summary.errors > 0)
 }
@@ -785,6 +798,65 @@ mod tests {
             false,
         );
         assert_eq!(res_err_read, 1);
+    }
+
+    #[test]
+    fn test_invalid_utf8_input_is_diagnosed_and_processing_continues() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        CTRL_C_PRESSED.store(false, Ordering::SeqCst);
+        let input: &[u8] = b"1\n\xff\n2\n";
+        let file =
+            std::env::temp_dir().join(format!("bc_clone_invalid_utf8_{}.bc", std::process::id()));
+        std::fs::write(&file, input).unwrap();
+        let file_name = file.to_string_lossy().into_owned();
+
+        let cases: [(Vec<String>, &[u8], bool, String); 3] = [
+            (
+                vec!["bc".to_string()],
+                input,
+                false,
+                "(standard_in)".to_string(),
+            ),
+            (
+                vec!["bc".to_string()],
+                input,
+                true,
+                "(standard_in)".to_string(),
+            ),
+            (
+                vec!["bc".to_string(), file_name.clone()],
+                b"",
+                false,
+                file_name.clone(),
+            ),
+        ];
+        for (args, stdin, interactive, source) in cases {
+            let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let status = run_app(
+                &args,
+                stdin,
+                TestWriter {
+                    buf: stdout_buf.clone(),
+                },
+                TestWriter {
+                    buf: stderr_buf.clone(),
+                },
+                interactive,
+            );
+            assert_eq!(status, 1);
+            let out = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
+            assert_eq!(out, "1\n2\n");
+            let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
+            // Under `cfg(test)`, `setup_ctrlc_handler` simulates one Ctrl-C, which the REPL
+            // acknowledges with a newline.
+            let ctrlc_echo = if interactive { "\n" } else { "" };
+            assert_eq!(
+                err,
+                format!("{ctrlc_echo}{source} 2: illegal character: \\357\\277\\275\n")
+            );
+        }
+        std::fs::remove_file(&file).unwrap();
     }
 
     #[test]
