@@ -69,6 +69,24 @@ pub struct Token {
     pub line: usize,
 }
 
+/// Formats a character for an `illegal character` diagnostic the way GNU bc does: control
+/// characters as `^X`, DEL and non-ASCII characters as octal escapes of their UTF-8 bytes.
+fn display_illegal_char(c: char) -> String {
+    let code = u32::from(c);
+    if code < 0x20 {
+        // `code + 0x40` is in 0x40..0x60, an ASCII character.
+        format!("^{}", char::from_u32(code + 0x40).unwrap_or('?'))
+    } else if code == 0x7f || !c.is_ascii() {
+        let mut buf = [0u8; 4];
+        c.encode_utf8(&mut buf)
+            .bytes()
+            .map(|b| format!("\\{:03o}", b))
+            .collect()
+    } else {
+        c.to_string()
+    }
+}
+
 /// An incremental lexical analyzer for the bc language.
 pub struct Lexer {
     text: Vec<char>,
@@ -97,15 +115,26 @@ impl Lexer {
     fn illegal_character<T>(&self, c: char) -> Result<T, BcError> {
         Err(BcError::Syntax {
             line: self.line,
-            message: format!("illegal character: {}", c),
+            message: format!("illegal character: {}", display_illegal_char(c)),
             detail: format!("unexpected character {:?}", c),
         })
     }
 
-    /// Peeks a character ahead of the current position by the given offset.
-    fn peek_char(&self, offset: usize) -> char {
+    /// Peeks a character ahead of the current position by the given offset; `None` past the end.
+    fn peek(&self, offset: usize) -> Option<char> {
         let (in_bounds, idx) = verified_lexer_peek_char_index(self.text.len(), self.pos, offset);
-        if in_bounds { self.text[idx] } else { '\0' }
+        if in_bounds {
+            Some(self.text[idx])
+        } else {
+            None
+        }
+    }
+
+    /// Like [`Self::peek`], but returns `'\0'` past the end. Only for comparisons against
+    /// non-NUL characters: a NUL in the input is an ordinary (illegal) character, so end of
+    /// input must be tested with `peek(..).is_none()`.
+    fn peek_char(&self, offset: usize) -> char {
+        self.peek(offset).unwrap_or('\0')
     }
 
     /// Advances the position pointer by `steps`.
@@ -133,10 +162,9 @@ impl Lexer {
             } else if c == '/' && self.peek_char(1) == '*' {
                 self.advance_char(2);
                 loop {
-                    let cc = self.peek_char(0);
-                    if cc == '\0' {
+                    let Some(cc) = self.peek(0) else {
                         return self.error("unterminated comment");
-                    }
+                    };
                     if cc == '*' && self.peek_char(1) == '/' {
                         self.advance_char(2);
                         break;
@@ -153,14 +181,13 @@ impl Lexer {
     /// Scans the next token from input.
     fn scan_token(&mut self) -> Result<Token, BcError> {
         self.skip_whitespace_and_comments()?;
-        let c = self.peek_char(0);
-        if c == '\0' {
+        let Some(c) = self.peek(0) else {
             return Ok(Token {
                 token_type: TokenType::Eof,
                 value: String::new(),
                 line: self.line,
             });
-        }
+        };
 
         if c == '\n' {
             self.advance_char(1);
@@ -418,13 +445,15 @@ impl Lexer {
         }
 
         if c == '"' {
+            // An unterminated string is reported at the line where it starts, as in GNU bc.
+            let start_line = self.line;
             self.advance_char(1);
             let mut val_chars = Vec::new();
             loop {
-                let cc = self.peek_char(0);
-                if cc == '\0' {
+                let Some(cc) = self.peek(0) else {
+                    self.line = start_line;
                     return self.illegal_character('"');
-                }
+                };
                 if cc == '"' {
                     self.advance_char(1);
                     break;
@@ -1453,6 +1482,44 @@ mod tests {
     #[should_panic(expected = "quit")]
     fn test_parse_program_panics_with_quit() {
         let _ = Parser::new(Lexer::new("quit\n")).parse_program();
+    }
+
+    #[test]
+    fn test_lexer_nul_and_control_characters_are_illegal_not_eof() {
+        let syntax_message = |src: &str| {
+            let mut lexer = Lexer::new(src);
+            loop {
+                match lexer.try_get_next_token() {
+                    Ok(tok) if tok.token_type == TokenType::Eof => return None,
+                    Ok(_) => {}
+                    Err(BcError::Syntax { line, message, .. }) => return Some((line, message)),
+                    Err(e) => panic!("{e:?}"),
+                }
+            }
+        };
+        assert_eq!(
+            syntax_message("3\u{0}4\n"),
+            Some((1, "illegal character: ^@".to_string()))
+        );
+        assert_eq!(
+            syntax_message("\u{1}"),
+            Some((1, "illegal character: ^A".to_string()))
+        );
+        assert_eq!(
+            syntax_message("\u{7f}"),
+            Some((1, "illegal character: \\177".to_string()))
+        );
+        assert_eq!(
+            syntax_message("\u{e9}"),
+            Some((1, "illegal character: \\303\\251".to_string()))
+        );
+        // A NUL inside a string or a comment does not end it.
+        assert_eq!(syntax_message("\"a\0b\" /* \0 */ 1\n"), None);
+        // An unterminated string is reported at the line where it starts.
+        assert_eq!(
+            syntax_message("1\n\"abc\nd\n"),
+            Some((2, "illegal character: \"".to_string()))
+        );
     }
 
     #[test]

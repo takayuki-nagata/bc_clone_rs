@@ -127,7 +127,7 @@ process may abort, as GNU `bc` does.
 ### 3.2 Diagnostic formats
 | Kind | Format |
 |---|---|
-| Syntax error | `<source> <line>: syntax error`, or `<source> <line>: illegal character: <c>` for a character that cannot start a token (`<source>` is the file name, or `(standard_in)` for stdin) |
+| Syntax error | `<source> <line>: syntax error`, or `<source> <line>: illegal character: <c>` for a character that cannot start a token (`<source>` is the file name, or `(standard_in)` for stdin). As in GNU, `<c>` is written as `^X` for a control character (NUL is `^@`) and as octal escapes of its UTF-8 bytes for DEL and non-ASCII characters (`\177`, `\303\251`). A NUL is an ordinary illegal character, not the end of input. An unterminated string is reported at the line where it starts |
 | Runtime error | `Runtime error (func=<name>): <message>` (`<name>` is `(main)` at top level) |
 | Runtime warning | `Runtime warning (func=<name>): <message>` |
 

@@ -843,3 +843,13 @@ fn test_mutation_regressions() {
         check_differential(prog, &[]);
     }
 }
+
+/// A NUL or other control character is an illegal character, not the end of input: the
+/// diagnostic is printed and the next input unit still runs.
+#[test]
+fn test_control_characters_in_input() {
+    let programs = ["3\u{0}4\n5", "1\u{1}\n\u{7f}\n2"];
+    for prog in &programs {
+        check_differential(prog, &[]);
+    }
+}

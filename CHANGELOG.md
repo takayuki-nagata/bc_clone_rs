@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- A NUL character in the input no longer ends the input unit silently. It is reported as
+  `illegal character: ^@` and processing continues with the next unit. Other control characters
+  are shown as `^X`, and DEL and non-ASCII characters as octal escapes (`\177`), as in GNU `bc`.
+- An unterminated string is reported at the line where it starts.
+
 ## v0.4.0 — 2026-10-26
 
 This release makes POSIX.1-2024 the authoritative specification and fixes the defects found by
