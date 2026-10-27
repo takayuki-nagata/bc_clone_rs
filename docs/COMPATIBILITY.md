@@ -103,7 +103,7 @@ requirement; §3.4 defines the one `bc_clone` meets.
 | Exponent of `^` | The integer part must fit in a signed 64-bit integer | Same as GNU's "MAX Exponent". |
 | Nesting depth | `bc_clone` CLI: 100 000 (20 000 in debug builds); library default (`DEFAULT_MAX_DEPTH`): 128; Zephyr: 80; QEMU bare metal: 1000. Set with `Evaluator::max_depth` or `bc_session_set_max_depth` | Bounds the native stack. A statement, an expression operator or operand, and each pending function call count as levels: the syntax tree of an input unit may be at most this deep (otherwise the syntax error `nesting too deep`), and at most this many levels may be evaluated at once (otherwise the runtime error `nesting too deep`). A call `f(n - 1)` in `return (...)` takes 2 levels, so the CLI allows recursion about 50 000 deep. GNU `bc` has no fixed limit |
 | Argument of `e(x)` | The integer part of \|x\| must be at most 2 000 000 000 (`EXP_ARG_MAX`), unless the result truncates to 0 | e^x then has at most about 8.7·10^8 integer digits, and the working precision stays within `MAX_VERIFIED_SCALE` |
-| Order of `j(n,x)` | Must fit in a signed 64-bit integer (excluding its minimum), unless the result truncates to 0 | A larger order that is not provably 0 needs \|x\| > 3·10^18, which cannot be computed |
+| Arguments of `j(n,x)` | The order must fit in a signed 64-bit integer (excluding its minimum), and the integer part of \|x\| must be at most 2 000 000 000, unless the result truncates to 0 | The power series needs about \|x\|/2 extra digits; a larger order that is not provably 0 needs \|x\| > 3·10^18 |
 | Exact scale of `a ^ b` | `scale(a) · \|b\|` must not exceed `BC_SCALE_MAX` | `bc_clone` computes the exact power and then truncates it. GNU truncates intermediate results, so it can evaluate `0.5 ^ 2000000000` (slowly). |
 
 Every `BCNum` scale stays at most `BC_SCALE_MAX`. This invariant establishes the
@@ -173,11 +173,12 @@ address (`adr=N`).
 
 ### 3.4 Accuracy of the math library
 For `s`, `c`, `a`, `l`, `e`, `j`, the result is the exact mathematical value **truncated toward
-zero** to the current `scale`. This must hold for any argument magnitude whose result fits in
-memory: argument reduction must carry enough guard digits for the size of the argument.
-`s` and `c` compute π with as many extra digits as the argument has integer digits. The
-integration test `test_math_library_against_high_precision_oracle` checks every function against
-GNU `bc` evaluated at `scale + 100` and truncated.
+zero** to the current `scale`, for every argument within the limits of §2. The implementation
+computes rigorous error bounds (interval arithmetic) and returns a result only when every value
+within the bounds truncates to it; otherwise it recomputes with more digits.
+[MATH_ERROR_BOUNDS.md](MATH_ERROR_BOUNDS.md) gives the argument; the truncation decision is
+proved in Verus. The integration test `test_math_library_against_high_precision_oracle` also
+checks every function against GNU `bc` evaluated at `scale + 100` and truncated.
 
 ---
 

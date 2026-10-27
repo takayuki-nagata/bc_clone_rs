@@ -30,13 +30,14 @@ graph TD
     Wasm[examples/wasm_web_app/crate: wasm-bindgen] --> Core
     Core --> Parser[parser.rs: Lexer + Pratt parser]
     Core --> Eval[eval.rs: Evaluator]
-    Core --> Math[math.rs: BCNum + Decimal]
+    Core --> Math[math.rs: BCNum]
+    Core --> MathLib[mathlib.rs: certified -l library]
     Core --> Kernels[verified_kernels.rs: dual-mode kernels]
 ```
 
 | Path | Role |
 |---|---|
-| `crates/bc_core` | `#![no_std]` + `alloc` engine: lexer, parser, evaluator, arithmetic, math library |
+| `crates/bc_core` | `#![no_std]` + `alloc` engine: lexer, parser, evaluator, arithmetic, math library (`mathlib.rs`) |
 | `crates/bc_cli` | `bc_clone` binary: option parsing, file/stdin processing, interactive REPL, SIGINT |
 | `crates/bc_c_api` | C ABI (`include/bc_core.h`): `bc_eval`, `bc_eval_callback`, `bc_session_*` |
 | `crates/bc_zephyr` | Zephyr RTOS application logic (self-tests, serial REPL); C trampoline in `examples/zephyr_app` |
@@ -65,24 +66,32 @@ graph TD
   `Evaluator::execute`.
 - Output for `obase != 10` uses exact `BigInt` arithmetic. The number of fractional digits is the
   smallest `k` with `obase^k >= 10^scale`, so no floating point or `libm` is needed.
-- `Decimal { value: BigInt, prec: usize }` is a fixed-point helper used only by the math library.
 
-### Math library (`-l`)
-Every function computes internally with guard digits and truncates to the caller's `scale`.
+### Math library (`-l`, `src/mathlib.rs`)
+Every function computes a **ball** (midpoint and radius in ulps of a working precision) that
+provably contains the exact value. Each ball operation carries its own error bound, and series
+add a bound on their omitted tail. `certified_trunc` returns the truncation to `scale` only if
+every value in the ball truncates to it; otherwise `certify` doubles the guard digits and
+recomputes (Ziv's strategy). Exact results (`s(0)`, `c(0)`, `a(0)`, `e(0)`, `l(1)`, `j(n,0)`) are
+returned directly; every other result is transcendental, so the loop ends.
+`docs/MATH_ERROR_BOUNDS.md` derives every bound.
 
 | Function | Algorithm (as implemented) |
 |---|---|
-| π (internal) | Machin's formula `π = 4·(4·atan(1/5) − atan(1/239))`, with atan by Taylor series (`get_pi`) |
-| `s(x)`, `c(x)` | Reduce `x` modulo 2π into `[-π, π]` with π carrying 10 guard digits plus one digit per integer digit of `x` (`reduce_angle`), then use the Taylor series directly |
-| `a(x)` | For `|x| > 1` use `π/2 − atan(1/x)`. Then apply four argument halvings `x/(1+√(1+x²))`, the Taylor series, and multiply by 16 |
-| `l(x)` | Write `x = m·2^k` with `m ≥ 0.707`, then use `ln m = 2·artanh((m−1)/(m+1))`. `ln 2` comes from `2·artanh(1/3)` (15 guard digits) |
-| `e(x)` | Write `x = n·ln2 + r`, use the Taylor series for `e^r`, then multiply by `2^n`. Extra guard digits scale with the size of `x`. Results that truncate to 0 are returned without computation; `|x|` above `EXP_ARG_MAX` is an error |
+| π, ln 2 (internal) | Machin's formula `π = 16·atan(1/5) − 4·atan(1/239)` and `ln 2 = 2·artanh(1/3)`, summed with exact integer terms (`arc_inv`) |
+| `s(x)`, `c(x)` | Reduce `x` by the integer multiple of 2π nearest to it, with π carrying one extra digit per integer digit of `x` (`reduce_angle`), then the Taylor series |
+| `a(x)` | For `|x| > 1` use `π/2 − atan(1/|x|)`. Then four argument halvings `y/(1+√(1+y²))`, the Taylor series, and multiply by 16 |
+| `l(x)` | Write `x = m·2^k` with `m` in `[0.7, 1.43)`, then `ln m = 2·artanh((m−1)/(m+1))`, plus `k·ln 2` |
+| `e(x)` | Write `x = n·ln2 + r`, the Taylor series for `e^r`, then multiply by `2^n`. Results that truncate to 0 are returned without computation; `|x|` above `EXP_ARG_MAX` is an error |
 | `j(n,x)` | Power series of `J_n`; for negative orders, `J_{-n} = (-1)^n J_n`. Orders large enough that the result truncates to 0 return 0 without computation |
 
 Accuracy contract: every result is the exact value truncated toward zero
-(`docs/COMPATIBILITY.md` §3.4). `test_math_library_against_high_precision_oracle` in
-`crates/bc_cli/tests/integration_tests.rs` checks it against GNU bc at `scale + 100`. GNU's own
-results are *not* exact at the requested scale.
+(`docs/COMPATIBILITY.md` §3.4). Verus proves the truncation decision
+(`lemma_certified_truncation`); the ball and series bounds are argued in
+`docs/MATH_ERROR_BOUNDS.md` and tested (`mathlib::tests`, and
+`test_math_library_against_high_precision_oracle`, which compares with GNU bc at `scale + 100`).
+GNU's own results are *not* exact at the requested scale. When you change a function, keep its
+section of `docs/MATH_ERROR_BOUNDS.md` in sync.
 
 ### Evaluator (`src/eval.rs`)
 - Dynamic scoping: each variable or array name maps to a stack. Function parameters and `auto`
@@ -148,7 +157,7 @@ invariant (an internal error) instead of truncating it. Review any new code that
 
 | Layer | Tool / script | What it actually establishes |
 |---|---|---|
-| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `verus_proofs.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
+| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `verus_proofs.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The math library's certified-truncation decision is proved over the integers (`lemma_certified_truncation`). `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
 | Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only; the 32-bit targets are exercised by the QEMU and Zephyr self-tests). The production C-FFI output helper `write_c_string` never writes at or beyond `buf_size` and always NUL-terminates. C-API NULL and zero-size guards hold. The CLI brace scanner is consistent. |
 | UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, and `bc_cli` (strict provenance, symbolic alignment, Stacked Borrows), and `bc_c_api` again under Tree Borrows. |
 | Property tests | proptest — `crates/bc_core/tests/proptest_suite.rs` | `+ - * / % ^ sqrt` against an exact `BigInt` reference truncated to the POSIX result scale (scales up to 40, negative values). Also checks the scale and exponent limits, integer and fractional base conversion, and that the parser and evaluator never panic. |

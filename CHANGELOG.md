@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Math library
+- `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval
+  arithmetic) and return a result only when every value within the bounds truncates to it,
+  recomputing with twice the guard digits otherwise. The result is the exact value truncated
+  toward zero for every argument, not only for arguments where fixed guard digits happened to
+  suffice. Verus proves the truncation decision; `docs/MATH_ERROR_BOUNDS.md` derives the bounds.
+- `j(n,x)` with an argument whose integer part exceeds 2 000 000 000 is `argument too large`
+  instead of a computation that cannot finish.
+
 ### Fixes
 - A NUL character in the input no longer ends the input unit silently. It is reported as
   `illegal character: ^@` and processing continues with the next unit. Other control characters
@@ -39,8 +48,9 @@
   `Lexer::get_next_token`, `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`,
   `Evaluator::evaluate`, `Evaluator::execute`) are removed from the public API. Use the `try_*`
   forms, which return every error as an `Err`.
-- `math::bc_exp` and `math::bc_bessel` return `Result<BCNum, RuntimeError>`; the new
-  `RuntimeError::MathArgumentTooLarge` is reported as `argument too large`.
+- `math::bc_sin`, `bc_cos`, `bc_atan`, `bc_ln`, `bc_exp` and `bc_bessel` return
+  `Result<BCNum, RuntimeError>`; the new `RuntimeError::MathArgumentTooLarge` is reported as
+  `argument too large`.
 - `bc_core` denies `unwrap`, `expect`, `panic!`, and lossy integer casts outside tests.
 
 ## v0.4.0 — 2026-10-26

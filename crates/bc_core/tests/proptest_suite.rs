@@ -232,3 +232,44 @@ proptest! {
         prop_assert!(!summary.quit);
     }
 }
+
+/// A math library argument: up to 6 integer digits and 6 fractional digits, either sign.
+fn arb_math_arg() -> impl Strategy<Value = BCNum> {
+    (-999_999_999_999i64..=999_999_999_999i64, 0usize..=6usize)
+        .prop_map(|(coeff, scale)| BCNum::new(BigInt::from(coeff), scale))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// The math library is a certified truncation of the exact value (`docs/COMPATIBILITY.md`
+    /// §3.4), so its result at `scale` is the truncation of its result at `scale + extra`:
+    /// truncating a truncation toward zero to fewer digits is the same as truncating the exact
+    /// value once.
+    #[test]
+    fn prop_math_library_results_are_consistent_truncations(
+        x in arb_math_arg(),
+        n in -6i64..=6i64,
+        scale in 0usize..=12usize,
+        extra in 1usize..=12usize,
+    ) {
+        use bc_core::math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
+        let order = BCNum::new(BigInt::from(n), 0);
+        let small = BCNum::new(&x.coeff % (BigInt::from(100) * pow10(x.scale)), x.scale);
+        type MathFn<'a> = Box<dyn Fn(usize) -> Result<BCNum, RuntimeError> + 'a>;
+        let funcs: [(&str, MathFn); 6] = [
+            ("s", Box::new(|s| bc_sin(&x, s))),
+            ("c", Box::new(|s| bc_cos(&x, s))),
+            ("a", Box::new(|s| bc_atan(&x, s))),
+            ("l", Box::new(|s| bc_ln(&BCNum::new(x.coeff.abs() + 1, x.scale), s))),
+            ("e", Box::new(|s| bc_exp(&small, s))),
+            ("j", Box::new(|s| bc_bessel(&order, &small, s))),
+        ];
+        for (name, f) in &funcs {
+            let coarse = f(scale).unwrap();
+            let fine = f(scale + extra).unwrap();
+            let expected = BCNum::new(&fine.coeff / pow10(extra), scale);
+            prop_assert!(same(&coarse, &expected), "{}: {:?} vs {:?}", name, coarse, expected);
+        }
+    }
+}

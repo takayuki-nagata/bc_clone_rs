@@ -34,6 +34,8 @@ mod kani_proofs;
 #[cfg(not(verus_keep_ghost))]
 pub mod math;
 #[cfg(not(verus_keep_ghost))]
+mod mathlib;
+#[cfg(not(verus_keep_ghost))]
 pub mod parser;
 pub mod verified_kernels;
 #[cfg(verus_keep_ghost)]

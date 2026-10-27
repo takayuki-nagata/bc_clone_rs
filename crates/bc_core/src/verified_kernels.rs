@@ -609,7 +609,7 @@ dual_verified! {
     }
 
     /// Verified unsigned decimal shift and direction `(shift_digits, should_multiply)`
-    /// for fixed-point scale conversions (`math.rs:Decimal::from_bc_num` / `Decimal::to_bc_num`).
+    /// for fixed-point scale conversions (`mathlib.rs:Ball::from_bcnum`).
     pub fn verified_decimal_scale_shift(
         src_scale: usize,
         dst_scale: usize,

@@ -589,16 +589,16 @@ impl Evaluator {
                     use crate::math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
                     match (name.as_str(), args.as_slice()) {
                         ("s", [ExprOrArray::Expr(expr)]) => {
-                            return Ok(bc_sin(&self.try_evaluate(expr)?, self.scale));
+                            return Ok(bc_sin(&self.try_evaluate(expr)?, self.scale)?);
                         }
                         ("c", [ExprOrArray::Expr(expr)]) => {
-                            return Ok(bc_cos(&self.try_evaluate(expr)?, self.scale));
+                            return Ok(bc_cos(&self.try_evaluate(expr)?, self.scale)?);
                         }
                         ("a", [ExprOrArray::Expr(expr)]) => {
-                            return Ok(bc_atan(&self.try_evaluate(expr)?, self.scale));
+                            return Ok(bc_atan(&self.try_evaluate(expr)?, self.scale)?);
                         }
                         ("l", [ExprOrArray::Expr(expr)]) => {
-                            return Ok(bc_ln(&self.try_evaluate(expr)?, self.scale));
+                            return Ok(bc_ln(&self.try_evaluate(expr)?, self.scale)?);
                         }
                         ("e", [ExprOrArray::Expr(expr)]) => {
                             return Ok(bc_exp(&self.try_evaluate(expr)?, self.scale)?);
