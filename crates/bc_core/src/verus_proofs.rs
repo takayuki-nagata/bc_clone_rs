@@ -1736,7 +1736,12 @@ pub fn verified_taylor_series_convergence_loop(
     (steps, num)
 }
 
-/// Verified POSIX CLI option and file argument parser (`crates/bc_cli/src/main.rs:310-328`).
+/// Verified POSIX CLI option and file argument parser (`crates/bc_cli/src/main.rs:run_app`).
+///
+/// `args` is the argument list after classification: one `CLI_ARG_OPT_L` / `_S` / `_W` /
+/// `_INVALID` entry per option letter of a `CLI_ARG_OPT_CLUSTER` (as classified by
+/// `verified_cli_classify_option_char`), `CLI_ARG_OPT_INVALID` for a long option,
+/// `CLI_ARG_END_OF_OPTIONS` for `--`, and `CLI_ARG_FILE` for an operand.
 ///
 /// Returns `(has_error, math_enabled, initial_scale, file_count)`.
 /// Proves:
@@ -1772,6 +1777,8 @@ pub fn verified_cli_parse_args(args: &[u8]) -> (res: (bool, bool, usize, usize))
             // Extension policy flags do not affect the initial scale or the file count.
         } else if arg == CLI_ARG_OPT_INVALID {
             return (true, math_enabled, 0, file_count);
+        } else if arg == CLI_ARG_END_OF_OPTIONS {
+            // `--` is neither an option nor an operand.
         } else {
             file_count = file_count + 1;
         }

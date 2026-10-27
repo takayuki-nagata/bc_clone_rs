@@ -1461,15 +1461,44 @@ mod tests {
         assert!(!verified_is_ident_continue(58)); // ':'
         assert!(!verified_is_ident_continue(94)); // '^'
         assert!(verified_is_ident_continue(95)); // '_'
-        assert_eq!(verified_cli_classify_arg(b"-l"), CLI_ARG_OPT_L);
-        assert_eq!(verified_cli_classify_arg(b"-"), CLI_ARG_OPT_INVALID);
-        assert_eq!(verified_cli_classify_arg(b"-q"), CLI_ARG_OPT_INVALID);
-        assert_eq!(verified_cli_classify_arg(b"-s"), CLI_ARG_OPT_S);
-        assert_eq!(verified_cli_classify_arg(b"-w"), CLI_ARG_OPT_W);
-        assert_eq!(verified_cli_classify_arg(b"-ls"), CLI_ARG_OPT_INVALID);
-        assert_eq!(verified_cli_classify_arg(b"-ll"), CLI_ARG_OPT_INVALID);
-        assert_eq!(verified_cli_classify_arg(b""), CLI_ARG_FILE);
-        assert_eq!(verified_cli_classify_arg(b"test.bc"), CLI_ARG_FILE);
+        assert_eq!(verified_cli_classify_arg(b"-l", false), CLI_ARG_OPT_CLUSTER);
+        assert_eq!(
+            verified_cli_classify_arg(b"-ls", false),
+            CLI_ARG_OPT_CLUSTER
+        );
+        assert_eq!(verified_cli_classify_arg(b"-l", true), CLI_ARG_FILE);
+        assert_eq!(verified_cli_classify_arg(b"-", false), CLI_ARG_FILE);
+        assert_eq!(
+            verified_cli_classify_arg(b"--", false),
+            CLI_ARG_END_OF_OPTIONS
+        );
+        assert_eq!(verified_cli_classify_arg(b"--", true), CLI_ARG_FILE);
+        assert_eq!(
+            verified_cli_classify_arg(b"--x", false),
+            CLI_ARG_OPT_INVALID
+        );
+        assert_eq!(verified_cli_classify_arg(b"", false), CLI_ARG_FILE);
+        assert_eq!(verified_cli_classify_arg(b"test.bc", false), CLI_ARG_FILE);
+        assert_eq!(
+            verified_cli_classify_option_char(u32::from('l')),
+            CLI_ARG_OPT_L
+        );
+        assert_eq!(
+            verified_cli_classify_option_char(u32::from('s')),
+            CLI_ARG_OPT_S
+        );
+        assert_eq!(
+            verified_cli_classify_option_char(u32::from('w')),
+            CLI_ARG_OPT_W
+        );
+        assert_eq!(
+            verified_cli_classify_option_char(u32::from('q')),
+            CLI_ARG_OPT_INVALID
+        );
+        assert_eq!(
+            verified_cli_classify_option_char(u32::from('-')),
+            CLI_ARG_OPT_INVALID
+        );
         assert_eq!(verified_cli_initial_scale(true), 20);
         assert_eq!(verified_cli_initial_scale(false), 0);
     }

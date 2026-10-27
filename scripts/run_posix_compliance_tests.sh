@@ -61,6 +61,10 @@ check "files are read in order, then standard input" "$WORK_DIR/first.bc $WORK_D
     $'a * b\n' $'6\n'
 check "an inaccessible file operand is a diagnosed error" "$WORK_DIR/missing.bc" \
     $'1\n' "" nonzero nonempty
+# XBD 12.2 Utility Syntax Guidelines (required by OPTIONS): grouped options (Guideline 5) and
+# "--" ending the options (Guideline 10).
+check "options may be grouped" "-ls" $'scale\n' $'20\n'
+check "-- ends the options" "-l -- $WORK_DIR/first.bc" $'a\nscale\n' $'2\n20\n'
 
 # --- Lexical conventions ---------------------------------------------------------------------------
 check "NUMBER forms integer . integer" "" $'1.5\n.5\n5.\n0.50\n' $'1.5\n.5\n5\n.50\n'

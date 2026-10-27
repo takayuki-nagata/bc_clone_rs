@@ -94,6 +94,8 @@ dual_verified! {
     pub const CLI_ARG_FILE: u8 = 3;
     pub const CLI_ARG_OPT_S: u8 = 4;
     pub const CLI_ARG_OPT_W: u8 = 5;
+    pub const CLI_ARG_END_OF_OPTIONS: u8 = 6;
+    pub const CLI_ARG_OPT_CLUSTER: u8 = 7;
     /// Verified alphanumeric digit parser (`math.rs:BCNum::from_string`).
     ///
     /// Proves that any ASCII byte maps to a bounded value in $0..=35$, with exact mappings
@@ -711,38 +713,61 @@ dual_verified! {
         (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95
     }
 
-    /// Verified CLI argument classification (`crates/bc_cli/src/main.rs:run_app`).
+    /// Verified CLI argument classification (`crates/bc_cli/src/main.rs:run_app`), following
+    /// the XBD 12.2 Utility Syntax Guidelines that POSIX requires of `bc`.
     ///
     /// Returns:
-    /// - `CLI_ARG_OPT_L` (`1`): `"-l"`
-    /// - `CLI_ARG_OPT_S` (`4`): `"-s"` (reject extensions)
-    /// - `CLI_ARG_OPT_W` (`5`): `"-w"` (warn about extensions)
-    /// - `CLI_ARG_OPT_INVALID` (`2`): any other argument starting with `'-'`
-    /// - `CLI_ARG_FILE` (`3`): filename operand
-    pub fn verified_cli_classify_arg(bytes: &[u8]) -> (res: u8)
+    /// - `CLI_ARG_FILE` (`3`): a file operand. After `--` (`options_ended`) every argument is
+    ///   an operand; so are `-` and the empty string (Guideline 13 leaves `-` to the utility).
+    /// - `CLI_ARG_END_OF_OPTIONS` (`6`): `"--"`, which ends the options (Guideline 10)
+    /// - `CLI_ARG_OPT_INVALID` (`2`): a long option `--name`, which `bc_clone` does not support
+    /// - `CLI_ARG_OPT_CLUSTER` (`7`): `-` followed by one or more option letters, possibly
+    ///   grouped (`-ls`, Guideline 5); each letter is classified by
+    ///   `verified_cli_classify_option_char`
+    pub fn verified_cli_classify_arg(bytes: &[u8], options_ended: bool) -> (res: u8)
         ensures [
-            (bytes@.len() == 2 && bytes@[0] == 45 && bytes@[1] == 108) <==> res == CLI_ARG_OPT_L,
-            (bytes@.len() == 2 && bytes@[0] == 45 && bytes@[1] == 115) <==> res == CLI_ARG_OPT_S,
-            (bytes@.len() == 2 && bytes@[0] == 45 && bytes@[1] == 119) <==> res == CLI_ARG_OPT_W,
-            (bytes@.len() >= 1 && bytes@[0] == 45
-                && !(bytes@.len() == 2 && (bytes@[1] == 108 || bytes@[1] == 115 || bytes@[1] == 119)))
+            (options_ended || bytes@.len() < 2 || bytes@[0] != 45) <==> res == CLI_ARG_FILE,
+            (!options_ended && bytes@.len() == 2 && bytes@[0] == 45 && bytes@[1] == 45)
+                <==> res == CLI_ARG_END_OF_OPTIONS,
+            (!options_ended && bytes@.len() > 2 && bytes@[0] == 45 && bytes@[1] == 45)
                 <==> res == CLI_ARG_OPT_INVALID,
-            (bytes@.len() == 0 || bytes@[0] != 45) <==> res == CLI_ARG_FILE,
+            (!options_ended && bytes@.len() >= 2 && bytes@[0] == 45 && bytes@[1] != 45)
+                <==> res == CLI_ARG_OPT_CLUSTER,
         ]
     {
         let len = bytes.len();
-        if len >= 1 && bytes[0] == 45 {
-            if len == 2 && bytes[1] == 108 {
-                CLI_ARG_OPT_L
-            } else if len == 2 && bytes[1] == 115 {
-                CLI_ARG_OPT_S
-            } else if len == 2 && bytes[1] == 119 {
-                CLI_ARG_OPT_W
+        if options_ended || len < 2 || bytes[0] != 45 {
+            CLI_ARG_FILE
+        } else if bytes[1] == 45 {
+            if len == 2 {
+                CLI_ARG_END_OF_OPTIONS
             } else {
                 CLI_ARG_OPT_INVALID
             }
         } else {
-            CLI_ARG_FILE
+            CLI_ARG_OPT_CLUSTER
+        }
+    }
+
+    /// Verified classification of one option letter inside a `CLI_ARG_OPT_CLUSTER` argument:
+    /// `CLI_ARG_OPT_L` for `l`, `CLI_ARG_OPT_S` for `s` (reject extensions), `CLI_ARG_OPT_W`
+    /// for `w` (warn about extensions), and `CLI_ARG_OPT_INVALID` for any other character.
+    pub fn verified_cli_classify_option_char(c: u32) -> (res: u8)
+        ensures [
+            c == 108 <==> res == CLI_ARG_OPT_L,
+            c == 115 <==> res == CLI_ARG_OPT_S,
+            c == 119 <==> res == CLI_ARG_OPT_W,
+            (c != 108 && c != 115 && c != 119) <==> res == CLI_ARG_OPT_INVALID,
+        ]
+    {
+        if c == 108 {
+            CLI_ARG_OPT_L
+        } else if c == 115 {
+            CLI_ARG_OPT_S
+        } else if c == 119 {
+            CLI_ARG_OPT_W
+        } else {
+            CLI_ARG_OPT_INVALID
         }
     }
 

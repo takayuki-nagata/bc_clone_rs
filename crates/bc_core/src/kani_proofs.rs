@@ -2,7 +2,7 @@
 
 //! Kani bounded model checking harnesses for `bc_core`.
 //!
-//! Cross-verifies all 31 `dual_verified!` kernels in `verified_kernels.rs` using
+//! Cross-verifies the `dual_verified!` kernels in `verified_kernels.rs` using
 //! bit-precise CBMC symbolic execution (`kani::any()`) and verifies multi-step
 //! state-machine invariants without heap allocation state explosion.
 
@@ -283,17 +283,25 @@ fn proof_verified_cli_kernels() {
     kani::assume(len <= 6);
     let slice = &buf[..len];
 
-    let kind = verified_cli_classify_arg(slice);
-    if len == 2 && slice[0] == b'-' && slice[1] == b'l' {
-        assert_eq!(kind, CLI_ARG_OPT_L);
-    } else if len == 2 && slice[0] == b'-' && slice[1] == b's' {
-        assert_eq!(kind, CLI_ARG_OPT_S);
-    } else if len == 2 && slice[0] == b'-' && slice[1] == b'w' {
-        assert_eq!(kind, CLI_ARG_OPT_W);
-    } else if len >= 1 && slice[0] == b'-' {
+    let options_ended: bool = kani::any();
+    let kind = verified_cli_classify_arg(slice, options_ended);
+    if options_ended || len < 2 || slice[0] != b'-' {
+        assert_eq!(kind, CLI_ARG_FILE);
+    } else if len == 2 && slice[1] == b'-' {
+        assert_eq!(kind, CLI_ARG_END_OF_OPTIONS);
+    } else if slice[1] == b'-' {
         assert_eq!(kind, CLI_ARG_OPT_INVALID);
     } else {
-        assert_eq!(kind, CLI_ARG_FILE);
+        assert_eq!(kind, CLI_ARG_OPT_CLUSTER);
+    }
+
+    let c: u32 = kani::any();
+    let letter = verified_cli_classify_option_char(c);
+    match char::from_u32(c) {
+        Some('l') => assert_eq!(letter, CLI_ARG_OPT_L),
+        Some('s') => assert_eq!(letter, CLI_ARG_OPT_S),
+        Some('w') => assert_eq!(letter, CLI_ARG_OPT_W),
+        _ => assert_eq!(letter, CLI_ARG_OPT_INVALID),
     }
 }
 

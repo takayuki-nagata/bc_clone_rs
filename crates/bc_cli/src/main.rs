@@ -10,7 +10,8 @@ use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bc_core::verified_kernels::{
-    CLI_ARG_OPT_INVALID, CLI_ARG_OPT_L, CLI_ARG_OPT_S, CLI_ARG_OPT_W, verified_cli_classify_arg,
+    CLI_ARG_END_OF_OPTIONS, CLI_ARG_OPT_CLUSTER, CLI_ARG_OPT_INVALID, CLI_ARG_OPT_L, CLI_ARG_OPT_S,
+    CLI_ARG_OPT_W, verified_cli_classify_arg, verified_cli_classify_option_char,
     verified_cli_initial_scale, verified_repl_block_completeness,
 };
 use bc_core::{
@@ -240,26 +241,36 @@ where
     let mut extension_policy = ExtensionPolicy::Allow;
     let mut files = Vec::new();
 
+    let mut options_ended = false;
     for arg in args.iter().skip(1) {
-        let kind = verified_cli_classify_arg(arg.as_bytes());
-        if kind == CLI_ARG_OPT_L {
-            math_enabled = true;
-        } else if kind == CLI_ARG_OPT_S {
-            extension_policy = ExtensionPolicy::Reject;
-        } else if kind == CLI_ARG_OPT_W {
-            if extension_policy == ExtensionPolicy::Allow {
-                extension_policy = ExtensionPolicy::Warn;
-            }
+        let kind = verified_cli_classify_arg(arg.as_bytes(), options_ended);
+        if kind == CLI_ARG_END_OF_OPTIONS {
+            options_ended = true;
         } else if kind == CLI_ARG_OPT_INVALID {
-            let opt = &arg[1..];
             let mut err_writer = stderr_writer;
-            let _ = writeln!(err_writer, "bc: invalid option -- '{}'", opt);
+            let _ = writeln!(err_writer, "bc: unrecognized option '{}'", arg);
             return 1;
+        } else if kind == CLI_ARG_OPT_CLUSTER {
+            for c in arg.chars().skip(1) {
+                let letter = verified_cli_classify_option_char(u32::from(c));
+                if letter == CLI_ARG_OPT_L {
+                    math_enabled = true;
+                } else if letter == CLI_ARG_OPT_S {
+                    extension_policy = ExtensionPolicy::Reject;
+                } else if letter == CLI_ARG_OPT_W {
+                    if extension_policy == ExtensionPolicy::Allow {
+                        extension_policy = ExtensionPolicy::Warn;
+                    }
+                } else {
+                    let mut err_writer = stderr_writer;
+                    let _ = writeln!(err_writer, "bc: invalid option -- '{}'", c);
+                    return 1;
+                }
+            }
         } else {
             files.push(arg.clone());
         }
     }
-
     let mut evaluator = create_evaluator(math_enabled, stdout_writer, stderr_writer);
     evaluator.set_scale(verified_cli_initial_scale(math_enabled));
     evaluator.extension_policy = extension_policy;
@@ -801,6 +812,70 @@ mod tests {
     }
 
     #[test]
+    fn test_option_syntax_follows_xbd_12_2() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        let file = std::env::temp_dir().join(format!("bc_clone_opts_{}.bc", std::process::id()));
+        std::fs::write(&file, "a = 7\n").unwrap();
+        let file_name = file.to_string_lossy().into_owned();
+        let run = |args: &[&str], stdin: &str| {
+            let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut argv = vec!["bc".to_string()];
+            argv.extend(args.iter().map(|a| a.to_string()));
+            let status = run_app(
+                &argv,
+                stdin.as_bytes(),
+                TestWriter {
+                    buf: stdout_buf.clone(),
+                },
+                TestWriter {
+                    buf: stderr_buf.clone(),
+                },
+                false,
+            );
+            let out = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
+            let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
+            (status, out, err)
+        };
+
+        // Grouped options (Guideline 5), in any order, and repeated letters.
+        for group in ["-ls", "-sl", "-lw", "-ll"] {
+            assert_eq!(
+                run(&[group], "scale\n"),
+                (0, "20\n".to_string(), String::new())
+            );
+        }
+        // "--" ends the options (Guideline 10): a later "-l" is a file operand.
+        assert_eq!(
+            run(&["-l", "--", &file_name], "a\nscale\n"),
+            (0, "7\n20\n".to_string(), String::new())
+        );
+        assert_eq!(
+            run(&["--", "-l"], ""),
+            (1, String::new(), "bc: cannot open file -l\n".to_string())
+        );
+        // "-" is an operand, not an option.
+        assert_eq!(
+            run(&["-"], ""),
+            (1, String::new(), "bc: cannot open file -\n".to_string())
+        );
+        // The first invalid letter of a group is reported.
+        assert_eq!(
+            run(&["-lzq"], ""),
+            (1, String::new(), "bc: invalid option -- 'z'\n".to_string())
+        );
+        assert_eq!(
+            run(&["--mathlib"], ""),
+            (
+                1,
+                String::new(),
+                "bc: unrecognized option '--mathlib'\n".to_string()
+            )
+        );
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
     fn test_invalid_utf8_input_is_diagnosed_and_processing_continues() {
         let _guard = TEST_MUTEX.lock().unwrap();
         CTRL_C_PRESSED.store(false, Ordering::SeqCst);
@@ -1052,25 +1127,6 @@ mod kani_proofs {
         assert!(braces >= -(len as i32) && braces <= (len as i32));
         if braces > 0 {
             assert!(incomplete);
-        }
-    }
-
-    /// Verifies that CLI option slice indexing (`&arg[1..]`) when `verified_cli_classify_arg`
-    /// returns `CLI_ARG_OPT_INVALID` never panics on out-of-bounds or UTF-8 character boundaries.
-    #[kani::proof]
-    #[kani::unwind(7)]
-    fn proof_cli_invalid_opt_slice_safety() {
-        let raw: [u8; 6] = kani::any();
-        let len: usize = kani::any();
-        kani::assume(len <= 6);
-        for i in 0..len {
-            kani::assume(raw[i] <= 0x7F);
-        }
-        let arg = unsafe { core::str::from_utf8_unchecked(&raw[..len]) };
-        let kind = verified_cli_classify_arg(arg.as_bytes());
-        if kind == CLI_ARG_OPT_INVALID {
-            let opt = &arg[1..];
-            assert_eq!(opt.len(), len - 1);
         }
     }
 }

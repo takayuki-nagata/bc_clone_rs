@@ -11,6 +11,9 @@
   reported as illegal characters and the rest of the input is processed, on standard input
   (also interactively) and in files. A file that is not UTF-8 is no longer reported as
   `cannot open file`.
+- Command-line options follow the XBD 12.2 Utility Syntax Guidelines, as POSIX requires: options
+  may be grouped (`-lw`), `--` ends the options, and `-` is a file operand. Long options are
+  reported as `bc: unrecognized option '--name'`.
 
 ## v0.4.0 — 2026-10-26
 

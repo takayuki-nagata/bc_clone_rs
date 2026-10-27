@@ -26,7 +26,7 @@ against an expected output written by hand (not against GNU `bc`).
 ### 1.1 Invocation
 | Requirement | Notes |
 |---|---|
-| `bc [-l] [file ...]` | Files are read in order, then standard input. `bc_clone` also accepts `-s` and `-w` (§4); each option must be a separate argument (`-ls` is invalid) |
+| `bc [-l] [file ...]` | Files are read in order, then standard input. `bc_clone` also accepts `-s` and `-w` (§4). Options follow the XBD 12.2 Utility Syntax Guidelines that POSIX requires: they may be grouped (`-ls`), `--` ends them, and `-` is an operand (a file named `-`). A long option (`--name`) is an error |
 | `-l` defines `s c a l e j` and sets `scale` to 20 | |
 | An unreadable file operand produces a diagnostic (`bc: cannot open file <f>`) and terminates bc with status 1 without processing anything further | Operands before it have already been processed, as in GNU |
 | Standard error is used only for diagnostics | |
@@ -210,4 +210,4 @@ multi-letter identifiers.
 | Diagnostics | Include `adr=N` | No address |
 | Recovery after a syntax error | yacc error recovery; may report several errors per line and sometimes also discard the following line | One diagnostic, then the rest of the input unit is discarded (§3.1) |
 | Unsupported extensions | — | §4 "Not supported" |
-| Command-line options | `-h -i -l -q -s -v -w` and long forms; options can be grouped | Only `-l`, `-s`, `-w`, one per argument; any other option is an error (status 1) |
+| Command-line options | `-h -i -l -q -s -v -w` and long forms; options can be grouped | Only `-l`, `-s`, `-w` (groupable); any other option, including every long option, is an error (status 1) |

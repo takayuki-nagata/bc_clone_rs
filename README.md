@@ -88,7 +88,7 @@ Run the calculator interactively:
 ./target/release/bc_clone
 ```
 
-Options (each must be a separate argument):
+Options (they may be grouped, as in `-lw`; `--` ends the options):
 
 | Option | Meaning |
 |---|---|
