@@ -776,7 +776,9 @@ fn decimal_ln(x: &Decimal, prec: usize) -> Decimal {
     }
 }
 
-fn decimal_exp(x: &Decimal, prec: usize) -> Decimal {
+/// e^x at precision `prec`. Requires |x| < `EXP_ARG_MAX` + 1, so that the power of two that the
+/// reduction splits off fits in a `u64` shift; a larger `x` returns `MathArgumentTooLarge`.
+fn decimal_exp(x: &Decimal, prec: usize) -> Result<Decimal, RuntimeError> {
     let p = prec + 15;
     let mut x_p = Decimal {
         value: &x.value * BigInt::from(10).pow(15),
@@ -811,14 +813,10 @@ fn decimal_exp(x: &Decimal, prec: usize) -> Decimal {
         fact *= k;
     }
 
-    let n_u32 = n.to_u32().unwrap_or(u32::MAX);
-    let mut val = if n_u32 != u32::MAX {
-        Decimal {
-            value: total.value << n_u32,
-            prec: p,
-        }
-    } else {
-        Decimal::zero(p)
+    let n_u64 = n.to_u64().ok_or(RuntimeError::MathArgumentTooLarge)?;
+    let mut val = Decimal {
+        value: total.value << n_u64,
+        prec: p,
     };
 
     if is_neg {
@@ -826,10 +824,10 @@ fn decimal_exp(x: &Decimal, prec: usize) -> Decimal {
         val = one.div(&val);
     }
 
-    Decimal {
+    Ok(Decimal {
         value: val.value / BigInt::from(10).pow(15),
         prec,
-    }
+    })
 }
 
 // --- Public Transcendental Functions (Math Library) ---
@@ -871,33 +869,79 @@ pub fn bc_ln(x: &BCNum, global_scale: usize) -> BCNum {
     dec_res.to_bc_num(global_scale)
 }
 
-/// Math exponential function.
-pub fn bc_exp(x: &BCNum, global_scale: usize) -> BCNum {
-    let int_approx = if x.scale > 0 {
-        let divisor = pow10(x.scale);
-        (&x.coeff / divisor).abs().to_u64().unwrap_or(0) as usize
-    } else {
-        x.coeff.abs().to_u64().unwrap_or(0) as usize
-    };
-    // e^x has approx (0.4343 * x) integer digits. Add int_approx / 2 extra guard precision
-    // so large exponents retain all integer digits and fractional precision.
-    let extra_prec = int_approx / 2;
-    let prec = verified_transcendental_guard_prec(x.scale, global_scale, extra_prec);
+/// Largest integer part of the argument of `e(x)` (`docs/COMPATIBILITY.md` §2). e^x then has
+/// at most about 0.4343·x ≈ 8.7·10^8 integer digits, and the extra working precision x/2 stays
+/// within `MAX_VERIFIED_SCALE`, the precondition of `verified_transcendental_guard_prec`.
+pub const EXP_ARG_MAX: u64 = 2_000_000_000;
 
-    let dec_x = Decimal::from_bc_num(x, prec);
-    let dec_res = decimal_exp(&dec_x, prec);
-    dec_res.to_bc_num(global_scale)
+/// The integer part of |x|.
+fn abs_int_part(x: &BCNum) -> BigInt {
+    x.coeff.abs() / pow10(x.scale)
 }
 
-/// Bessel function of the first kind J_n(x).
-pub fn bc_bessel(n_num: &BCNum, x: &BCNum, global_scale: usize) -> BCNum {
+/// The truncated result 0 at the caller's scale.
+fn zero_result(global_scale: usize) -> BCNum {
+    BCNum::new(BigInt::zero(), global_scale)
+}
+
+/// Math exponential function.
+///
+/// For x <= -2.3026·(scale+1) the result is below 10^-(scale+1), because 2.3026 > ln 10, so
+/// its truncation is exactly 0 and nothing is computed. An argument whose integer part exceeds
+/// `EXP_ARG_MAX` is a `MathArgumentTooLarge` error.
+pub fn bc_exp(x: &BCNum, global_scale: usize) -> Result<BCNum, RuntimeError> {
+    if x.coeff.is_negative() {
+        // -x >= 2.3026·(scale+1)  <=>  -coeff·10^4 >= 23026·(scale+1)·10^x.scale
+        let lhs = -&x.coeff * BigInt::from(10_000);
+        let rhs = BigInt::from(23_026) * (BigInt::from(global_scale) + 1) * pow10(x.scale);
+        if lhs >= rhs {
+            return Ok(zero_result(global_scale));
+        }
+    }
+    let int_part = abs_int_part(x)
+        .to_u64()
+        .filter(|&v| v <= EXP_ARG_MAX)
+        .ok_or(RuntimeError::MathArgumentTooLarge)?;
+    // e^x has about 0.4343·x integer digits; for x >= 0 the reduction x = n·ln2 + r scales the
+    // error of ln 2 by e^x, so x/2 extra digits keep the result accurate. For x < 0 the result
+    // is 1/e^|x|, whose absolute error does not grow with |x|, so a few digits for the size of n
+    // suffice. Both stay within MAX_VERIFIED_SCALE because int_part <= EXP_ARG_MAX.
+    let extra = if x.coeff.is_negative() {
+        int_part.to_string().len()
+    } else {
+        usize::try_from(int_part / 2).map_err(|_| RuntimeError::MathArgumentTooLarge)?
+    };
+    let prec = verified_transcendental_guard_prec(x.scale, global_scale, extra);
+
+    let dec_x = Decimal::from_bc_num(x, prec);
+    let dec_res = decimal_exp(&dec_x, prec)?;
+    Ok(dec_res.to_bc_num(global_scale))
+}
+
+/// Bessel function of the first kind J_n(x), with `n` truncated to an integer.
+///
+/// For |n| >= 3·ceil(|x|) and |n| >= 4·(scale+1), |J_n(x)| <= (|x|/2)^|n| / |n|!
+/// <= (e·|x| / (2·|n|))^|n| <= 2^-|n| < 10^-scale (using |n|! >= (|n|/e)^|n|), so the
+/// truncated result is exactly 0. Any other order outside the range of `i64` would need |x| >
+/// 3·10^18, which cannot be computed, and is a `MathArgumentTooLarge` error.
+pub fn bc_bessel(n_num: &BCNum, x: &BCNum, global_scale: usize) -> Result<BCNum, RuntimeError> {
     let n = if n_num.scale > 0 {
         let divisor = pow10(n_num.scale);
         &n_num.coeff / divisor
     } else {
         n_num.coeff.clone()
     };
-    let n_i64 = n.to_i64().unwrap_or(0);
+    let n_abs_big = n.abs();
+    let x_ceil = (x.coeff.abs() + pow10(x.scale) - 1) / pow10(x.scale);
+    if n_abs_big >= BigInt::from(3) * x_ceil
+        && n_abs_big >= BigInt::from(4) * (BigInt::from(global_scale) + 1)
+    {
+        return Ok(zero_result(global_scale));
+    }
+    let n_i64 = n
+        .to_i64()
+        .filter(|&v| v > i64::MIN)
+        .ok_or(RuntimeError::MathArgumentTooLarge)?;
     let prec = verified_transcendental_guard_prec(x.scale, global_scale, 0);
     let dec_x = Decimal::from_bc_num(x, prec);
 
@@ -907,7 +951,7 @@ pub fn bc_bessel(n_num: &BCNum, x: &BCNum, global_scale: usize) -> BCNum {
         } else {
             Decimal::zero(prec)
         };
-        return res_val.to_bc_num(global_scale);
+        return Ok(res_val.to_bc_num(global_scale));
     }
 
     let (n_abs, sign) = verified_bessel_negative_order_parity(n_i64);
@@ -950,12 +994,21 @@ pub fn bc_bessel(n_num: &BCNum, x: &BCNum, global_scale: usize) -> BCNum {
     }
 
     let dec_res = total.mul_int(sign);
-    dec_res.to_bc_num(global_scale)
+    Ok(dec_res.to_bc_num(global_scale))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The fallible math functions, unwrapped for tests whose arguments are in range.
+    fn bc_exp(x: &BCNum, scale: usize) -> BCNum {
+        super::bc_exp(x, scale).unwrap()
+    }
+
+    fn bc_bessel(n: &BCNum, x: &BCNum, scale: usize) -> BCNum {
+        super::bc_bessel(n, x, scale).unwrap()
+    }
 
     #[test]
     fn test_from_string_basic() {

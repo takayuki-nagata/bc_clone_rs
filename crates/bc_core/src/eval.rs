@@ -562,12 +562,12 @@ impl Evaluator {
                             return Ok(bc_ln(&self.try_evaluate(expr)?, self.scale));
                         }
                         ("e", [ExprOrArray::Expr(expr)]) => {
-                            return Ok(bc_exp(&self.try_evaluate(expr)?, self.scale));
+                            return Ok(bc_exp(&self.try_evaluate(expr)?, self.scale)?);
                         }
                         ("j", [ExprOrArray::Expr(expr_n), ExprOrArray::Expr(expr_x)]) => {
                             let n_val = self.try_evaluate(expr_n)?;
                             let x_val = self.try_evaluate(expr_x)?;
-                            return Ok(bc_bessel(&n_val, &x_val, self.scale));
+                            return Ok(bc_bessel(&n_val, &x_val, self.scale)?);
                         }
                         _ => {}
                     }

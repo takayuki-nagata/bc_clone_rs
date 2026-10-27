@@ -100,6 +100,8 @@ requirement; §3.4 defines the one `bc_clone` meets.
 | `BC_DIM_MAX` | 16 777 216 | Valid subscripts are 0..16 777 215 (POSIX: 0..`BC_DIM_MAX`−1), the same range GNU `bc` accepts. |
 | `BC_STRING_MAX` | 2 147 483 647 | Same value as GNU `bc`. |
 | Exponent of `^` | The integer part must fit in a signed 64-bit integer | Same as GNU's "MAX Exponent". |
+| Argument of `e(x)` | The integer part of \|x\| must be at most 2 000 000 000 (`EXP_ARG_MAX`), unless the result truncates to 0 | e^x then has at most about 8.7·10^8 integer digits, and the working precision stays within `MAX_VERIFIED_SCALE` |
+| Order of `j(n,x)` | Must fit in a signed 64-bit integer (excluding its minimum), unless the result truncates to 0 | A larger order that is not provably 0 needs \|x\| > 3·10^18, which cannot be computed |
 | Exact scale of `a ^ b` | `scale(a) · \|b\|` must not exceed `BC_SCALE_MAX` | `bc_clone` computes the exact power and then truncates it. GNU truncates intermediate results, so it can evaluate `0.5 ^ 2000000000` (slowly). |
 
 Every `BCNum` scale stays at most `BC_SCALE_MAX`. This invariant establishes the
@@ -140,7 +142,8 @@ The message texts follow GNU `bc`: `Divide by zero`, `Modulo by zero`, `divide b
 negative power),
 `Square root of a negative number`, `Parameter type mismatch parameter <p>.`,
 `Function <f> not defined.`, `Parameter number mismatch`, `Array <a> subscript out of bounds.`,
-`exponent too large in raise`, `scale too large`. Unlike GNU, `bc_clone` does not print a bytecode
+`exponent too large in raise`, `scale too large`, and `argument too large` (math library; not in
+GNU). Unlike GNU, `bc_clone` does not print a bytecode
 address (`adr=N`).
 
 ### 3.3 Out-of-range and undefined operations
@@ -159,6 +162,9 @@ address (`adr=N`).
 | Input digit ≥ `ibase` | As in GNU: a single-digit number keeps its face value (`ibase=2; 3` → 3); in a multi-digit number, such a digit counts as `ibase`−1 (`ibase=2; 12` → 3) |
 | `break` outside a loop, `return` outside a function | Syntax error `Break outside a for/while` / `Return outside of a function.` (GNU wording) |
 | Calling an undefined function, or calling with the wrong number of arguments | Runtime error |
+| `e(x)` with x <= −2.3026·(`scale`+1) | 0, without computing e^x: 2.3026 > ln 10, so the result is below 10^−(`scale`+1) |
+| `j(n,x)` with \|n\| >= 3·⌈\|x\|⌉ and \|n\| >= 4·(`scale`+1) | 0, without computing the series: \|J_n(x)\| <= (e\|x\|/(2\|n\|))^\|n\| <= 2^−\|n\| < 10^−`scale` |
+| `e(x)` or `j(n,x)` outside the limits of §2 | Runtime error `argument too large` |
 | `l(x)` with `x <= 0` | Returns −(10^scale − 1) for the caller's `scale`, like GNU's library (`scale=3; l(0)` → `-999.000`) |
 
 ### 3.4 Accuracy of the math library

@@ -74,8 +74,8 @@ Every function computes internally with guard digits and truncates to the caller
 | `s(x)`, `c(x)` | Reduce `x` modulo 2π into `[-π, π]` with π carrying 10 guard digits plus one digit per integer digit of `x` (`reduce_angle`), then use the Taylor series directly |
 | `a(x)` | For `|x| > 1` use `π/2 − atan(1/x)`. Then apply four argument halvings `x/(1+√(1+x²))`, the Taylor series, and multiply by 16 |
 | `l(x)` | Write `x = m·2^k` with `m ≥ 0.707`, then use `ln m = 2·artanh((m−1)/(m+1))`. `ln 2` comes from `2·artanh(1/3)` (15 guard digits) |
-| `e(x)` | Write `x = n·ln2 + r`, use the Taylor series for `e^r`, then multiply by `2^n`. Extra guard digits scale with the size of `x` |
-| `j(n,x)` | Power series of `J_n`; for negative orders, `J_{-n} = (-1)^n J_n` |
+| `e(x)` | Write `x = n·ln2 + r`, use the Taylor series for `e^r`, then multiply by `2^n`. Extra guard digits scale with the size of `x`. Results that truncate to 0 are returned without computation; `|x|` above `EXP_ARG_MAX` is an error |
+| `j(n,x)` | Power series of `J_n`; for negative orders, `J_{-n} = (-1)^n J_n`. Orders large enough that the result truncates to 0 return 0 without computation |
 
 Accuracy contract: every result is the exact value truncated toward zero
 (`docs/COMPATIBILITY.md` §3.4). `test_math_library_against_high_precision_oracle` in

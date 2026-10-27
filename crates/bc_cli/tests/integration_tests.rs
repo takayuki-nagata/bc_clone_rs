@@ -748,6 +748,21 @@ fn test_math_library_against_high_precision_oracle() {
         "j(-3,7)",
         "j(20,1)",
         "j(2,-30)",
+        // Around the thresholds below which e(x) and j(n,x) truncate to 0 without being
+        // computed: x = -2.3026·(scale+1), and |n| >= max(3·ceil(|x|), 4·(scale+1)).
+        "e(-0.5)",
+        "e(-2.3025)",
+        "e(-2.3026)",
+        "e(-13.8155)",
+        "e(-13.8156)",
+        "e(-48.3545)",
+        "e(-48.3546)",
+        "j(4,1)",
+        "j(-4,1)",
+        "j(24,8)",
+        "j(-25,8)",
+        "j(83,27)",
+        "j(84,27)",
     ];
     for scale in [0, 5, 20] {
         for expr in exprs {
@@ -851,5 +866,40 @@ fn test_control_characters_in_input() {
     let programs = ["3\u{0}4\n5", "1\u{1}\n\u{7f}\n2"];
     for prog in &programs {
         check_differential(prog, &[]);
+    }
+}
+
+/// Math library arguments far outside the computable range: a result that truncates to 0 is
+/// returned exactly, and anything else is an error rather than a wrong value or a crash.
+#[test]
+fn test_math_library_extreme_arguments() {
+    let bin = env!("CARGO_BIN_EXE_bc_clone");
+    let cases = [
+        ("e(-(10^20))", "0\n", ""),
+        ("e(-(2000000001))", "0\n", ""),
+        (
+            "e(10^20)",
+            "",
+            "Runtime error (func=(main)): argument too large\n",
+        ),
+        (
+            "e(2000000001)",
+            "",
+            "Runtime error (func=(main)): argument too large\n",
+        ),
+        ("j(10^20, 1)", "0\n", ""),
+        ("j(-(10^20), -1)", "0\n", ""),
+        ("j(-9223372036854775808, 1)", "0\n", ""),
+        ("j(9223372036854775808, 1.5)", "0\n", ""),
+        (
+            "j(10^20, 10^20)",
+            "",
+            "Runtime error (func=(main)): argument too large\n",
+        ),
+    ];
+    for (expr, out, err) in cases {
+        let (code, stdout, stderr) = run_command(bin, &["-l"], &format!("{expr}\n"));
+        assert_eq!((stdout.as_str(), stderr.as_str()), (out, err), "{expr}");
+        assert_eq!(code, i32::from(!err.is_empty()), "{expr}");
     }
 }

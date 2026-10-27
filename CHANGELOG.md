@@ -11,6 +11,13 @@
   reported as illegal characters and the rest of the input is processed, on standard input
   (also interactively) and in files. A file that is not UTF-8 is no longer reported as
   `cannot open file`.
+- `e(x)` with a very large argument no longer crashes or returns 0: `e(-(10^20))` used to abort
+  with an internal error and `e(10^20)` printed `0`. A result that truncates to 0 is now
+  returned without computing it, and an argument whose integer part exceeds 2 000 000 000 is the
+  new runtime error `argument too large`.
+- `j(n,x)` with an order outside the 64-bit range no longer computes `J_0`
+  (`j(10^20,1)` printed `.765…`), and `j(-9223372036854775808,1)` no longer aborts. Large orders
+  whose result truncates to 0 return 0; other orders outside the range are `argument too large`.
 - Command-line options follow the XBD 12.2 Utility Syntax Guidelines, as POSIX requires: options
   may be grouped (`-lw`), `--` ends the options, and `-` is a file operand. Long options are
   reported as `bc: unrecognized option '--name'`.
