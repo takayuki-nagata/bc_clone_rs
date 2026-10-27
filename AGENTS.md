@@ -14,8 +14,13 @@ reference for both human contributors and AI coding agents.
   <https://pubs.opengroup.org/onlinepubs/9799919799/utilities/bc.html>.
 - Where POSIX leaves behavior undefined or unspecified, `bc_clone` chooses behavior close to
   GNU `bc` 1.08 and documents it as implementation-defined in `docs/COMPATIBILITY.md`.
-- GNU extensions (multi-letter names, `else`, `print`, `continue`, relational operators as
-  expressions, bare `return`, …) are accepted by default.
+- The GNU extensions listed in `docs/COMPATIBILITY.md` §4 (multi-letter names, relational
+  expressions as statements, `return` without parentheses, one-line function bodies) are accepted
+  by default; `-s` rejects and `-w` warns about them. `else`, `print`, `continue`, `&&` and the
+  other GNU additions are not supported.
+- The executable specification in `crates/bc_spec` encodes POSIX and these implementation-defined
+  choices as a function from input bytes to stdout, stderr and exit status. It is the primary
+  oracle of the differential tests; GNU `bc` remains a secondary check of the specification.
 - Results of the `-l` math library are defined as the mathematically exact value truncated toward
   zero at the current `scale`; GNU `bc` output is *not* the oracle for these functions.
 
@@ -42,7 +47,7 @@ graph TD
 | `crates/bc_c_api` | C ABI (`include/bc_core.h`): `bc_eval`, `bc_eval_callback`, `bc_session_*` |
 | `crates/bc_zephyr` | Zephyr RTOS application logic (self-tests, serial REPL); C trampoline in `examples/zephyr_app` |
 | `crates/bc_qemu_riscv32` | Bare-metal RISC-V 32 self-test runner for QEMU `virt` |
-| `crates/bc_spec` | Executable formal specification (under construction): Verus `spec fn`s compiled by `exec_spec_verified!` into the reference interpreter `bc_spec_oracle` (`scripts/build_spec_oracle.sh`). Built only by Verus, not a Cargo workspace member |
+| `crates/bc_spec` | Executable formal specification: Verus `spec fn`s from input bytes to stdout, stderr and exit status, compiled by `exec_spec_verified!` into the reference interpreter `bc_spec_oracle` (`scripts/build_spec_oracle.sh`). Built only by Verus, not a Cargo workspace member |
 | `examples/m5stamp_c3` | ESP32-C3 bare-metal app (`esp-hal`) |
 | `examples/wasm_web_app` | Browser frontend backed by `bc_core` compiled to `wasm32-unknown-unknown` |
 
@@ -161,10 +166,11 @@ invariant (an internal error) instead of truncating it. Review any new code that
 | Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `spec_num.rs`, `verus_proofs.rs`, `crates/bc_spec`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The math library's certified-truncation decision is proved over the integers (`lemma_certified_truncation`). `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
 | Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only; the 32-bit targets are exercised by the QEMU and Zephyr self-tests). The production C-FFI output helper `write_c_string` never writes at or beyond `buf_size` and always NUL-terminates. C-API NULL and zero-size guards hold. The CLI brace scanner is consistent. |
 | UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, and `bc_cli` (strict provenance, symbolic alignment, Stacked Borrows), and `bc_c_api` again under Tree Borrows. |
+| Executable specification | Verus — `crates/bc_spec`, `scripts/build_spec_oracle.sh`; `crates/bc_cli/tests/spec_differential.rs` | `bc_spec` defines the observable behavior of `bc_clone` without `-l` (decoding, units, tokens, parsing, evaluation, output, diagnostics, exit status), mirroring the production structure. `exec_spec_verified!` proves that the compiled oracle equals the `spec fn`s, except for `vstd`'s unverified `Seq` translations; lemmas prove that its arithmetic (`+ - * / % ^ sqrt`, comparison, `length`, constants under `ibase`) computes the integer definitions of `spec_num.rs` exactly. The differential tests then show that `bc_clone` matches the specification **on the generated inputs only**: there is no proof that `bc_clone` refines the specification, and the specification itself is checked against POSIX only by review, the POSIX suite, and GNU bc. The oracle is slow for deep nesting (its state is copied at every step), so the tests stay a few hundred levels deep. |
 | Property tests | proptest — `crates/bc_core/tests/proptest_suite.rs` | `+ - * / % ^ sqrt` against an exact `BigInt` reference truncated to the POSIX result scale (scales up to 40, negative values). Also checks the scale and exponent limits, integer and fractional base conversion, and that the parser and evaluator never panic. |
 | Differential fuzzing | proptest — `crates/bc_cli/tests/differential_proptest.rs` | Random programs (expressions, registers, arrays, control flow, recursion, runtime errors) produce the same stdout, diagnostics, and exit status as GNU bc. A second generator produces deeply nested programs (operator chains, parentheses, blocks, recursion thousands of levels deep, functions that change `ibase`). 300 + 40 cases per `cargo test`; set `PROPTEST_CASES` for long runs. Inputs where GNU knowingly deviates from POSIX are not generated. |
 | Differential tests | `crates/bc_cli/tests/integration_tests.rs` (helpers in `tests/common`), `scripts/run_gnu_reference_tests.sh` | stdout, diagnostics (GNU's text without `adr=N`), and exit status match GNU bc, except for the documented differences. The math library is checked against GNU bc at `scale + 100`, truncated. |
-| POSIX conformance | `scripts/run_posix_compliance_tests.sh` | Expected outputs derived from POSIX.1-2024 (not from GNU bc). Each case runs in the default mode and with `-s`. `BC_BIN=bc` runs the same cases against GNU bc to sanity-check the expectations. |
+| POSIX conformance | `scripts/run_posix_compliance_tests.sh` | Expected outputs derived from POSIX.1-2024 (not from GNU bc). Each case runs in the default mode and with `-s`. `BC_BIN=bc` runs the same cases against GNU bc to sanity-check the expectations, and `BC_BIN=target/bc_spec_oracle` against the executable specification (its `-l` cases are skipped). |
 | Mutation testing | `cargo mutants` (`.cargo/mutants.toml`) | Diff-based in CI. Some exclusions are broader than the equivalent mutants they target. |
 | Coverage | `cargo llvm-cov` | Line coverage gate of 98% in CI. |
 
@@ -219,6 +225,11 @@ that cannot change a truncated result). Keep each `exclude_re` in `.cargo/mutant
 as possible and state the reason next to it.
 
 ### Formal-verification hygiene
+- A change to observable behavior must change `crates/bc_spec` in the same commit, so that the
+  specification and the implementation stay equal; the differential tests against the
+  specification catch the commits that forget one side. Follow the writing rules in the crate
+  documentation of `bc_spec` (forced by `exec_spec_verified!`), and list any function that has to
+  fall back to `exec_spec_unverified!` there.
 - New kernels go in `verified_kernels.rs` via `dual_verified!` and must be called from production
   code. A proof about a re-implementation does not count as coverage of the production code.
 - Every caller must establish the kernel's `requires` clause.

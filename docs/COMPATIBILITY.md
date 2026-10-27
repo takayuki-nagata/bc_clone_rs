@@ -15,6 +15,11 @@ test suites: if the implementation and this document disagree, that is a bug in 
 > **Status.** Every item in this document is implemented and covered by tests in
 > `crates/bc_cli/tests/integration_tests.rs`, `scripts/run_posix_compliance_tests.sh`, or the unit
 > tests of `bc_core`. A change in behavior must update this document in the same commit.
+>
+> **Executable specification.** `crates/bc_spec` states the same behavior (without `-l`) as a
+> Verus function from input bytes to stdout, stderr and exit status, which the differential tests
+> run as their oracle. Where this document is silent, for example on the exact order of
+> evaluation in §3.5, the specification is the reference.
 
 ---
 
@@ -181,6 +186,21 @@ proved in Verus. The integration test `test_math_library_against_high_precision_
 checks every function against GNU `bc` evaluated at `scale + 100` and truncated.
 
 ---
+
+### 3.5 Order of evaluation
+POSIX does not specify the order in which operands and side effects are evaluated. `bc_clone`
+(and `crates/bc_spec`) use this order, which also decides which error is reported first:
+- The operands of a binary or relational operator are evaluated left to right.
+- In an assignment, the named expression (including an array subscript) is resolved first, then
+  the right-hand side is evaluated, then the value is stored: `a[i++] = i` stores into `a[0]`, and
+  `c += c++` adds the old value of `c`. The value of the assignment is the value assigned, even
+  when a register clamps the stored value.
+- In a call, the number of arguments is checked first; then the arguments are evaluated left to
+  right (an array argument is copied when it is reached, and a type mismatch is reported when its
+  argument is reached); then all parameter frames are pushed, followed by the `auto` frames.
+- A whole input unit is parsed before any of it is executed, so a syntax error anywhere in the
+  unit prevents the whole unit from running, and `quit` anywhere in it stops before the unit
+  runs.
 
 ## 4. Extensions
 

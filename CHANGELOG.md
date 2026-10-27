@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Verification
+- New executable formal specification `crates/bc_spec`: Verus specifications from input bytes to
+  stdout, stderr and exit status (decoding, input units, tokens, parsing, evaluation, output and
+  diagnostics; `-l` is not modeled). `exec_spec_verified!` compiles it into the reference
+  interpreter `bc_spec_oracle` (`scripts/build_spec_oracle.sh`) and proves the compiled code equal
+  to the specification; lemmas prove its arithmetic exact against integer definitions.
+- `crates/bc_cli/tests/spec_differential.rs` compares `bc_clone` with the specification on random
+  programs, including inputs that cannot be compared with GNU `bc` (syntax errors, `ibase`
+  changes, `-s`/`-w`, `quit`, invalid UTF-8), and checks the specification against GNU `bc`. The
+  POSIX conformance script also runs against the specification (`BC_BIN=target/bc_spec_oracle`).
+
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval
   arithmetic) and return a result only when every value within the bounds truncates to it,

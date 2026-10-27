@@ -23,7 +23,7 @@ An arbitrary-precision calculator implementing the POSIX.1-2024 `bc` utility in 
   - **Kani** model-checks those kernels and the C-FFI output helper.
   - **Miri** checks the unit tests for undefined behavior.
   - **Property tests** check the arithmetic against an exact reference.
-  - **Differential tests** check random programs against GNU `bc`, and a **POSIX conformance suite** checks the cases derived from the standard.
+  - An **executable formal specification** (`crates/bc_spec`): Verus specifications of the whole observable behavior (without `-l`), compiled into a reference interpreter whose arithmetic is proved exact. **Differential tests** check random programs, including syntax errors and invalid bytes, against it, and the specification itself against GNU `bc`; a **POSIX conformance suite** checks the cases derived from the standard.
   - **Mutation testing** checks that the tests detect injected faults.
 
 ## Performance & Benchmarks
@@ -241,6 +241,7 @@ bash scripts/serve_wasm.sh
 ### Formal Verification (Verus, Kani, Miri)
 
 - **Verus** (`bash scripts/run_verus_verification.sh`): proves the `requires`/`ensures` contracts of the kernels in `crates/bc_core/src/verified_kernels.rs`. These include the POSIX scale rules, register clamping, the 70-column wrapping step, lexer bounds, Pratt precedence, CLI option classification, and the REPL block scanner. The kernels are defined once with `dual_verified!` and called directly by production code. The evaluator keeps every scale at most `BC_SCALE_MAX`, which establishes the kernels' preconditions at run time. `crates/bc_core/src/verus_proofs.rs` adds lemmas and *design models* of larger algorithms. Production code does not call those models; the module documentation maps each one to the code and tests that cover its production counterpart.
+- **Executable specification** (`bash scripts/build_spec_oracle.sh`, then `BC_SPEC_ORACLE=$PWD/target/bc_spec_oracle cargo test -p bc_clone --test spec_differential`): `crates/bc_spec` defines what `bc_clone` prints and returns for any input without `-l`. Verus proves that the compiled oracle equals the specification and that its arithmetic is exact; the differential tests compare `bc_clone` with it on random inputs. This is evidence on the tested inputs, not a proof that `bc_clone` meets the specification.
 - **Kani** (`bash scripts/run_kani_verification.sh`): bounded model checking of the kernels over all bit patterns, of the C-FFI helper `write_c_string` (never writes beyond the caller's buffer, always NUL-terminates), and of the C-API NULL guards.
 - **Miri** (`bash scripts/run_miri_tests.sh`): runs the unit tests of every host crate under strict provenance and symbolic alignment checks, and the C API again under Tree Borrows.
 
