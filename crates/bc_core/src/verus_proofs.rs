@@ -19,8 +19,9 @@
 //!   the GNU differential and oracle tests in `bc_cli`).
 //!
 //! Model → production correspondence (production line numbers are not tracked):
-//! `verified_pow_binary_loop` → `BCNum::try_pow` (now itself verified in `math.rs`); `verified_obase_frac_*` and
-//! `verified_multi_digit_obase_padding` → `BCNum::format_obase`; `verified_trig_range_reduction`
+//! `verified_pow_binary_loop` → `BCNum::try_pow` (now itself verified in `math.rs`);
+//! `verified_obase_frac_*` and `verified_multi_digit_obase_padding` → `BCNum::format_obase` (now
+//! itself verified as `format_bytes` in `format.rs`); `verified_trig_range_reduction`
 //! → `mathlib::reduce_angle`; `verified_exp_ln2_reduction`, `verified_ln_cayley_transform`,
 //! `verified_atan_inversion_reduction`, `verified_taylor_series_convergence_loop` → the series in
 //! `mathlib.rs`; `verified_scope_guard_lifecycle` → `eval::ScopeGuard` (production
@@ -119,7 +120,7 @@ pub proof fn lemma_pow_base_strictly_increasing(base: nat, exp: nat)
 /// Verified calculation of the minimum fractional digit count $k$ in base `obase`
 /// such that $\text{obase}^k \ge \text{target}$ (where $\text{target} = 10^{\text{scale}}$).
 ///
-/// Mirrors the `#![no_std]` floating-point-free loop in `crates/bc_core/src/math.rs` (`format_obase`):
+/// Mirrors the `#![no_std]` floating-point-free loop in `crates/bc_core/src/format.rs` (`frac_digit_count`):
 /// proves both loop termination (`decreases target - current`) and exact minimality of $k$:
 /// $\text{obase}^k \ge \text{target}$ and ($k > 0 \implies \text{obase}^{k-1} < \text{target}$).
 pub fn verified_obase_frac_digits(obase: u64, target: u64, max_bound: u64) -> (res: (usize, u64))

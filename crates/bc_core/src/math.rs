@@ -21,12 +21,9 @@ use crate::trusted_bigint::{
 use crate::verified_kernels::{BC_SCALE_MAX, MAX_VERIFIED_SCALE};
 use crate::verified_kernels::{
     verified_add_sub_scales, verified_alphanumeric_char_val, verified_bcnum_length,
-    verified_div_scale_and_shift, verified_mul_scale_and_shift,
-    verified_multi_digit_obase_pad_zeros, verified_pow_scale_and_shift,
+    verified_div_scale_and_shift, verified_mul_scale_and_shift, verified_pow_scale_and_shift,
     verified_relational_scale_shifts, verified_sqrt_scale_and_shift,
 };
-use alloc::format;
-use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
 use bc_spec::convert::{clamp_digits, lemma_horner_nonneg};
@@ -34,7 +31,6 @@ use bc_spec::convert::{clamp_digits, lemma_horner_nonneg};
 use bc_spec::power::lemma_pow_positive;
 use core::cmp::Ordering;
 use num_bigint::BigInt;
-use num_traits::{Signed, Zero};
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
@@ -54,12 +50,6 @@ pub(crate) fn pow10(n: usize) -> BigInt {
     BigInt::from(10).pow(exp)
 }
 
-/// The value of an output digit `d`, 0 <= d < obase <= `BC_BASE_MAX` < 2^31. Such a `BigInt`
-/// has no 32-bit limb when it is zero and exactly one otherwise.
-fn digit_value(d: &BigInt) -> usize {
-    d.iter_u32_digits().next().map_or(0, |limb| limb as usize)
-}
-
 verus! {
 
 /// `10^n` for a decimal shift derived from scales. Every scale is at most `BC_SCALE_MAX`, so the
@@ -69,7 +59,7 @@ verus! {
     clippy::cast_possible_truncation,
     reason = "the precondition n <= u32::MAX makes the cast lossless"
 )]
-fn pow10_within(n: usize) -> (r: BigInt)
+pub(crate) fn pow10_within(n: usize) -> (r: BigInt)
     requires
         n <= u32::MAX,
     ensures
@@ -689,119 +679,6 @@ impl BCNum {
         self.try_sqrt(global_scale)
             .unwrap_or_else(|msg| panic!("{}", msg))
     }
-
-    /// Formats the BCNum value as a string in `obase`.
-    pub fn format_obase(&self, obase: usize) -> String {
-        if self.coeff.is_zero() {
-            return "0".to_string();
-        }
-
-        let is_negative = self.coeff < BigInt::zero();
-        let coeff_abs = self.coeff.abs();
-
-        let divisor = pow10(self.scale);
-        let int_part = &coeff_abs / &divisor;
-        let frac_coeff = &coeff_abs % &divisor;
-
-        let mut int_str = String::new();
-        if !int_part.is_zero() {
-            if obase <= 16 {
-                let mut digits = Vec::new();
-                let mut temp = int_part;
-                let ob = BigInt::from(obase);
-                while !temp.is_zero() {
-                    let rem = digit_value(&(&temp % &ob));
-                    digits.push(b"0123456789ABCDEF"[rem] as char);
-                    temp /= &ob;
-                }
-                int_str = digits.into_iter().rev().collect();
-            } else {
-                let digit_width = (obase - 1).to_string().len();
-                let mut digits = Vec::new();
-                let mut temp = int_part;
-                let ob = BigInt::from(obase);
-                while !temp.is_zero() {
-                    let rem = (&temp % &ob).to_string();
-                    let mut padded = String::new();
-                    let pad_zeros = verified_multi_digit_obase_pad_zeros(digit_width, rem.len());
-                    for _ in 0..pad_zeros {
-                        padded.push('0');
-                    }
-                    padded.push_str(&rem);
-                    digits.push(padded);
-                    temp /= &ob;
-                }
-                let mut parts = Vec::new();
-                for d in digits.into_iter().rev() {
-                    parts.push(format!(" {}", d));
-                }
-                int_str = parts.concat();
-            }
-        }
-
-        let mut frac_str = String::new();
-        if self.scale > 0 {
-            let num_digits = if obase != 10 {
-                let target = pow10(self.scale);
-                let mut k = 0usize;
-                let mut current = BigInt::from(1);
-                let ob = BigInt::from(obase);
-                while current < target {
-                    current *= &ob;
-                    k += 1;
-                    if current.is_zero() {
-                        break;
-                    }
-                }
-                k
-            } else {
-                self.scale
-            };
-
-            let mut num = frac_coeff;
-            let den = divisor;
-            let ob = BigInt::from(obase);
-            let mut frac_digits = Vec::new();
-            for _ in 0..num_digits {
-                num *= &ob;
-                let d = &num / &den;
-                frac_digits.push(digit_value(&d));
-                num %= &den;
-            }
-
-            if obase <= 16 {
-                let chars: String = frac_digits
-                    .iter()
-                    .map(|&d| b"0123456789ABCDEF"[d] as char)
-                    .collect();
-                frac_str = format!(".{}", chars);
-            } else {
-                let digit_width = (obase - 1).to_string().len();
-                let mut parts = Vec::new();
-                for (i, &d) in frac_digits.iter().enumerate() {
-                    let s = d.to_string();
-                    let mut padded = String::new();
-                    let pad_zeros = verified_multi_digit_obase_pad_zeros(digit_width, s.len());
-                    for _ in 0..pad_zeros {
-                        padded.push('0');
-                    }
-                    padded.push_str(&s);
-                    if i == 0 {
-                        parts.push(format!(".{}", padded));
-                    } else {
-                        parts.push(format!(" {}", padded));
-                    }
-                }
-                frac_str = parts.concat();
-            }
-        }
-
-        let mut result = format!("{}{}", int_str, frac_str);
-        if is_negative {
-            result = format!("-{}", result);
-        }
-        result
-    }
 }
 
 // The `-l` math library lives in `mathlib.rs`.
@@ -811,6 +688,7 @@ pub use crate::mathlib::{EXP_ARG_MAX, bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_traits::Zero;
 
     // The fallible math functions, unwrapped for tests whose arguments are in range.
     fn bc_sin(x: &BCNum, scale: usize) -> BCNum {

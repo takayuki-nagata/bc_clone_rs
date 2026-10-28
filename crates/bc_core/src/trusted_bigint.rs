@@ -87,6 +87,28 @@ pub fn big_cmp(a: &BigInt, b: &BigInt) -> (r: Ordering)
     a.cmp(b)
 }
 
+/// `a % b`, the remainder of truncating division (`BigInt`'s `%`).
+#[verifier::external_body]
+pub fn big_trem(a: &BigInt, b: &BigInt) -> (r: BigInt)
+    requires
+        big_view(b) != 0,
+    ensures
+        big_view(&r) == big_view(a) - spec_tdiv(big_view(a), big_view(b)) * big_view(b),
+{
+    a % b
+}
+
+/// The value of a non-negative `BigInt` below `2^32` (its only 32-bit limb, or none for 0).
+#[verifier::external_body]
+pub fn big_to_u64_small(a: &BigInt) -> (r: u64)
+    requires
+        0 <= big_view(a) < 0x1_0000_0000,
+    ensures
+        r == big_view(a),
+{
+    a.iter_u32_digits().next().map_or(0, u64::from)
+}
+
 #[verifier::external_body]
 pub fn big_is_zero(a: &BigInt) -> (r: bool)
     ensures
@@ -217,6 +239,9 @@ mod tests {
             }
             prop_assert_eq!(big_is_negative(&big(a)), a < 0);
             prop_assert_eq!(big_cmp(&big(a), &big(b)), a.cmp(&b));
+            if b != 0 {
+                prop_assert_eq!(big_trem(&big(a), &big(b)), big(a - tdiv(a, b) * b));
+            }
             prop_assert_eq!(big_abs(&big(a)), big(a.abs()));
         }
 
@@ -242,6 +267,11 @@ mod tests {
         fn small_steps(a in -(1i128 << 60)..(1i128 << 60), m in 0usize..=36, d in 0usize..=35, e in 0usize..=20) {
             prop_assert_eq!(big_mul_add_small(big(a), m, d), big(a * m as i128 + d as i128));
             prop_assert_eq!(big_pow_usize(m, e), BigInt::from(m).pow(e as u32));
+        }
+
+        #[test]
+        fn small_values(x in any::<u32>()) {
+            prop_assert_eq!(big_to_u64_small(&big(i128::from(x))), u64::from(x));
         }
 
         #[test]
