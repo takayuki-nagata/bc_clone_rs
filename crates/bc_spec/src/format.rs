@@ -12,6 +12,8 @@
 //! refinement proofs can relate numbers by value), and `bc_core`'s `format_obase` can be proved
 //! against `l0_format` without the digit sequences of the executable layer.
 
+#[cfg(verus_keep_ghost)]
+use crate::convert::{lemma_sig_len_value, sig_len, value_bits};
 use crate::num::*;
 use crate::output::*;
 use crate::power::*;
@@ -23,6 +25,7 @@ verus! {
 // ---------------------------------------------------------------------------------------------
 // Definitions
 // ---------------------------------------------------------------------------------------------
+
 
 /// The digits of `n >= 0` in base `ob >= 2`, most significant first; none for 0.
 pub open spec fn l0_int_digits(n: int, ob: int) -> Seq<int>
@@ -395,7 +398,7 @@ pub proof fn lemma_format_num(v: Num, obase: u32)
         wf_num(v),
         2 <= obase <= 2147483647,
         scale_ok(v.scale),
-        v.mag.len() < 0x1000_0000_0000_0000,
+        mag_val(v.mag) < spec_pow_int(2, value_bits()),
     ensures
         format_num(v, obase) == l0_format(to_l0(v), obase),
 {
@@ -411,14 +414,27 @@ pub proof fn lemma_format_num(v: Num, obase: u32)
         // Integer part.
         let ip = drop_mag(v.mag, s);
         lemma_drop_mag(v.mag, s);
-        let steps = (4 * (v.mag.len() as u64) + 4) as u64;
         assert(mag_val(ip) <= mv) by (nonlinear_arith)
             requires
                 mag_val(ip) == mv / p,
                 mv >= 0,
                 p >= 1;
-        lemma_pow10_le_pow2(v.mag.len() as nat);
-        lemma_int_digits_len(mag_val(ip), obase as int, (4 * v.mag.len()) as nat);
+        lemma_mag_bounds(ip);
+        lemma_sig_len_value(ip);
+        let sig = sig_len(ip);
+        let steps = if sig < 0x1000_0000_0000_0000u64 { (4 * sig + 4) as u64 } else { 0xffff_ffff_ffff_ffffu64 };
+        assert(sig < 0x1000_0000_0000_0000u64 || sig == value_bits());
+        if mag_val(ip) > 0 {
+            // ip < 10^sig <= 2^(4 sig).
+            lemma_pow10_le_pow2(sig as nat);
+            lemma_int_digits_len(mag_val(ip), obase as int, (4 * sig) as nat);
+        } else {
+            assert(l0_int_digits(mag_val(ip), obase as int) == Seq::<int>::empty());
+        }
+        if sig == value_bits() {
+            lemma_int_digits_len(mag_val(ip), obase as int, value_bits());
+        }
+        assert(steps >= l0_int_digits(mag_val(ip), obase as int).len());
         lemma_int_digits(ip, obase, steps, seq![]);
         assert(l0_int_text(l0_int_digits(mag_val(ip), obase as int), obase).add(Seq::<u8>::empty())
             =~= l0_int_text(l0_int_digits(mag_val(ip), obase as int), obase));
@@ -454,11 +470,11 @@ pub proof fn lemma_format_num_congruent(v: Num, w: Num, obase: u32)
         to_l0(v) == to_l0(w),
         2 <= obase <= 2147483647,
         scale_ok(v.scale),
-        v.mag.len() < 0x1000_0000_0000_0000,
-        w.mag.len() < 0x1000_0000_0000_0000,
+        mag_val(v.mag) < spec_pow_int(2, value_bits()),
     ensures
         format_num(v, obase) == format_num(w, obase),
 {
+    crate::values::lemma_same_value(v, w);
     lemma_format_num(v, obase);
     lemma_format_num(w, obase);
 }

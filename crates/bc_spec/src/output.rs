@@ -3,6 +3,7 @@
 //! Output: `BCNum::format_obase`, the 70-column wrapping of `WrappedStdout`, and decimal
 //! strings of machine integers.
 
+use crate::convert::*;
 use crate::num::*;
 use crate::power::*;
 use vstd::contrib::exec_spec::*;
@@ -99,9 +100,10 @@ pub open spec fn format_num(v: Num, obase: u32) -> Seq<u8> {
         seq![48u8]
     } else {
         let ip = drop_mag(v.mag, v.scale);
-        // Enough divisions for any number of digits below 2^60 (each digit is at most 4 bits of
-        // value per decimal digit); `u64::MAX` beyond that.
-        let steps = if (v.mag.len() as u64) < 0x1000_0000_0000_0000u64 { (4 * (v.mag.len() as u64) + 4) as u64 } else { 0xffff_ffff_ffff_ffffu64 };
+        // Enough divisions for the significant digits of the integer part (a decimal digit is
+        // less than 4 bits); `u64::MAX` for 2^60 digits or more.
+        let sig = sig_len(ip);
+        let steps = if sig < 0x1000_0000_0000_0000u64 { (4 * sig + 4) as u64 } else { 0xffff_ffff_ffff_ffffu64 };
         let int_str = int_digits(ip, obase, steps, seq![]);
         let frac_str = if v.scale == 0 {
             seq![]

@@ -37,9 +37,10 @@ pub open spec fn num_length(a: Num) -> Num {
     let k = sig_len(drop_mag(a.mag, a.scale));
     let v = if k == 0 {
         if a.scale >= 1 { a.scale as u64 } else { 1u64 }
-    } else if k <= 0xffff_ffffu64 {
+    } else if k <= 0x1000_0000_0000_0000u64 {
         (k + a.scale as u64) as u64
     } else {
+        // Not reached for values below 2^value_bits() (`lemma_num_length`).
         0u64
     };
     Num { neg: false, mag: u64_mag(v), scale: 0u32 }
@@ -119,8 +120,83 @@ pub proof fn lemma_sig_len(m: Seq<u8>)
     }
 }
 
+/// The size of the values the proofs about digit counts cover: below `2^value_bits()` (`2^60`
+/// bits, 128 PiB), which every number that fits in memory satisfies.
+pub open spec fn value_bits() -> nat {
+    0x1000_0000_0000_0000
+}
+
+/// `2^k <= 10^k`.
+pub proof fn lemma_pow2_le_pow10(k: nat)
+    ensures
+        spec_pow_int(2, k) <= pow10(k),
+        spec_pow_int(2, k) >= 1,
+    decreases k,
+{
+    if k > 0 {
+        lemma_pow2_le_pow10((k - 1) as nat);
+        assert(pow10(k) == 10 * pow10((k - 1) as nat));
+        assert(spec_pow_int(2, k) == 2 * spec_pow_int(2, (k - 1) as nat));
+    }
+}
+
+/// `2^a < 2^b` implies `a < b`.
+pub proof fn lemma_pow2_lt(a: nat, b: nat)
+    requires
+        spec_pow_int(2, a) < spec_pow_int(2, b),
+    ensures
+        a < b,
+{
+    if a >= b {
+        lemma_pow_add(2, b, (a - b) as nat);
+        assert(b + (a - b) as nat == a);
+        lemma_pow2_le_pow10(b);
+        lemma_pow2_le_pow10((a - b) as nat);
+        assert(spec_pow_int(2, b) * spec_pow_int(2, (a - b) as nat) >= spec_pow_int(2, b)) by (nonlinear_arith)
+            requires
+                spec_pow_int(2, (a - b) as nat) >= 1,
+                spec_pow_int(2, b) >= 1;
+    }
+}
+
+/// `sig_len` counts the digits of any value below `2^value_bits()`, whatever the length of the
+/// digit sequence (leading zeros do not count).
+pub proof fn lemma_sig_len_value(m: Seq<u8>)
+    requires
+        wf_mag(m),
+        mag_val(m) < spec_pow_int(2, value_bits()),
+    ensures
+        mag_val(m) == 0 <==> sig_len(m) == 0,
+        mag_val(m) > 0 ==> is_digit_count(mag_val(m), sig_len(m) as nat),
+        sig_len(m) <= value_bits(),
+    decreases m.len(),
+{
+    lemma_split(m);
+    lemma_mag_bounds(m);
+    if m.len() > 0 {
+        let rm = m.drop_first();
+        lemma_mag_bounds(rm);
+        assert(mag_val(rm) <= mag_val(m));
+        lemma_sig_len_value(rm);
+        let r = sig_len(rm);
+        if r > 0 {
+            let k = r as nat;
+            assert(r < 0xffff_ffff_ffff_ffffu64);
+            assert(pow10(k) == 10 * pow10((k - 1) as nat));
+            assert(pow10((k + 1) as nat) == 10 * pow10(k));
+            assert(((k + 1) - 1) as nat == k);
+            // The value is at least 10^k >= 2^k, so k < value_bits().
+            lemma_pow2_le_pow10(k);
+            assert(pow10(k) <= mag_val(m));
+            lemma_pow2_lt(k, value_bits());
+        } else {
+            assert(pow10(1) == 10 * pow10(0));
+        }
+    }
+}
+
 pub proof fn lemma_num_length(a: Num)
-    requires wf_num(a), scale_ok(a.scale), a.mag.len() <= 0xffff_ffff,
+    requires wf_num(a), scale_ok(a.scale), mag_val(a.mag) < spec_pow_int(2, value_bits()),
     ensures
         ({
             let r = num_length(a);
@@ -133,14 +209,21 @@ pub proof fn lemma_num_length(a: Num)
 {
     let d = drop_mag(a.mag, a.scale);
     lemma_drop_mag(a.mag, a.scale);
-    assert(d.len() <= a.mag.len()) by { lemma_drop_len(a.mag, a.scale); }
-    lemma_sig_len(d);
+    lemma_pow10_pos(a.scale as nat);
+    lemma_mag_bounds(a.mag);
+    assert(mag_val(d) <= mag_val(a.mag)) by (nonlinear_arith)
+        requires
+            mag_val(d) == mag_val(a.mag) / pow10(a.scale as nat),
+            mag_val(a.mag) >= 0,
+            pow10(a.scale as nat) >= 1;
+    lemma_sig_len_value(d);
     let k = sig_len(d);
     let v = if k == 0 {
         if a.scale >= 1 { a.scale as u64 } else { 1u64 }
     } else {
         (k + a.scale as u64) as u64
     };
+    assert(k <= 0x1000_0000_0000_0000u64);
     lemma_u64_mag(v);
 }
 

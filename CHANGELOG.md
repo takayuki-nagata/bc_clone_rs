@@ -25,7 +25,10 @@
   `crates/bc_spec/src/format.rs`: digits by repeated division and multiplication, and the
   smallest `k` with `obase^k >= 10^scale` fraction digits), and Verus proves that the executable
   `format_num` computes it for every `obase` from 2 to `BC_BASE_MAX`. The specification now also
-  prints the integer part of numbers with 2^28 or more digits, which it used to omit.
+  prints the integer part of numbers with 2^28 or more digits, which it used to omit. The proofs
+  about digit counts depend on the value of a number (below 2^(2^60)), not on the length of its
+  digit sequence: the specification takes the number of division steps from the significant
+  digits, and `length()` of an integer part with more than 2^32 digits is no longer 0.
 - The output of numbers in `bc_core` (`BCNum::format_bytes`, behind `format_obase`) is verified
   with Verus to write that definition for every `obase`, with the same output and speed as before.
   The 70-column line wrapping (`WrappedStdout`) is verified against the specification's
