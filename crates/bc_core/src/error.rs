@@ -34,6 +34,10 @@ pub enum RuntimeError {
     NestingTooDeep,
 }
 
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExBcError(BcError);
+
 } // verus!
 
 impl fmt::Display for RuntimeError {

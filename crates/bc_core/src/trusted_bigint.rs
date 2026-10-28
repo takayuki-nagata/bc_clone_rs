@@ -16,6 +16,8 @@
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::*;
 use alloc::string::ToString;
+#[cfg(verus_keep_ghost)]
+use bc_spec::convert::value_bits;
 use core::cmp::Ordering;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive, Zero};
@@ -33,6 +35,13 @@ pub struct ExBigInt(BigInt);
 
 /// The integer a `BigInt` denotes.
 pub uninterp spec fn big_view(b: &BigInt) -> int;
+
+/// Every `BigInt` has fewer than 2^60 bits (128 PiB): it is below `2^value_bits()` in absolute
+/// value, the bound under which the specification's digit counts are proved.
+pub axiom fn axiom_bigint_size(b: &BigInt)
+    ensures
+        -spec_pow_int(2, value_bits()) < big_view(b) < spec_pow_int(2, value_bits()),
+;
 
 #[verifier::external_body]
 pub fn big_zero() -> (r: BigInt)
@@ -56,6 +65,14 @@ pub fn big_sub(a: &BigInt, b: &BigInt) -> (r: BigInt)
         big_view(&r) == big_view(a) - big_view(b),
 {
     a - b
+}
+
+#[verifier::external_body]
+pub fn big_neg(a: &BigInt) -> (r: BigInt)
+    ensures
+        big_view(&r) == -big_view(a),
+{
+    -a
 }
 
 #[verifier::external_body]
@@ -233,6 +250,7 @@ mod tests {
             prop_assert_eq!(big_add(&big(a), &big(b)), big(a + b));
             prop_assert_eq!(big_sub(&big(a), &big(b)), big(a - b));
             prop_assert_eq!(big_mul(&big(a), &big(b)), big(a * b));
+            prop_assert_eq!(big_neg(&big(a)), big(-a));
             prop_assert_eq!(big_is_zero(&big(a)), a == 0);
             if b != 0 {
                 prop_assert_eq!(big_tdiv(&big(a), &big(b)), big(tdiv(a, b)));

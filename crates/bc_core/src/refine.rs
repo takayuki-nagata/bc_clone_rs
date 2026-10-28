@@ -22,15 +22,17 @@
 //! that did not run out of fuel and corresponds to it (`bc_spec::fuel` combines the fuels of
 //! sub-evaluations).
 
+use crate::error::{BcError, RuntimeError};
 use crate::math::BCNum;
 use crate::parser::{
     AssignOp, BinOp, Expr, ExprOrArray, FunctionDef, Param, Register, RelOp, Stmt,
 };
 use crate::spec_num::*;
+use crate::verified_kernels::BC_SCALE_MAX;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-use bc_spec::eval::{ArrBind, ArrFrame, EState, Elem, Func, VarBind};
+use bc_spec::eval::*;
 use bc_spec::num::{Num, to_l0, wf_num};
 use bc_spec::parser::{Arg, Node};
 use vstd::prelude::*;
@@ -49,12 +51,12 @@ pub open spec fn text_view(s: String) -> Seq<u8> {
     encode_utf8(s@)
 }
 
-/// A production number has the L0 value of a specification number. Specification numbers are
-/// well formed and shorter than 2^60 digits (`lemma_format_num`'s precondition).
+/// A production number has the L0 value of a specification number, and its scale is within
+/// `BC_SCALE_MAX` (the value is below `2^value_bits()` by `axiom_bigint_size`).
 pub open spec fn r_num(b: BCNum, x: Num) -> bool {
     &&& wf_num(x)
-    &&& x.mag.len() < 0x1000_0000_0000_0000
     &&& b.val() == to_l0(x)
+    &&& b.scale <= BC_SCALE_MAX
 }
 
 pub open spec fn reg_code(r: Register) -> u8 {
@@ -324,6 +326,107 @@ pub open spec fn r_funcs(m: Map<String, FunctionDef>, funcs: Seq<Func>) -> bool 
 
 pub open spec fn r_calls(ps: Seq<String>, ss: Seq<Seq<u8>>) -> bool {
     ps.len() == ss.len() && forall|i: int| 0 <= i < ps.len() ==> #[trigger] text_view(ps[i]) == ss[i]
+}
+
+// ---------------------------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------------------------
+
+/// The message of a runtime error, as the specification writes it.
+pub open spec fn runtime_msg(k: RuntimeError) -> Seq<u8> {
+    match k {
+        RuntimeError::DivideByZero => msg_divide_by_zero(),
+        RuntimeError::NegativePowerOfZero => msg_negative_power_of_zero(),
+        RuntimeError::ModuloByZero => msg_modulo_by_zero(),
+        RuntimeError::NegativeSqrt => msg_negative_sqrt(),
+        RuntimeError::UndefinedFunction(n) => msg_undefined_function(text_view(n)),
+        RuntimeError::ParameterMismatch => msg_parameter_mismatch(),
+        RuntimeError::ParameterTypeMismatch(n) => msg_parameter_type(text_view(n)),
+        RuntimeError::ArraySubscriptOutOfBounds(n) => msg_subscript(text_view(n)),
+        RuntimeError::ExponentTooLarge => msg_exponent_too_large(),
+        RuntimeError::ScaleTooLarge => msg_scale_too_large(),
+        // `-l` is not modeled.
+        RuntimeError::MathArgumentTooLarge => Seq::empty(),
+        RuntimeError::NestingTooDeep => msg_nesting_too_deep(),
+    }
+}
+
+/// A production error is the specification's runtime error (never "out of fuel").
+pub open spec fn r_err(e: BcError, x: RErr) -> bool {
+    !x.out_of_fuel && match e {
+        BcError::Runtime { kind, func } => x.msg == runtime_msg(kind) && match func {
+            Some(f) => x.has_func && x.func == text_view(f),
+            None => !x.has_func,
+        },
+        _ => false,
+    }
+}
+
+/// The expressions whose evaluation is proved to refine the specification so far;
+/// the others are evaluated by trusted code that only keeps `Evaluator::inv`.
+pub open spec fn in_fragment(e: Expr) -> bool
+    decreases e,
+{
+    match e {
+        Expr::RegisterAccess(_) => true,
+        Expr::Paren(a) => in_fragment(*a),
+        Expr::Negate(a) => in_fragment(*a),
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Uniqueness of the L0 characterizations
+// ---------------------------------------------------------------------------------------------
+
+pub proof fn lemma_pow10_mono(a: nat, b: nat)
+    requires
+        a <= b,
+    ensures
+        pow10(a) <= pow10(b),
+    decreases b,
+{
+    if a < b {
+        lemma_pow10_mono(a, (b - 1) as nat);
+        lemma_pow10_pos((b - 1) as nat);
+        assert(pow10(b) == 10 * pow10((b - 1) as nat));
+    }
+}
+
+/// The number of digits of a value is unique.
+pub proof fn lemma_digit_count_unique(n: int, k1: nat, k2: nat)
+    requires
+        is_digit_count(n, k1),
+        is_digit_count(n, k2),
+    ensures
+        k1 == k2,
+{
+    if k1 < k2 {
+        lemma_pow10_mono(k1, (k2 - 1) as nat);
+    } else if k2 < k1 {
+        lemma_pow10_mono(k2, (k1 - 1) as nat);
+    }
+}
+
+/// The integer square root is unique.
+pub proof fn lemma_isqrt_unique(n: int, r1: int, r2: int)
+    requires
+        is_isqrt(n, r1),
+        is_isqrt(n, r2),
+    ensures
+        r1 == r2,
+{
+    if r1 < r2 {
+        assert((r1 + 1) * (r1 + 1) <= r2 * r2) by (nonlinear_arith)
+            requires
+                0 <= r1,
+                r1 + 1 <= r2;
+    } else if r2 < r1 {
+        assert((r2 + 1) * (r2 + 1) <= r1 * r1) by (nonlinear_arith)
+            requires
+                0 <= r2,
+                r2 + 1 <= r1;
+    }
 }
 
 } // verus!

@@ -258,6 +258,12 @@ as possible and state the reason next to it.
   `src/eval.rs`), which maintain `Evaluator::inv` (registers in range, every stored scale at most
   `BC_SCALE_MAX`). Reading a name does not create its binding. Other trusted facts about the
   standard library (`String` keys) are the axioms in `trusted_std.rs`.
+- The refinement theorem of expression evaluation is the postcondition of `Evaluator::eval_ref`
+  (behind `try_evaluate`): if the state corresponds to the specification's (`r_state`) and the
+  expression to an arena subtree (`r_expr`), then for every fuel with which the specification's
+  `ev` finishes, the result and the new state correspond to it (`r_result`). It covers the
+  expressions of `refine::in_fragment`, which grows as the proofs proceed; the others go
+  through `eval_other`, a trusted boundary whose specification only keeps `Evaluator::inv`.
 - Trusted assumptions about `BigInt` go only in `trusted_bigint.rs`, as `#[verifier::external_body]`
   one-line wrappers with a test each. Name a function there rather than using an operator on
   `BigInt` in verified code.

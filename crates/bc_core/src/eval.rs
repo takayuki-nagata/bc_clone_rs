@@ -27,6 +27,7 @@ use crate::parser::{
 use crate::refine::*;
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::SpecBCNum;
+use crate::trusted_bigint::{big_from_usize, big_neg};
 #[cfg(verus_keep_ghost)]
 use crate::trusted_std::axiom_string_obeys_cmp;
 use crate::verified_kernels::{
@@ -35,7 +36,19 @@ use crate::verified_kernels::{
     verified_should_abort_execution,
 };
 #[cfg(verus_keep_ghost)]
-use bc_spec::eval::EState;
+use bc_spec::eval::{
+    ER, EState, er_ok, ev, ev_node, ev_unary, negate, num_u64, reg_get, with_depth,
+};
+#[cfg(verus_keep_ghost)]
+use bc_spec::fuel::done;
+#[cfg(verus_keep_ghost)]
+use bc_spec::num::lemma_is_zero_mag;
+#[cfg(verus_keep_ghost)]
+use bc_spec::parser::Node;
+#[cfg(verus_keep_ghost)]
+use bc_spec::power::lemma_u64_mag;
+#[cfg(not(verus_keep_ghost))]
+use verus_builtin::Ghost;
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
@@ -190,7 +203,7 @@ pub(crate) open spec fn frames_ok(s: Seq<BTreeMap<usize, BCNum>>) -> bool {
 impl Evaluator {
     /// The evaluator's invariant (`docs/COMPATIBILITY.md` §2): registers in range, and every
     /// stored number with a scale of at most `BC_SCALE_MAX`.
-    pub(crate) open spec fn inv(&self) -> bool {
+    pub closed spec fn inv(&self) -> bool {
         &&& self.scale <= BC_SCALE_MAX
         &&& 2 <= self.ibase <= IBASE_MAX
         &&& 2 <= self.obase <= BC_BASE_MAX
@@ -454,6 +467,268 @@ impl Evaluator {
     }
 }
 
+/// The ghost arguments of the refinement proofs; `()` in normal builds, where `verus!` erases
+/// the proofs but keeps `Ghost` parameters.
+#[cfg(verus_keep_ghost)]
+pub(crate) type SpecNodes = Seq<bc_spec::parser::Node>;
+#[cfg(not(verus_keep_ghost))]
+pub(crate) type SpecNodes = ();
+#[cfg(verus_keep_ghost)]
+pub(crate) type SpecState = EState;
+#[cfg(not(verus_keep_ghost))]
+pub(crate) type SpecState = ();
+
+/// The result of evaluating corresponds to the specification's `ER`: an error leaves the
+/// evaluator at depth `d` (the specification leaves its depth deeper, which `run_unit` resets).
+pub(crate) open spec fn r_result(r: Result<BCNum, BcError>, e: Evaluator, x: ER, d: usize) -> bool {
+    match r {
+        Ok(v) => x.ok && r_num(v, x.val) && r_state(e, x.st),
+        Err(err) => !x.ok && r_err(err, x.err) && r_state(e, with_depth(x.st, d as u64)),
+    }
+}
+
+/// `e1` and `e2` differ at most in their evaluation depth.
+pub(crate) open spec fn same_but_depth(e1: Evaluator, e2: Evaluator) -> bool {
+    &&& e1.variables == e2.variables
+    &&& e1.arrays == e2.arrays
+    &&& e1.functions == e2.functions
+    &&& e1.scale == e2.scale
+    &&& e1.ibase == e2.ibase
+    &&& e1.obase == e2.obase
+    &&& e1.math_enabled == e2.math_enabled
+    &&& e1.stdout_writer == e2.stdout_writer
+    &&& e1.stderr_writer == e2.stderr_writer
+    &&& e1.break_flag == e2.break_flag
+    &&& e1.return_flag == e2.return_flag
+    &&& e1.return_value == e2.return_value
+    &&& e1.quit_flag == e2.quit_flag
+    &&& e1.extension_policy == e2.extension_policy
+    &&& e1.call_stack == e2.call_stack
+    &&& e1.max_depth == e2.max_depth
+    &&& e1.invocation_ibase == e2.invocation_ibase
+}
+
+/// Changing only the depth keeps the state related, at the new depth.
+pub(crate) proof fn lemma_r_state_depth(e1: Evaluator, e2: Evaluator, st: EState)
+    requires
+        r_state(e1, st),
+        same_but_depth(e1, e2),
+    ensures
+        r_state(e2, with_depth(st, e2.eval_depth as u64)),
+{
+}
+
+impl Evaluator {
+    /// Evaluates an AST expression node, returning Err on runtime math/call errors.
+    pub fn try_evaluate(&mut self, node: &Expr) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+    {
+        self.eval_ref(node, Ghost(arbitrary()), Ghost(0usize), Ghost(arbitrary()))
+    }
+
+    /// `try_evaluate` with the arena subtree `n` of `nodes` and the specification state `st` it
+    /// corresponds to: one nesting level around `eval_node_ref` (the specification's `ev`).
+    /// Whenever the specification finishes (with any fuel), the result corresponds to it.
+    #[verifier::exec_allows_no_decreases_clause]
+    pub(crate) fn eval_ref(
+        &mut self,
+        node: &Expr,
+        Ghost(nodes): Ghost<SpecNodes>,
+        Ghost(n): Ghost<usize>,
+        Ghost(st): Ghost<SpecState>,
+    ) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(*node, nodes, n) && in_fragment(*node)) ==> forall|f: u64|
+                done(#[trigger] ev(nodes, n, st, f)) ==> r_result(r, *final(self), ev(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(*node, nodes, n) && in_fragment(*node);
+        if !verified_nesting_within_limit(self.eval_depth, 1, self.max_depth) {
+            let r = Err(BcError::Runtime { kind: RuntimeError::NestingTooDeep, func: None });
+            proof {
+                if hyp {
+                    assert(with_depth(st, d as u64) == st);
+                    assert forall|f: u64| done(#[trigger] ev(nodes, n, st, f)) implies r_result(r, *self, ev(nodes, n, st, f), d) by {}
+                }
+            }
+            return r;
+        }
+        let ghost before = *self;
+        self.eval_depth += 1;
+        let ghost st1 = with_depth(st, (d + 1) as u64);
+        proof {
+            if hyp {
+                lemma_r_state_depth(before, *self, st);
+            }
+        }
+        let r = self.eval_node_ref(node, Ghost(nodes), Ghost(n), Ghost(st1));
+        let ghost mid = *self;
+        self.eval_depth -= 1;
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev(nodes, n, st, f)) implies r_result(r, *self, ev(nodes, n, st, f), d) by {
+                    let x = ev_node(nodes, n, st1, (f - 1) as u64);
+                    assert(done(x));
+                    assert(r_result(r, mid, x, (d + 1) as usize));
+                    if r is Ok {
+                        lemma_r_state_depth(mid, *self, x.st);
+                        assert(with_depth(with_depth(x.st, d as u64), st.depth) == with_depth(x.st, st.depth));
+                    } else {
+                        lemma_r_state_depth(mid, *self, with_depth(x.st, (d + 1) as u64));
+                        assert(with_depth(with_depth(x.st, (d + 1) as u64), d as u64) == with_depth(x.st, d as u64));
+                    }
+                }
+            }
+        }
+        r
+    }
+
+    /// `evaluate_node` (the specification's `ev_node`) for the expressions in `in_fragment`;
+    /// the others go to `eval_other`.
+    #[verifier::exec_allows_no_decreases_clause]
+    pub(crate) fn eval_node_ref(
+        &mut self,
+        node: &Expr,
+        Ghost(nodes): Ghost<SpecNodes>,
+        Ghost(n): Ghost<usize>,
+        Ghost(st): Ghost<SpecState>,
+    ) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(*node, nodes, n) && in_fragment(*node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        match node {
+            Expr::RegisterAccess(reg) => self.eval_register(*reg, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::Paren(inner) => self.eval_paren(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::Negate(inner) => self.eval_negate(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
+            _ => self.eval_other(node),
+        }
+    }
+
+    fn eval_register(&mut self, reg: Register, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+        ensures
+            *final(self) == *old(self),
+            r is Ok && r->Ok_0.scale == 0,
+            (r_state(*old(self), st) && r_expr(Expr::RegisterAccess(reg), nodes, n)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let value = match reg {
+            Register::Scale => self.scale,
+            Register::Ibase => self.ibase,
+            Register::Obase => self.obase,
+        };
+        let v = BCNum::new(big_from_usize(value), 0);
+        proof {
+            let x = num_u64(reg_get(st, reg_code(reg)) as u64);
+            lemma_u64_mag(reg_get(st, reg_code(reg)) as u64);
+        }
+        Ok(v)
+    }
+
+    #[verifier::exec_allows_no_decreases_clause]
+    fn eval_paren(&mut self, Ghost(node): Ghost<Expr>, inner: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            node == Expr::Paren(Box::new(*inner)),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(node, nodes, n) && in_fragment(node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n) && in_fragment(node);
+        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Paren(j) => j, _ => 0usize } } else { 0usize };
+        let r = self.eval_ref(inner, Ghost(nodes), Ghost(j), Ghost(st));
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(r, *self, ev_node(nodes, n, st, f), d) by {
+                    assert(f >= 1);
+                    assert(ev_node(nodes, n, st, f) == ev(nodes, j, st, (f - 1) as u64));
+                }
+            }
+        }
+        r
+    }
+
+    #[verifier::exec_allows_no_decreases_clause]
+    fn eval_negate(&mut self, Ghost(node): Ghost<Expr>, inner: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            node == Expr::Negate(Box::new(*inner)),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(node, nodes, n) && in_fragment(node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n) && in_fragment(node);
+        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Neg(j) => j, _ => 0usize } } else { 0usize };
+        let r0 = self.eval_ref(inner, Ghost(nodes), Ghost(j), Ghost(st));
+        let v = match r0 {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            let x = ev(nodes, j, st, (f - 2) as u64);
+                            assert(f >= 2);
+                            assert(done(x));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let w = BCNum::new(big_neg(&v.coeff), v.scale);
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Ok(w), *self, ev_node(nodes, n, st, f), d) by {
+                    let x = ev(nodes, j, st, (f - 2) as u64);
+                    assert(f >= 2);
+                    assert(done(x));
+                    lemma_is_zero_mag(x.val.mag);
+                    assert(r_num(w, negate(x.val)));
+                }
+            }
+        }
+        Ok(w)
+    }
+
+    /// The trusted boundary of the expressions not proved yet: `evaluate_node`'s code for them,
+    /// assumed to keep the invariant and the depth.
+    #[verifier::external_body]
+    fn eval_other(&mut self, node: &Expr) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+    {
+        self.eval_other_impl(node)
+    }
+}
+
 } // verus!
 
 impl ErrWriter {
@@ -700,25 +975,9 @@ impl Evaluator {
         }
     }
 
-    /// Evaluates an AST expression node, returning Err on runtime math/call errors.
-    pub fn try_evaluate(&mut self, node: &Expr) -> Result<BCNum, BcError> {
-        self.enter_eval()?;
-        let result = self.evaluate_node(node);
-        self.eval_depth -= 1;
-        result
-    }
-
-    /// Counts one more level of evaluation, failing with `NestingTooDeep` beyond `max_depth`.
-    /// Every caller decrements `eval_depth` when the level is left; `bc_core` does not unwind.
-    fn enter_eval(&mut self) -> Result<(), BcError> {
-        if !verified_nesting_within_limit(self.eval_depth, 1, self.max_depth) {
-            return Err(RuntimeError::NestingTooDeep.into());
-        }
-        self.eval_depth += 1;
-        Ok(())
-    }
-
-    fn evaluate_node(&mut self, node: &Expr) -> Result<BCNum, BcError> {
+    /// The expressions that `eval_node_ref` does not handle yet (not verified).
+    /// `eval_other` states what the verified code relies on.
+    fn eval_other_impl(&mut self, node: &Expr) -> Result<BCNum, BcError> {
         match node {
             Expr::Number(value) => self.literal(value),
             Expr::Variable(name) => Ok(self.var_get(name)),
@@ -914,6 +1173,17 @@ impl Evaluator {
     #[cfg(test)]
     pub fn evaluate(&mut self, node: &Expr) -> BCNum {
         self.try_evaluate(node).unwrap_or_else(|e| panic!("{}", e))
+    }
+
+    /// Counts one more level of statement execution, failing with `NestingTooDeep` beyond
+    /// `max_depth` (expressions do this in the verified `eval_ref`). The caller decrements
+    /// `eval_depth` when the level is left; `bc_core` does not unwind.
+    fn enter_eval(&mut self) -> Result<(), BcError> {
+        if !verified_nesting_within_limit(self.eval_depth, 1, self.max_depth) {
+            return Err(RuntimeError::NestingTooDeep.into());
+        }
+        self.eval_depth += 1;
+        Ok(())
     }
 
     /// Executes an AST statement node, returning Err on runtime errors.
