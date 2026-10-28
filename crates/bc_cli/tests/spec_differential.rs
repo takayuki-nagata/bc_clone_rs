@@ -403,14 +403,13 @@ mod parser_relation {
 
     /// Parses every unit of `input` with both parsers and checks `r_parsed`, as
     /// `Evaluator::run_unit` and the specification's `run_unit` parse it under `policy`.
-    pub fn check(input: &[u8], policy: ExtensionPolicy) {
-        const MAX_DEPTH: usize = 1000;
+    pub fn check(input: &[u8], policy: ExtensionPolicy, max_depth: usize) {
         let units = exec_split_units(&exec_utf8_lossy(input));
         for unit in units {
             let text = String::from_utf8(unit.text.clone()).expect("utf8_lossy gives UTF-8");
             let cfg = ExecPCfg {
                 record_extensions: policy != ExtensionPolicy::Allow,
-                max_depth: MAX_DEPTH as u64,
+                max_depth: max_depth as u64,
             };
             let p = exec_parse_unit(&exec_tokenize(&unit.text), &cfg);
             if p.err.out_of_fuel {
@@ -419,7 +418,7 @@ mod parser_relation {
             let mut ext = Vec::new();
             let parsed = Parser::try_new(Lexer::new(&text)).and_then(|mut parser| {
                 parser.set_extension_policy(policy);
-                parser.set_max_depth(MAX_DEPTH);
+                parser.set_max_depth(max_depth);
                 let stmts = parser.try_parse_program();
                 ext = parser.take_extension_uses();
                 stmts
@@ -451,10 +450,14 @@ mod parser_relation {
 
 /// Runs `parser_relation::check` on a thread with room for the compiled specification's
 /// recursion.
-fn check_parser_relation(input: Vec<u8>, policy: bc_core::parser::ExtensionPolicy) {
+fn check_parser_relation(
+    input: Vec<u8>,
+    policy: bc_core::parser::ExtensionPolicy,
+    max_depth: usize,
+) {
     std::thread::Builder::new()
         .stack_size(256 << 20)
-        .spawn(move || parser_relation::check(&input, policy))
+        .spawn(move || parser_relation::check(&input, policy, max_depth))
         .expect("spawn")
         .join()
         .expect("the parser relation holds");
@@ -472,16 +475,105 @@ proptest! {
     fn prop_parser_output_corresponds_to_spec(prog in spec_program(), policy in 0..3u8) {
         use bc_core::parser::ExtensionPolicy;
         let policy = [ExtensionPolicy::Allow, ExtensionPolicy::Warn, ExtensionPolicy::Reject][policy as usize];
-        check_parser_relation(prog.into_bytes(), policy);
+        check_parser_relation(prog.into_bytes(), policy, 1000);
     }
 
     #[test]
     fn prop_parser_output_corresponds_to_spec_on_bytes(input in byte_input()) {
-        check_parser_relation(input, bc_core::parser::ExtensionPolicy::Allow);
+        check_parser_relation(input, bc_core::parser::ExtensionPolicy::Allow, 1000);
     }
 
     #[test]
     fn prop_parser_output_corresponds_to_spec_on_gnu_programs(prog in program()) {
-        check_parser_relation(prog.into_bytes(), bc_core::parser::ExtensionPolicy::Allow);
+        check_parser_relation(prog.into_bytes(), bc_core::parser::ExtensionPolicy::Allow, 1000);
+    }
+}
+
+/// Expressions and statements nested around a small `max_depth`, so that the nesting limit is
+/// reached by every construct: the parser's heights (`Parser::check_height`) must match the
+/// specification's exactly at the boundary.
+fn nested_unit() -> impl Strategy<Value = String> {
+    let atom = prop_oneof![
+        Just("a".to_string()),
+        Just("1".to_string()),
+        Just("a[1]".to_string()),
+        Just("scale".to_string()),
+    ];
+    let expr = atom.prop_recursive(14, 64, 2, |inner| {
+        prop_oneof![
+            inner.clone().prop_map(|e| format!("-{e}")),
+            inner.clone().prop_map(|e| format!("({e})")),
+            inner.clone().prop_map(|e| format!("a[{e}]")),
+            inner.clone().prop_map(|e| format!("a = {e}")),
+            inner.clone().prop_map(|e| format!("length({e})")),
+            Just("++a".to_string()),
+            Just("a--".to_string()),
+            (inner.clone(), inner.clone()).prop_map(|(l, r)| format!("{l} + {r}")),
+            (inner.clone(), inner.clone()).prop_map(|(l, r)| format!("{l} * {r}")),
+            (inner.clone(), inner.clone()).prop_map(|(l, r)| format!("{l} ^ {r}")),
+            (inner.clone(), inner).prop_map(|(l, r)| format!("{l} < {r}")),
+        ]
+    });
+    let stmt = (expr.clone(), expr.clone(), expr.clone()).prop_flat_map(|(e, l, r)| {
+        prop_oneof![
+            Just(e.clone()),
+            Just(format!("-{e}")),
+            Just(format!("if ({l} < {r}) a")),
+            Just(format!("while ({l} == -{r}) break")),
+            Just(format!("for (a = 0; {l} > {r}; a++) a")),
+        ]
+    });
+    let stmt = stmt.prop_recursive(4, 16, 2, |inner| {
+        prop_oneof![
+            inner.clone().prop_map(|s| format!("{{{s}}}")),
+            inner.clone().prop_map(|s| format!("if (a) {s}")),
+            inner.clone().prop_map(|s| format!("while (a < 1) {s}")),
+            (inner.clone(), inner).prop_map(|(a, b)| format!("{{{a}; {b}}}")),
+        ]
+    });
+    stmt.prop_map(|s| format!("{s}\n"))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 300,
+        fork: false,
+        failure_persistence: None,
+        .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_parser_nesting_limit_corresponds_to_spec(unit in nested_unit(), max_depth in 2..14usize) {
+        check_parser_relation(unit.into_bytes(), bc_core::parser::ExtensionPolicy::Allow, max_depth);
+    }
+}
+
+/// Unary minus chains at every small `max_depth`, in the positions where their height decides
+/// the limit (an enclosing operator, assignment, subscript or condition). Random nesting rarely
+/// produces these exact boundaries.
+#[test]
+fn parser_nesting_limit_of_unary_minus_corresponds_to_spec() {
+    let shapes = [
+        "{}a + 1",
+        "1 + {}a",
+        "a = {}a",
+        "{}(a + 1)",
+        "if ({}a < 1) a",
+        "if (1 < {}a) a",
+        "a[{}a]",
+        "{}a < 1",
+        "({}a) * 2 + 3",
+    ];
+    for max_depth in 1..10 {
+        for k in 0..12 {
+            for shape in shapes {
+                let unit = shape.replace("{}", &"-".repeat(k)) + "\n";
+                check_parser_relation(
+                    unit.into_bytes(),
+                    bc_core::parser::ExtensionPolicy::Allow,
+                    max_depth,
+                );
+            }
+        }
     }
 }

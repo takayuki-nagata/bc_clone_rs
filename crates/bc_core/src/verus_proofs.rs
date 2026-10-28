@@ -14,6 +14,9 @@
 //! is covered by:
 //! - the kernels in `verified_kernels.rs`, which production code calls directly and which are
 //!   verified with their real bodies;
+//! - the production `BCNum` operations (`math.rs`), output formatting (`format.rs`), and the
+//!   evaluator and unit driver (`eval.rs`, `driver.rs`), verified in place against the
+//!   executable specification `crates/bc_spec` (relations in `refine.rs`);
 //! - Kani harnesses on production helpers (e.g. `bc_c_api::write_c_string`);
 //! - tests that check production behavior against exact references (`tests/proptest_suite.rs`,
 //!   the GNU differential and oracle tests in `bc_cli`).
@@ -24,9 +27,8 @@
 //! itself verified as `format_bytes` in `format.rs`); `verified_trig_range_reduction`
 //! → `mathlib::reduce_angle`; `verified_exp_ln2_reduction`, `verified_ln_cayley_transform`,
 //! `verified_atan_inversion_reduction`, `verified_taylor_series_convergence_loop` → the series in
-//! `mathlib.rs`; `verified_scope_guard_lifecycle` → `Evaluator::leave_call` (production
-//! additionally keeps a global frame at the bottom of every stack, which the model assumes as
-//! `old(stack).len() >= 1`); `verified_lexer_*` → `parser::Lexer`; `verified_cli_parse_args` →
+//! `mathlib.rs`; `verified_scope_guard_lifecycle` → `Evaluator::leave_call` (now itself
+//! verified in `eval.rs` against the specification's `leave_call`); `verified_lexer_*` → `parser::Lexer`; `verified_cli_parse_args` →
 //! `bc_cli::run_app`; `verified_c_ffi_copy_nul_terminated` → `bc_c_api::write_c_string`;
 //! `verified_zephyr_repl_edit_step` → `bc_zephyr::run_repl_with`.
 //!

@@ -751,17 +751,6 @@ pub struct ExExtensionPolicy(ExtensionPolicy);
 
 } // verus!
 
-impl Register {
-    /// The register's name as written in bc source.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Scale => "scale",
-            Self::Ibase => "ibase",
-            Self::Obase => "obase",
-        }
-    }
-}
-
 impl BinOp {
     /// The operator of a `+`, `-`, `*`, `/`, `%` or `^` token (as `binop_code`: `^` for any
     /// other text, which the lexer does not produce).

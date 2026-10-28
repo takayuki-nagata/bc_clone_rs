@@ -126,6 +126,8 @@
   frames are `BTreeMap<usize, BCNum>` instead of `BTreeMap<BigInt, BCNum>` (subscripts are below
   `BC_DIM_MAX`).
 - `BcError::in_function` takes the function name as `&String`.
+- `Register::name` is removed (nothing used it once the register warnings became verified byte
+  strings).
 
 ## v0.4.0 — 2026-10-26
 

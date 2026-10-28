@@ -40,17 +40,15 @@ exclude_re = [
     #   message looks like; unit panics are reported by `run_unit_guarded`, which is tested).
     " in main$",
     "install_panic_hook",
-    # - Boundaries at exactly BC_SCALE_MAX: exercising them computes with 10^9 decimal digits.
-    "replace > with (==|>=) in Evaluator::literal",
-    "replace > with >= in BCNum::try_mod_op",
+    # - Boundary at exactly BC_SCALE_MAX: exercising it needs a constant with 10^9 fraction
+    #   digits.
+    "replace > with (==|>=) in BCNum::try_from_string",
 
-    # Semantically equivalent mutants:
-    # - Zero is handled before this sign check, so `< 0` and `<= 0` agree.
-    "replace < with <= in BCNum::format_obase",
-    # - With no fractional digits the fraction branch adds 0 / ibase^0, so `> 0` and `>= 0` agree.
-    "replace > with >= in BCNum::from_string",
-    # - The last squaring in exponentiation by squaring is unused; doing it changes only speed.
-    "replace > with >= in BCNum::try_pow",
-    # - After `return` or `quit`, try_execute skips every remaining statement anyway.
-    "replace \\|\\| with && in Evaluator::evaluate_node",
+    # - The operands of a relational expression were parsed one level deeper and checked with
+    #   `depth + 1 + height <= max_depth`, so the relational check `1 + max(l, r)` never fails
+    #   and `1 * max(l, r)` agrees with it.
+    "replace \\+ with \\* in Parser::parse_relational_expression",
+
+    # Code inside `verus!` (the verified BCNum operations, formatting, evaluator and driver) is
+    # not mutated: cargo-mutants does not look inside macros. Its proofs cover it instead.
 ]
