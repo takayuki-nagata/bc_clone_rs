@@ -7,6 +7,15 @@
 //! functions using series expansions.
 
 use crate::error::RuntimeError;
+#[cfg(verus_keep_ghost)]
+use crate::spec_num;
+#[cfg(verus_keep_ghost)]
+use crate::spec_num::*;
+#[cfg(verus_keep_ghost)]
+use crate::trusted_bigint::big_view;
+use crate::trusted_bigint::{
+    big_add, big_is_zero, big_mul, big_pow10, big_sub, big_tdiv, big_zero,
+};
 use crate::verified_kernels::BC_SCALE_MAX;
 use crate::verified_kernels::{
     verified_add_sub_scales, verified_alphanumeric_char_val, verified_bcnum_length,
@@ -19,13 +28,10 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive, Zero};
-
-/// |shift| for a shift from `verified_div_scale_and_shift`, which is at most 2·`BC_SCALE_MAX`
-/// (< 2^31) because every scale is at most `BC_SCALE_MAX`. A value that does not fit in `usize`
-/// saturates, so that `pow10` reports the broken invariant.
-fn shift_magnitude(shift: i64) -> usize {
-    usize::try_from(shift.unsigned_abs()).unwrap_or(usize::MAX)
-}
+#[cfg(not(verus_keep_ghost))]
+use verus_builtin_macros::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
 
 /// Returns 10^n.
 ///
@@ -47,6 +53,24 @@ fn digit_value(d: &BigInt) -> usize {
     d.iter_u32_digits().next().map_or(0, |limb| limb as usize)
 }
 
+verus! {
+
+/// `10^n` for a decimal shift derived from scales. Every scale is at most `BC_SCALE_MAX`, so the
+/// shifts that verified code passes are at most 2·`BC_SCALE_MAX` < `u32::MAX`; Verus checks the
+/// precondition at every call.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the precondition n <= u32::MAX makes the cast lossless"
+)]
+fn pow10_within(n: usize) -> (r: BigInt)
+    requires
+        n <= u32::MAX,
+    ensures
+        big_view(&r) == spec_num::pow10(n as nat),
+{
+    big_pow10(n as u32)
+}
+
 /// Arbitrary-precision decimal number representation for bc.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BCNum {
@@ -55,19 +79,160 @@ pub struct BCNum {
 }
 
 impl BCNum {
+    /// The value in the L0 model: `coeff × 10^-scale`.
+    pub open spec fn val(&self) -> SpecBCNum {
+        SpecBCNum { coeff: big_view(&self.coeff), scale: self.scale as nat }
+    }
+
     /// Creates a new BCNum.
-    pub fn new(coeff: BigInt, scale: usize) -> Self {
+    pub fn new(coeff: BigInt, scale: usize) -> (r: Self)
+        ensures
+            r.coeff == coeff,
+            r.scale == scale,
+    {
         Self { coeff, scale }
     }
 
     /// Creates a BCNum representing 0 with scale 0.
-    pub fn zero() -> Self {
-        Self {
-            coeff: BigInt::zero(),
-            scale: 0,
-        }
+    pub fn zero() -> (r: Self)
+        ensures
+            r.val() == (SpecBCNum { coeff: 0, scale: 0 }),
+    {
+        Self { coeff: big_zero(), scale: 0 }
     }
 
+    /// Returns true if the number is mathematically zero.
+    pub fn is_zero(&self) -> (r: bool)
+        ensures
+            r == (self.val().coeff == 0),
+    {
+        big_is_zero(&self.coeff)
+    }
+
+    /// Adds two BCNum values.
+    pub fn add(&self, other: &Self) -> (r: Self)
+        requires
+            self.scale <= BC_SCALE_MAX,
+            other.scale <= BC_SCALE_MAX,
+        ensures
+            r.val() == self.val().spec_add(other.val()),
+            r.scale <= BC_SCALE_MAX,
+    {
+        let (sr, shift_a, shift_b) = verified_add_sub_scales(self.scale, other.scale);
+        let coeff_a = big_mul(&self.coeff, &pow10_within(shift_a));
+        let coeff_b = big_mul(&other.coeff, &pow10_within(shift_b));
+        Self::new(big_add(&coeff_a, &coeff_b), sr)
+    }
+
+    /// Subtracts other from self.
+    pub fn sub(&self, other: &Self) -> (r: Self)
+        requires
+            self.scale <= BC_SCALE_MAX,
+            other.scale <= BC_SCALE_MAX,
+        ensures
+            r.val() == self.val().spec_sub(other.val()),
+            r.scale <= BC_SCALE_MAX,
+    {
+        let (sr, shift_a, shift_b) = verified_add_sub_scales(self.scale, other.scale);
+        let coeff_a = big_mul(&self.coeff, &pow10_within(shift_a));
+        let coeff_b = big_mul(&other.coeff, &pow10_within(shift_b));
+        Self::new(big_sub(&coeff_a, &coeff_b), sr)
+    }
+
+    /// Multiplies two BCNum values under scale.
+    pub fn mul(&self, other: &Self, global_scale: usize) -> (r: Self)
+        requires
+            self.scale <= BC_SCALE_MAX,
+            other.scale <= BC_SCALE_MAX,
+            global_scale <= BC_SCALE_MAX,
+        ensures
+            r.val() == spec_mul(self.val(), other.val(), global_scale as nat),
+            r.scale <= BC_SCALE_MAX,
+    {
+        let (sr, diff) = verified_mul_scale_and_shift(self.scale, other.scale, global_scale);
+        proof {
+            lemma_pow10_pos(diff as nat);
+        }
+        let coeff = big_tdiv(&big_mul(&self.coeff, &other.coeff), &pow10_within(diff));
+        Self::new(coeff, sr)
+    }
+
+    /// Divides self by other under scale, returning Err on division by zero.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "Verus proves 0 <= |shift| <= 2·BC_SCALE_MAX < 2^31 for both casts"
+    )]
+    pub fn try_div(&self, other: &Self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
+        requires
+            self.scale <= BC_SCALE_MAX,
+            other.scale <= BC_SCALE_MAX,
+            global_scale <= BC_SCALE_MAX,
+        ensures
+            match r {
+                Ok(q) => other.val().coeff != 0 && q.val() == spec_div(self.val(), other.val(), global_scale as nat)
+                    && q.scale == global_scale,
+                Err(e) => other.val().coeff == 0 && e == RuntimeError::DivideByZero,
+            },
+    {
+        if big_is_zero(&other.coeff) {
+            return Err(RuntimeError::DivideByZero);
+        }
+        let (sr, shift) = verified_div_scale_and_shift(self.scale, other.scale, global_scale);
+        let coeff = if shift >= 0 {
+            proof {
+                lemma_pow10_pos(shift as nat);
+            }
+            let num = big_mul(&self.coeff, &pow10_within(shift as usize));
+            big_tdiv(&num, &other.coeff)
+        } else {
+            proof {
+                lemma_pow10_pos((-shift) as nat);
+                assert(big_view(&other.coeff) * spec_num::pow10((-shift) as nat) != 0) by (nonlinear_arith)
+                    requires
+                        big_view(&other.coeff) != 0,
+                        spec_num::pow10((-shift) as nat) >= 1;
+            }
+            let den = big_mul(&other.coeff, &pow10_within((-shift) as usize));
+            big_tdiv(&self.coeff, &den)
+        };
+        Ok(Self::new(coeff, sr))
+    }
+
+    /// Computes self % other under scale, returning Err on division by zero.
+    pub fn try_mod_op(&self, other: &Self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
+        requires
+            self.scale <= BC_SCALE_MAX,
+            other.scale <= BC_SCALE_MAX,
+            global_scale <= BC_SCALE_MAX,
+        ensures
+            match r {
+                Ok(m) => other.val().coeff != 0 && global_scale + other.scale <= BC_SCALE_MAX
+                    && m.val() == spec_mod(self.val(), other.val(), global_scale as nat)
+                    && m.scale <= BC_SCALE_MAX,
+                Err(e) => (other.val().coeff == 0 && e == RuntimeError::ModuloByZero)
+                    || (other.val().coeff != 0 && global_scale + other.scale > BC_SCALE_MAX
+                        && e == RuntimeError::ScaleTooLarge),
+            },
+    {
+        if big_is_zero(&other.coeff) {
+            return Err(RuntimeError::ModuloByZero);
+        }
+        // The result scale is max(scale + scale(b), scale(a)).
+        if global_scale + other.scale > BC_SCALE_MAX {
+            return Err(RuntimeError::ScaleTooLarge);
+        }
+        let q = self.try_div(other, global_scale)?;
+        let prod_coeff = big_mul(&q.coeff, &other.coeff);
+        let prod_scale = q.scale + other.scale;
+        let prod = Self::new(prod_coeff, prod_scale);
+        Ok(self.sub(&prod))
+    }
+}
+
+} // verus!
+
+impl BCNum {
     /// Parses a numeric constant string under `ibase` into a BCNum.
     pub fn from_string(num_str: &str, ibase: usize) -> Self {
         let num_str = num_str.replace("\\\n", "");
@@ -113,71 +278,11 @@ impl BCNum {
         }
     }
 
-    /// Returns true if the number is mathematically zero.
-    pub fn is_zero(&self) -> bool {
-        self.coeff.is_zero()
-    }
-
-    /// Adds two BCNum values.
-    pub fn add(&self, other: &Self) -> Self {
-        let (sr, shift_a, shift_b) = verified_add_sub_scales(self.scale, other.scale);
-        let coeff_a = &self.coeff * pow10(shift_a);
-        let coeff_b = &other.coeff * pow10(shift_b);
-        Self::new(coeff_a + coeff_b, sr)
-    }
-
-    /// Subtracts other from self.
-    pub fn sub(&self, other: &Self) -> Self {
-        let (sr, shift_a, shift_b) = verified_add_sub_scales(self.scale, other.scale);
-        let coeff_a = &self.coeff * pow10(shift_a);
-        let coeff_b = &other.coeff * pow10(shift_b);
-        Self::new(coeff_a - coeff_b, sr)
-    }
-
-    /// Multiplies two BCNum values under scale.
-    pub fn mul(&self, other: &Self, global_scale: usize) -> Self {
-        let (sr, diff) = verified_mul_scale_and_shift(self.scale, other.scale, global_scale);
-        let coeff = (&self.coeff * &other.coeff) / pow10(diff);
-        Self::new(coeff, sr)
-    }
-
-    /// Divides self by other under scale, returning Err on division by zero.
-    pub fn try_div(&self, other: &Self, global_scale: usize) -> Result<Self, RuntimeError> {
-        if other.coeff.is_zero() {
-            return Err(RuntimeError::DivideByZero);
-        }
-        let (sr, shift) = verified_div_scale_and_shift(self.scale, other.scale, global_scale);
-        let coeff = if shift >= 0 {
-            let num = &self.coeff * pow10(shift_magnitude(shift));
-            num / &other.coeff
-        } else {
-            let den = &other.coeff * pow10(shift_magnitude(shift));
-            &self.coeff / den
-        };
-        Ok(Self::new(coeff, sr))
-    }
-
     /// Divides self by other under scale.
     #[cfg(test)]
     pub fn div(&self, other: &Self, global_scale: usize) -> Self {
         self.try_div(other, global_scale)
             .unwrap_or_else(|msg| panic!("{}", msg))
-    }
-
-    /// Computes self % other under scale, returning Err on division by zero.
-    pub fn try_mod_op(&self, other: &Self, global_scale: usize) -> Result<Self, RuntimeError> {
-        if other.coeff.is_zero() {
-            return Err(RuntimeError::ModuloByZero);
-        }
-        // The result scale is max(scale + scale(b), scale(a)).
-        if global_scale + other.scale > BC_SCALE_MAX {
-            return Err(RuntimeError::ScaleTooLarge);
-        }
-        let q = self.try_div(other, global_scale)?;
-        let prod_coeff = &q.coeff * &other.coeff;
-        let prod_scale = q.scale + other.scale;
-        let prod = Self::new(prod_coeff, prod_scale);
-        Ok(self.sub(&prod))
     }
 
     /// Computes self % other under scale.
@@ -389,6 +494,7 @@ impl BCNum {
 }
 
 // The `-l` math library lives in `mathlib.rs`.
+#[cfg(not(verus_keep_ghost))]
 pub use crate::mathlib::{EXP_ARG_MAX, bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
 
 #[cfg(test)]

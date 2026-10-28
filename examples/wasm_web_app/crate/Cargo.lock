@@ -15,6 +15,8 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
+ "verus_builtin",
+ "verus_builtin_macros",
 ]
 
 [[package]]
@@ -36,6 +38,12 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "convert_case"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 
 [[package]]
 name = "num-bigint"
@@ -107,10 +115,63 @@ dependencies = [
 ]
 
 [[package]]
+name = "synstructure"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "verus_builtin"
+version = "0.0.0-2026-10-11-0230"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2e5d0972903f31da5271f50645c402122804a4e5292e1694706977ce18cbe67"
+
+[[package]]
+name = "verus_builtin_macros"
+version = "0.0.0-2026-10-18-0147"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c420824c5f3528bc29892c12c9083c03e8abe09119456e0ffe98ec3fb16ee5b8"
+dependencies = [
+ "convert_case",
+ "proc-macro2",
+ "quote",
+ "syn",
+ "synstructure",
+ "verus_prettyplease",
+ "verus_syn",
+]
+
+[[package]]
+name = "verus_prettyplease"
+version = "0.0.0-2026-09-06-0133"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71956c0dcf55f57fd5a5335fff16981f7e0912d2e887914518c5a64fe36c063c"
+dependencies = [
+ "proc-macro2",
+ "verus_syn",
+]
+
+[[package]]
+name = "verus_syn"
+version = "0.0.0-2026-09-06-0133"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d8b53574934e1f608dfccd809ce17f3733d6eb99c14ce8220326121929e1637"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
 
 [[package]]
 name = "wasm-bindgen"

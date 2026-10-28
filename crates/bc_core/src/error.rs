@@ -6,6 +6,12 @@
 
 use alloc::string::String;
 use core::fmt;
+#[cfg(not(verus_keep_ghost))]
+use verus_builtin_macros::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
+verus! {
 
 /// A runtime failure raised while evaluating an expression or statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +33,8 @@ pub enum RuntimeError {
     /// More nested evaluation (mostly recursion) than the evaluator's `max_depth` allows.
     NestingTooDeep,
 }
+
+} // verus!
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

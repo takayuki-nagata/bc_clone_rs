@@ -66,6 +66,11 @@ graph TD
 - `BCNum { coeff: BigInt, scale: usize }` represents `coeff × 10^-scale`. Arithmetic follows the
   POSIX scale rules. The scale and shift computations are delegated to kernels in
   `verified_kernels.rs`.
+- `add`, `sub`, `mul`, `try_div` and `try_mod_op` are written inside `verus!` and proved to
+  compute the L0 operations of `spec_num` (`spec_add`, …, `spec_mod`, through `BCNum::val`), given
+  scales of at most `BC_SCALE_MAX`. They use `BigInt` only through `trusted_bigint.rs`, whose
+  one-line wrappers Verus assumes correct (each is checked by a test). The other `BCNum`
+  functions are still outside `verus!`.
 - Fallible API: `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`. The panicking wrappers (`div`,
   `pow`, …) are compiled only under `cfg(test)`, as are `Lexer::get_next_token`,
   `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`, `Evaluator::evaluate`, and
@@ -114,7 +119,7 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
 - `lib.rs` denies `clippy::unwrap_used`, `expect_used`, `panic`, and the lossy-cast lints outside
   tests. Every remaining exception is an `#[allow(..., reason = "...")]` that names the invariant
   justifying it (`pow10`, the bit-length estimate in `decimal_ln`, and the Verus-proved casts in
-  `verified_kernels.rs`). Do not replace an `unwrap` with a silent default (`unwrap_or(0)`):
+  `verified_kernels.rs` and `math.rs`). Do not replace an `unwrap` with a silent default (`unwrap_or(0)`):
   return an error or derive the value so that no default is needed.
 - Front ends must not rely on unwinding: `catch_unwind` does not work under `panic = "abort"` or on
   `wasm32-unknown-unknown`.
@@ -163,7 +168,7 @@ invariant (an internal error) instead of truncating it. Review any new code that
 
 | Layer | Tool / script | What it actually establishes |
 |---|---|---|
-| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The math library's certified-truncation decision is proved over the integers (`lemma_certified_truncation`). `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
+| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div` and `try_mod_op` compute the L0 operations exactly, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. The math library's certified-truncation decision is proved over the integers (`lemma_certified_truncation`). `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
 | Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only; the 32-bit targets are exercised by the QEMU and Zephyr self-tests). The production C-FFI output helper `write_c_string` never writes at or beyond `buf_size` and always NUL-terminates. C-API NULL and zero-size guards hold. The CLI brace scanner is consistent. |
 | UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, and `bc_cli` (strict provenance, symbolic alignment, Stacked Borrows), and `bc_c_api` again under Tree Borrows. |
 | Executable specification | Verus — `crates/bc_spec`, `scripts/build_spec_oracle.sh`; `crates/bc_cli/tests/spec_differential.rs` | `bc_spec` defines the observable behavior of `bc_clone` without `-l` (decoding, units, tokens, parsing, evaluation, output, diagnostics, exit status), mirroring the production structure. `exec_spec_verified!` proves that the compiled oracle equals the `spec fn`s, except for `vstd`'s unverified `Seq` translations; lemmas prove that its arithmetic (`+ - * / % ^ sqrt`, comparison, `length`, constants under `ibase`) computes the integer definitions of `spec_num.rs` exactly. The differential tests then show that `bc_clone` matches the specification **on the generated inputs only**: there is no proof that `bc_clone` refines the specification, and the specification itself is checked against POSIX only by review, the POSIX suite, and GNU bc. The oracle is slow for deep nesting (its state is copied at every step), so the tests stay a few hundred levels deep. |
@@ -229,7 +234,14 @@ as possible and state the reason next to it.
   (`scripts/run_verus_verification.sh`). The `verify` feature links `vstd` and `crates/bc_spec`,
   and `bc_core::spec_num` re-exports the L0 model of `bc_spec`. Production builds never link
   either: `vstd` needs atomic compare-and-swap, which riscv32imc (ESP32-C3) lacks, and `bc_spec`
-  needs `std`.
+  needs `std`. In a normal build, `verus!` comes from `verus_builtin_macros` (a normal
+  dependency, `no_std` and free of atomics) and erases specifications and proofs; import it with
+  `#[cfg(not(verus_keep_ghost))] use verus_builtin_macros::verus;` and `vstd::prelude` only under
+  `cfg(verus_keep_ghost)`. A `Ghost<T>` parameter stays in the signature after erasure, so its
+  type must exist without `vstd` and `bc_spec`.
+- Trusted assumptions about `BigInt` go only in `trusted_bigint.rs`, as `#[verifier::external_body]`
+  one-line wrappers with a test each. Name a function there rather than using an operator on
+  `BigInt` in verified code.
 - A change to observable behavior must change `crates/bc_spec` in the same commit, so that the
   specification and the implementation stay equal; the differential tests against the
   specification catch the commits that forget one side. Follow the writing rules in the crate

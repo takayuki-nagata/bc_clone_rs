@@ -35,6 +35,8 @@ dependencies = [
  "num-integer",
  "num-traits",
  "proptest",
+ "verus_builtin",
+ "verus_builtin_macros",
  "vstd",
 ]
 

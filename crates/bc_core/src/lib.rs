@@ -29,13 +29,11 @@ extern crate std;
 
 #[cfg(not(verus_keep_ghost))]
 pub mod driver;
-#[cfg(not(verus_keep_ghost))]
 pub mod error;
 #[cfg(not(verus_keep_ghost))]
 pub mod eval;
 #[cfg(kani)]
 mod kani_proofs;
-#[cfg(not(verus_keep_ghost))]
 pub mod math;
 #[cfg(not(verus_keep_ghost))]
 mod mathlib;
@@ -43,6 +41,7 @@ mod mathlib;
 pub mod parser;
 #[cfg(verus_keep_ghost)]
 pub use bc_spec::spec_num;
+mod trusted_bigint;
 pub mod verified_kernels;
 #[cfg(verus_keep_ghost)]
 pub mod verus_proofs;
