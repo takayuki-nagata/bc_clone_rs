@@ -17,6 +17,7 @@ use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive};
 
 use crate::error::{BcError, RuntimeError};
+use crate::format::wrap_output;
 use crate::math::{BCNum, pow10};
 use crate::parser::{
     DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Param, Register, Stmt,
@@ -24,7 +25,7 @@ use crate::parser::{
 use crate::verified_kernels::{
     BC_BASE_MAX, BC_DIM_MAX, BC_SCALE_MAX, IBASE_MAX, verified_clamp_register,
     verified_hex_char_val, verified_loop_post_body_action, verified_nesting_within_limit,
-    verified_should_abort_execution, verified_wrapped_stdout_step,
+    verified_should_abort_execution,
 };
 
 /// Abstract output writer trait compatible with both no_std and std environments.
@@ -49,24 +50,17 @@ impl WrappedStdout {
         Self { writer, col: 0 }
     }
 
-    /// Writes a string to the output stream, handling wrapping if columns exceed 68.
+    /// Writes a string to the output stream with POSIX line wrapping: a backslash-newline
+    /// before a character at column 68 or beyond (`format::wrap_output`, verified against the
+    /// specification's `write_wrapped`).
     pub fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for c in s.chars() {
-            let is_newline = c == '\n';
-            let (next_col, should_wrap) = verified_wrapped_stdout_step(self.col, is_newline);
-            if is_newline {
-                self.writer.write_str("\n")?;
-            } else {
-                if should_wrap {
-                    self.writer.write_str("\\\n")?;
-                }
-                let mut buf = [0; 4];
-                let encoded = c.encode_utf8(&mut buf);
-                self.writer.write_str(encoded)?;
-            }
-            self.col = next_col;
+        let (out, col) = wrap_output(self.col, s.as_bytes());
+        self.col = col;
+        // Backslash-newlines go only before the first byte of a character, so `out` is UTF-8.
+        match core::str::from_utf8(&out) {
+            Ok(text) => self.writer.write_str(text),
+            Err(_) => Err(core::fmt::Error),
         }
-        Ok(())
     }
 
     /// Flushes the underlying writer.

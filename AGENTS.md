@@ -114,7 +114,8 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
 - `ScopeGuard` (RAII) pops the parameter and `auto` frames and restores the caller's control-flow
   flags on every exit path, including `Err` returns and panics.
 - Output goes through the `BcWriter` trait. `WrappedStdout` wraps long numbers at 70 columns with
-  `\` + newline, as POSIX requires.
+  `\` + newline, as POSIX requires. The wrapping itself is `format::wrap_output`, verified against
+  the specification's `write_wrapped`; `write_str` passes its result to the writer in one call.
 - Fallible API: `Evaluator::try_evaluate`, `Evaluator::try_execute`.
 
 ### Error handling contract

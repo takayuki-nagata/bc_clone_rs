@@ -28,6 +28,8 @@
   prints the integer part of numbers with 2^28 or more digits, which it used to omit.
 - The output of numbers in `bc_core` (`BCNum::format_bytes`, behind `format_obase`) is verified
   with Verus to write that definition for every `obase`, with the same output and speed as before.
+  The 70-column line wrapping (`WrappedStdout`) is verified against the specification's
+  `write_wrapped`; it now passes each string to the writer in one call.
 - `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`,
   `scale_func`, the comparison used by `==`, `<`, … (`cmp_val`) and the value of a constant
   (`from_digit_values`) are verified with Verus: they compute the integer (L0) definitions of

@@ -18,15 +18,15 @@ use crate::trusted_bigint::{
     big_abs, big_cmp, big_from_usize, big_is_negative, big_is_zero, big_mul, big_mul_add_small,
     big_tdiv, big_to_u64_small, big_trem,
 };
-use crate::verified_kernels::verified_multi_digit_obase_pad_zeros;
 #[cfg(verus_keep_ghost)]
-use crate::verified_kernels::{BC_BASE_MAX, BC_SCALE_MAX};
+use crate::verified_kernels::{BC_BASE_MAX, BC_SCALE_MAX, POSIX_WRAP_COL_LIMIT};
+use crate::verified_kernels::{verified_multi_digit_obase_pad_zeros, verified_wrapped_stdout_step};
 use alloc::string::String;
 use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
 use bc_spec::format::*;
 #[cfg(verus_keep_ghost)]
-use bc_spec::output::{dec_str, hex_digit, out_digit, padded, zeros};
+use bc_spec::output::{dec_str, hex_digit, out_digit, padded, write_wrapped, zeros};
 #[cfg(verus_keep_ghost)]
 use bc_spec::power::{lemma_pow_add, lemma_pow_positive};
 use core::cmp::Ordering;
@@ -448,6 +448,62 @@ fn push_frac_digits(out: &mut Vec<u8>, num: BigInt, den: &BigInt, obase: usize, 
     }
 }
 
+/// `WrappedStdout`'s line wrapping (`write_wrapped`): `s` written from column `col`, with a
+/// backslash-newline before a character at column 68 or beyond. A newline resets the column and
+/// UTF-8 continuation bytes do not advance it, so the backslash-newlines go only before the
+/// first byte of a character. Returns the bytes to write and the new column.
+#[allow(
+    clippy::manual_range_contains,
+    reason = "Verus has no specification for RangeInclusive::contains"
+)]
+pub(crate) fn wrap_output(col: usize, s: &[u8]) -> (r: (Vec<u8>, usize))
+    requires
+        col <= POSIX_WRAP_COL_LIMIT,
+    ensures
+        write_wrapped(Seq::<u8>::empty(), col as u64, s@) == (r.0@, r.1 as u64),
+        r.1 <= POSIX_WRAP_COL_LIMIT,
+{
+    let mut out: Vec<u8> = Vec::new();
+    let mut c = col;
+    let mut i: usize = 0;
+    proof {
+        assert(s@.skip(0) =~= s@);
+    }
+    while i < s.len()
+        invariant
+            i <= s.len(),
+            c <= POSIX_WRAP_COL_LIMIT,
+            write_wrapped(out@, c as u64, s@.skip(i as int)) == write_wrapped(Seq::<u8>::empty(), col as u64, s@),
+        decreases s.len() - i,
+    {
+        let b = s[i];
+        proof {
+            assert(s@.skip(i as int)[0] == b);
+            assert(s@.skip(i as int).drop_first() =~= s@.skip(i as int + 1));
+        }
+        if b == 10 {
+            let (next, _) = verified_wrapped_stdout_step(c, true);
+            out.push(b);
+            c = next;
+        } else if 0x80 <= b && b <= 0xbf {
+            out.push(b);
+        } else {
+            let (next, wrap) = verified_wrapped_stdout_step(c, false);
+            if wrap {
+                out.push(92);
+                out.push(10);
+            }
+            out.push(b);
+            c = next;
+        }
+        i += 1;
+    }
+    proof {
+        assert(s@.skip(i as int) =~= Seq::<u8>::empty());
+    }
+    (out, c)
+}
+
 impl BCNum {
     /// The output of the value in `obase` (without the newline): `l0_format` of the value.
     pub fn format_bytes(&self, obase: usize) -> (r: Vec<u8>)
@@ -530,5 +586,24 @@ impl BCNum {
             .into_iter()
             .map(char::from)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrapping_counts_characters_not_bytes() {
+        // 70 two-byte characters: the backslash-newline comes after 68 characters.
+        let text = "é".repeat(70);
+        let (out, col) = wrap_output(0, text.as_bytes());
+        let expected = alloc::format!("{}\\\n{}", "é".repeat(68), "é".repeat(2));
+        assert_eq!(out, expected.as_bytes());
+        assert_eq!(col, 2);
+        // A newline resets the column; continuing from column 67 wraps after one character.
+        let (out, col) = wrap_output(67, b"ab\ncd");
+        assert_eq!(out, b"a\\\nb\ncd");
+        assert_eq!(col, 2);
     }
 }

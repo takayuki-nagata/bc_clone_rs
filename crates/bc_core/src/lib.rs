@@ -32,7 +32,7 @@ pub mod driver;
 pub mod error;
 #[cfg(not(verus_keep_ghost))]
 pub mod eval;
-mod format;
+pub(crate) mod format;
 #[cfg(kani)]
 mod kani_proofs;
 pub mod math;
