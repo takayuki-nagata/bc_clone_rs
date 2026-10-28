@@ -36,3 +36,6 @@ if [ -f "$VERUS_DIR/version.json" ] && command -v rustup >/dev/null 2>&1; then
         rustup toolchain install "$REQUIRED_TOOLCHAIN" --profile minimal --no-self-update
     fi
 fi
+
+# `cargo verus` runs the `cargo-verus` next to the Verus binary.
+export PATH="$VERUS_DIR:$PATH"

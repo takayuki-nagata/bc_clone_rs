@@ -988,6 +988,14 @@ pub open spec fn p_named_tail(toks: Seq<Token>, cfg: PCfg, st: PState, fuel: u64
     }
 }
 
+/// The register arm of `p_named`: `scale`, `ibase` or `obase`. A separate function, because the
+/// equivalence proof of `p_named` exceeds the resource limit otherwise.
+pub open spec fn p_reg(toks: Seq<Token>, st: PState, t: Token) -> PR {
+    let r = if t.kind is Scale { 0u8 } else if t.kind is Ibase { 1u8 } else { 2u8 };
+    let e = eat(toks, st, t.kind);
+    if !e.ok { e } else { add_node(e.st, Node::Reg(r), 1u64) }
+}
+
 /// `Parser::parse_named_expression`.
 pub open spec fn p_named(toks: Seq<Token>, cfg: PCfg, st: PState, fuel: u64) -> PR
     decreases fuel
@@ -996,9 +1004,7 @@ pub open spec fn p_named(toks: Seq<Token>, cfg: PCfg, st: PState, fuel: u64) -> 
     else {
         let t = cur_tok(toks, st);
         if t.kind is Scale || t.kind is Ibase || t.kind is Obase {
-            let r = if t.kind is Scale { 0u8 } else if t.kind is Ibase { 1u8 } else { 2u8 };
-            let e = eat(toks, st, t.kind);
-            if !e.ok { e } else { add_node(e.st, Node::Reg(r), 1u64) }
+            p_reg(toks, st, t)
         } else if t.kind is Letter {
             let n = eat_name(toks, cfg, st);
             if !n.ok { n }

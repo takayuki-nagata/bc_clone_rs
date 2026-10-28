@@ -15,8 +15,8 @@
   - `bash scripts/build_spec_oracle.sh` and then
     `BC_SPEC_ORACLE=$PWD/target/bc_spec_oracle cargo test -p bc_clone --test spec_differential`
     for the differential tests against the executable specification (`crates/bc_spec`); while
-    editing the specification, `verus crates/bc_spec/src/main.rs --verify-module <module>`
-    verifies one module (the whole crate takes about 3 minutes)
+    editing the specification, `cargo verus focus -p bc_spec -- --verify-module <module>` (with
+    `~/.local/verus` on `PATH`) verifies one module (the whole crate takes about 4 minutes)
 - Heavy verification (run before opening a PR that touches the relevant code):
   `scripts/run_verus_verification.sh`, `scripts/run_kani_verification.sh`, `scripts/run_miri_tests.sh`,
   `scripts/run_qemu_riscv32_tests.sh`, `scripts/run_zephyr_tests.sh`, `scripts/build_wasm.sh`.

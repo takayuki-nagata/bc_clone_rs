@@ -1,0 +1,23 @@
+[package]
+name = "bc_spec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Executable formal specification of bc_clone (Verus), and its reference interpreter"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "bc_spec_oracle"
+path = "src/main.rs"
+
+[dependencies]
+vstd = "=0.0.0-2026-10-18-0147"
+
+[package.metadata.verus]
+verify = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)', 'cfg(verus_verify_core)'] }

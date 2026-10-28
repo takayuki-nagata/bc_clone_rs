@@ -15,6 +15,10 @@ test_workspace = true
 exclude_globs = [
     "crates/bc_core/src/kani_proofs.rs",
     "crates/bc_core/src/verus_proofs.rs",
+    # The executable specification is the oracle, not the code under test: it is proved equal to
+    # its `spec fn`s by Verus, and `cargo test` does not run it (spec_differential needs
+    # BC_SPEC_ORACLE), so every mutant would be reported as missed.
+    "crates/bc_spec/**",
 ]
 
 # Only mutants that are semantically equivalent or untestable on the host. Keep each pattern

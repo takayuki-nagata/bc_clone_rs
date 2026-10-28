@@ -6,6 +6,7 @@ members = [
     "crates/bc_qemu_riscv32",
     "crates/bc_c_api",
     "crates/bc_zephyr",
+    "crates/bc_spec",
 ]
 default-members = [
     "crates/bc_core",

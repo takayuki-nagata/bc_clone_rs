@@ -12,6 +12,9 @@
   programs, including inputs that cannot be compared with GNU `bc` (syntax errors, `ibase`
   changes, `-s`/`-w`, `quit`, invalid UTF-8), and checks the specification against GNU `bc`. The
   POSIX conformance script also runs against the specification (`BC_BIN=target/bc_spec_oracle`).
+- `crates/bc_spec` is a Cargo package (library and the `bc_spec_oracle` binary) in the workspace,
+  outside `default-members`. It is verified with `cargo verus verify -p bc_spec`, and the oracle
+  is compiled with a normal `cargo build`.
 
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval

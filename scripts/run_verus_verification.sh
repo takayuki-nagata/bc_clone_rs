@@ -17,7 +17,7 @@ echo "Using Verus binary: $VERUS_BIN"
 
 echo ""
 echo "=== Running Verus Formal Verification on the executable specification (bc_spec) ==="
-"$VERUS_BIN" crates/bc_spec/src/main.rs
+cargo verus verify -p bc_spec
 
 echo ""
 echo "=== All Verus Formal Proofs Verified Successfully! ==="
