@@ -1038,6 +1038,8 @@ mod tests {
 
     #[test]
     fn test_line_wrapping_70_chars_and_ibase_warnings() {
+        // `run_interactive_loop` consumes `CTRL_C_PRESSED`, which other tests set.
+        let _guard = TEST_MUTEX.lock().unwrap();
         let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let stdout = TestWriter {
