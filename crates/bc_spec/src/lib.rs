@@ -41,6 +41,10 @@
 
 // Imports used only by `spec fn`s and proofs are unused once `verus!` erases them.
 #![cfg_attr(not(verus_keep_ghost), allow(unused_imports))]
+#![allow(
+    clippy::manual_range_contains,
+    reason = "exec_spec_verified! translates comparisons, not range methods"
+)]
 
 pub mod convert;
 pub mod eval;

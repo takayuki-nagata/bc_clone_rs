@@ -354,8 +354,8 @@ pub open spec fn runtime_msg(k: RuntimeError) -> Seq<u8> {
         RuntimeError::ArraySubscriptOutOfBounds(n) => msg_subscript(text_view(n)),
         RuntimeError::ExponentTooLarge => msg_exponent_too_large(),
         RuntimeError::ScaleTooLarge => msg_scale_too_large(),
-        // `-l` is not modeled.
-        RuntimeError::MathArgumentTooLarge => Seq::empty(),
+        // `-l` only (not in the specification): `argument too large`.
+        RuntimeError::MathArgumentTooLarge => seq![97u8, 114, 103, 117, 109, 101, 110, 116, 32, 116, 111, 111, 32, 108, 97, 114, 103, 101],
         RuntimeError::NestingTooDeep => msg_nesting_too_deep(),
     }
 }

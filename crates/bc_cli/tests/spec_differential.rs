@@ -13,6 +13,10 @@
 //! - `prop_byte_inputs_match_spec` feeds invalid UTF-8, NUL and control characters.
 //! - `prop_spec_matches_gnu_bc` checks the specification itself against GNU bc on the inputs
 //!   where GNU bc follows POSIX (the generator of `differential_proptest.rs`).
+//! - `prop_parser_output_corresponds_to_*` check, in-process and without the oracle, the
+//!   assumption of the refinement theorem of `Evaluator::run_parsed`: for every unit, the
+//!   production parser's syntax tree (or error) and extension uses correspond to the compiled
+//!   specification's `parse_unit` (`driver::r_parsed`).
 //!
 //! Inputs are kept small and shallow: the compiled specification copies its state at every
 //! step, so its time grows quadratically with the nesting depth. Cases where
@@ -240,5 +244,244 @@ proptest! {
         if let Some(oracle) = oracle() {
             check_against_gnu(&oracle, &[("BC_SPEC_MAX_DEPTH", MAX_DEPTH)], &prog, &[]);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The parser assumption of the refinement theorem
+// ---------------------------------------------------------------------------------------------
+
+/// Checks, on generated inputs, the assumption `driver::r_parsed` under which the verified
+/// `Evaluator::run_parsed` refines the specification's `run_unit`: for each
+/// unit of the specification, the production parser's statements (or error) and extension uses
+/// correspond to the specification's `parse_unit`, as `refine::r_stmt` and `r_expr` relate
+/// them. Runs the compiled specification in-process, so it needs no oracle binary.
+mod parser_relation {
+    use bc_core::error::BcError;
+    use bc_core::parser::{
+        AssignOp, BinOp, Expr, ExprOrArray, ExtensionPolicy, Lexer, Param, Parser, Register, RelOp,
+        Stmt,
+    };
+    use bc_spec::lexer::{exec_split_units, exec_tokenize, exec_utf8_lossy};
+    use bc_spec::parser::{ExecArg, ExecNode, ExecPCfg, ExecParam, exec_parse_unit};
+
+    fn bin_code(op: BinOp) -> u8 {
+        match op {
+            BinOp::Add => 0,
+            BinOp::Sub => 1,
+            BinOp::Mul => 2,
+            BinOp::Div => 3,
+            BinOp::Mod => 4,
+            BinOp::Pow => 5,
+        }
+    }
+
+    fn rel_code(op: RelOp) -> u8 {
+        match op {
+            RelOp::Eq => 0,
+            RelOp::Ne => 1,
+            RelOp::Lt => 2,
+            RelOp::Le => 3,
+            RelOp::Gt => 4,
+            RelOp::Ge => 5,
+        }
+    }
+
+    fn assign_code(op: AssignOp) -> u8 {
+        match op {
+            AssignOp::Assign => 0,
+            AssignOp::Compound(b) => bin_code(b) + 1,
+        }
+    }
+
+    fn reg_code(r: Register) -> u8 {
+        match r {
+            Register::Scale => 0,
+            Register::Ibase => 1,
+            Register::Obase => 2,
+        }
+    }
+
+    fn named(e: &Expr) -> bool {
+        matches!(
+            e,
+            Expr::Variable(_) | Expr::ArrayAccess(..) | Expr::RegisterAccess(_)
+        )
+    }
+
+    fn r_params(ps: &[Param], qs: &[ExecParam]) -> bool {
+        ps.len() == qs.len()
+            && ps
+                .iter()
+                .zip(qs)
+                .all(|(p, q)| q.name == p.name.as_bytes() && q.is_array == p.is_array)
+    }
+
+    /// `refine::r_arg`.
+    fn r_arg(a: &ExprOrArray, nodes: &[ExecNode], s: &ExecArg) -> bool {
+        match a {
+            ExprOrArray::Expr(e) => !s.is_array && r_expr(e, nodes, s.expr),
+            ExprOrArray::ArrayArg(name) => s.is_array && s.name == name.as_bytes(),
+        }
+    }
+
+    /// `refine::r_expr`.
+    fn r_expr(e: &Expr, nodes: &[ExecNode], n: usize) -> bool {
+        let Some(node) = nodes.get(n) else {
+            return false;
+        };
+        match (e, node) {
+            (Expr::Number(t), ExecNode::Number(u)) => u == t.as_bytes(),
+            (Expr::Variable(x), ExecNode::Var(y)) => y == x.as_bytes(),
+            (Expr::ArrayAccess(x, i), ExecNode::Array(y, j)) => {
+                y == x.as_bytes() && r_expr(i, nodes, *j)
+            }
+            (Expr::RegisterAccess(r), ExecNode::Reg(c)) => *c == reg_code(*r),
+            (Expr::Negate(a), ExecNode::Neg(j)) => r_expr(a, nodes, *j),
+            (Expr::BinaryOp(op, l, r), ExecNode::Binary(c, a, b)) => {
+                *c == bin_code(*op) && r_expr(l, nodes, *a) && r_expr(r, nodes, *b)
+            }
+            (Expr::RelationalOp(op, l, r), ExecNode::Rel(c, a, b)) => {
+                *c == rel_code(*op) && r_expr(l, nodes, *a) && r_expr(r, nodes, *b)
+            }
+            (Expr::Update(inc, prefix, t), ExecNode::Update(i2, p2, j)) => {
+                named(t) && i2 == inc && p2 == prefix && r_expr(t, nodes, *j)
+            }
+            (Expr::AssignOp(op, t, v), ExecNode::Assign(c, a, b)) => {
+                named(t) && *c == assign_code(*op) && r_expr(t, nodes, *a) && r_expr(v, nodes, *b)
+            }
+            (Expr::Call(name, args), ExecNode::Call(m, sargs)) => {
+                m == name.as_bytes()
+                    && args.len() == sargs.len()
+                    && args.iter().zip(sargs).all(|(a, s)| r_arg(a, nodes, s))
+            }
+            (Expr::LengthCall(a), ExecNode::Length(j))
+            | (Expr::SqrtCall(a), ExecNode::Sqrt(j))
+            | (Expr::ScaleCall(a), ExecNode::ScaleOf(j))
+            | (Expr::Paren(a), ExecNode::Paren(j)) => r_expr(a, nodes, *j),
+            _ => false,
+        }
+    }
+
+    /// `refine::r_stmts`.
+    fn r_stmts(list: &[Stmt], nodes: &[ExecNode], ns: &[usize]) -> bool {
+        list.len() == ns.len() && list.iter().zip(ns).all(|(s, n)| r_stmt(s, nodes, *n))
+    }
+
+    /// `refine::r_stmt`.
+    fn r_stmt(s: &Stmt, nodes: &[ExecNode], n: usize) -> bool {
+        let Some(node) = nodes.get(n) else {
+            return false;
+        };
+        match (s, node) {
+            (Stmt::Block(list), ExecNode::Block(ns)) => r_stmts(list, nodes, ns),
+            (Stmt::Expr(e), ExecNode::ExprStmt(j)) => r_expr(e, nodes, *j),
+            (Stmt::StringLiteral(t), ExecNode::Str(u)) => u == t.as_bytes(),
+            (Stmt::Break, ExecNode::Break) => true,
+            (Stmt::Return(v), ExecNode::Return(hv, j)) => match v {
+                Some(e) => *hv && r_expr(e, nodes, *j),
+                None => !*hv,
+            },
+            (Stmt::If(c, b), ExecNode::If(i, j)) | (Stmt::While(c, b), ExecNode::While(i, j)) => {
+                r_expr(c, nodes, *i) && r_stmt(b, nodes, *j)
+            }
+            (Stmt::For(i, c, p, b), ExecNode::For(a, d, e, f)) => {
+                r_expr(i, nodes, *a)
+                    && r_expr(c, nodes, *d)
+                    && r_expr(p, nodes, *e)
+                    && r_stmt(b, nodes, *f)
+            }
+            (Stmt::FunctionDef(fd), ExecNode::Define(name, ps, autos, body)) => {
+                name == fd.name.as_bytes()
+                    && r_params(&fd.params, ps)
+                    && r_params(&fd.autos, autos)
+                    && r_stmts(&fd.body, nodes, body)
+            }
+            _ => false,
+        }
+    }
+
+    /// Parses every unit of `input` with both parsers and checks `r_parsed`, as
+    /// `Evaluator::run_unit` and the specification's `run_unit` parse it under `policy`.
+    pub fn check(input: &[u8], policy: ExtensionPolicy) {
+        const MAX_DEPTH: usize = 1000;
+        let units = exec_split_units(&exec_utf8_lossy(input));
+        for unit in units {
+            let text = String::from_utf8(unit.text.clone()).expect("utf8_lossy gives UTF-8");
+            let cfg = ExecPCfg {
+                record_extensions: policy != ExtensionPolicy::Allow,
+                max_depth: MAX_DEPTH as u64,
+            };
+            let p = exec_parse_unit(&exec_tokenize(&unit.text), &cfg);
+            if p.err.out_of_fuel {
+                continue;
+            }
+            let mut ext = Vec::new();
+            let parsed = Parser::try_new(Lexer::new(&text)).and_then(|mut parser| {
+                parser.set_extension_policy(policy);
+                parser.set_max_depth(MAX_DEPTH);
+                let stmts = parser.try_parse_program();
+                ext = parser.take_extension_uses();
+                stmts
+            });
+            let ext_ok = ext.len() == p.st.ext.len()
+                && ext
+                    .iter()
+                    .zip(&p.st.ext)
+                    .all(|((line, desc), e)| e.line == *line as u64 && e.desc == desc.as_bytes());
+            assert!(ext_ok, "extension uses differ for {text:?}: {ext:?}");
+            match parsed {
+                Ok(stmts) => assert!(
+                    p.ok && r_stmts(&stmts, &p.st.nodes, &p.list),
+                    "syntax trees differ for {text:?}"
+                ),
+                Err(BcError::Quit) => assert!(!p.ok && p.err.quit, "quit differs for {text:?}"),
+                Err(BcError::Syntax { line, message, .. }) => assert!(
+                    !p.ok
+                        && !p.err.quit
+                        && p.err.line == line as u64
+                        && p.err.msg == message.as_bytes(),
+                    "syntax errors differ for {text:?}: line {line}, {message:?}"
+                ),
+                Err(e) => panic!("the parser returned {e:?} for {text:?}"),
+            }
+        }
+    }
+}
+
+/// Runs `parser_relation::check` on a thread with room for the compiled specification's
+/// recursion.
+fn check_parser_relation(input: Vec<u8>, policy: bc_core::parser::ExtensionPolicy) {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(move || parser_relation::check(&input, policy))
+        .expect("spawn")
+        .join()
+        .expect("the parser relation holds");
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 300,
+        fork: false,
+        failure_persistence: None,
+        .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn prop_parser_output_corresponds_to_spec(prog in spec_program(), policy in 0..3u8) {
+        use bc_core::parser::ExtensionPolicy;
+        let policy = [ExtensionPolicy::Allow, ExtensionPolicy::Warn, ExtensionPolicy::Reject][policy as usize];
+        check_parser_relation(prog.into_bytes(), policy);
+    }
+
+    #[test]
+    fn prop_parser_output_corresponds_to_spec_on_bytes(input in byte_input()) {
+        check_parser_relation(input, bc_core::parser::ExtensionPolicy::Allow);
+    }
+
+    #[test]
+    fn prop_parser_output_corresponds_to_spec_on_gnu_programs(prog in program()) {
+        check_parser_relation(prog.into_bytes(), bc_core::parser::ExtensionPolicy::Allow);
     }
 }

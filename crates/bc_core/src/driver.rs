@@ -10,12 +10,39 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::error::BcError;
+#[cfg(verus_keep_ghost)]
+use crate::error::RuntimeError;
 use crate::eval::Evaluator;
-use crate::parser::{ExtensionPolicy, Lexer, Parser};
+#[cfg(verus_keep_ghost)]
+use crate::eval::{err_log, lemma_inv_frame, out_col, out_log, r_state, r_unit, same_but_err};
+use crate::format::push_dec;
+use crate::parser::{ExtensionPolicy, Lexer, Parser, Stmt};
+#[cfg(verus_keep_ghost)]
+use crate::refine::{r_err, r_stmts, text_view};
 use crate::verified_kernels::verified_repl_block_completeness;
+#[cfg(verus_keep_ghost)]
+use bc_spec::eval::{EState, with_call, with_depth, with_err, with_flags};
+#[cfg(verus_keep_ghost)]
+use bc_spec::fuel::done;
+#[cfg(verus_keep_ghost)]
+use bc_spec::lexer::{Unit, tokenize};
+#[cfg(verus_keep_ghost)]
+use bc_spec::parser::{ExtUse, PCfg, PR, parse_unit};
+#[cfg(verus_keep_ghost)]
+use bc_spec::top::{Options, RunState, at_line, ext_diags, run_unit};
+#[cfg(not(verus_keep_ghost))]
+use verus_builtin::Ghost;
+#[cfg(not(verus_keep_ghost))]
+use verus_builtin_macros::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+#[cfg(verus_keep_ghost)]
+use vstd::string::StringSliceAdditionalSpecFns;
 
 /// Source name used in syntax diagnostics for standard input, as in GNU bc.
 pub const STDIN_SOURCE: &str = "(standard_in)";
+
+verus! {
 
 /// Result of processing one input unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,6 +54,398 @@ pub enum UnitOutcome {
     /// `quit` was read; processing must stop.
     Quit,
 }
+
+#[cfg(verus_keep_ghost)]
+type SpecOptions = Options;
+#[cfg(not(verus_keep_ghost))]
+type SpecOptions = ();
+#[cfg(verus_keep_ghost)]
+type SpecRun = RunState;
+#[cfg(not(verus_keep_ghost))]
+type SpecRun = ();
+#[cfg(verus_keep_ghost)]
+type SpecUnit = Unit;
+#[cfg(not(verus_keep_ghost))]
+type SpecUnit = ();
+#[cfg(verus_keep_ghost)]
+type SpecExt = Seq<ExtUse>;
+#[cfg(not(verus_keep_ghost))]
+type SpecExt = ();
+
+/// The evaluator between units corresponds to the specification's state `st`: once both reset
+/// the depth and the invocation `ibase` (as `run_unit` does), `r_state` holds.
+pub(crate) open spec fn r_top(e: Evaluator, st: EState) -> bool {
+    r_state(Evaluator { eval_depth: 0, invocation_ibase: None, ..e }, with_call(with_depth(st, 0), st.calls, false, st.inv_ibase))
+}
+
+/// The options of the specification are the evaluator's extension policy and nesting limit.
+pub(crate) open spec fn r_opts(e: Evaluator, opts: Options) -> bool {
+    &&& opts.reject_extensions == (e.extension_policy == ExtensionPolicy::Reject)
+    &&& opts.warn_extensions == (e.extension_policy == ExtensionPolicy::Warn)
+    &&& opts.max_depth == e.max_depth as u64
+}
+
+/// The parser configuration of the specification's `run_unit`.
+pub(crate) open spec fn unit_cfg(opts: Options) -> PCfg {
+    PCfg { record_extensions: opts.reject_extensions || opts.warn_extensions, max_depth: opts.max_depth }
+}
+
+/// The extension uses the parser recorded: line within the unit and description.
+pub(crate) open spec fn r_ext(ext: Seq<(usize, String)>, sext: Seq<ExtUse>) -> bool {
+    ext.len() == sext.len() && forall|i: int| 0 <= i < ext.len() ==> sext[i].line == (#[trigger] ext[i]).0 as u64
+        && sext[i].desc == text_view(ext[i].1)
+}
+
+/// What `run_unit` assumes of the parser (the parser is not proved): the statements, or the
+/// error, and the extension uses correspond to the specification's `parse_unit`.
+pub(crate) open spec fn r_parsed(parsed: Result<Vec<Stmt>, BcError>, ext: Seq<(usize, String)>, p: PR) -> bool {
+    &&& r_ext(ext, p.st.ext)
+    &&& match parsed {
+        Ok(stmts) => p.ok && r_stmts(stmts@, p.st.nodes, p.list),
+        Err(BcError::Quit) => !p.ok && p.err.quit,
+        Err(BcError::Syntax { line, message, .. }) => !p.ok && !p.err.quit && p.err.line == line as u64
+            && p.err.msg == text_view(message),
+        Err(BcError::Runtime { .. }) => false,
+    }
+}
+
+/// The outcome of a unit corresponds to the specification's step from `rs` to `rs2`, unless the
+/// specification leaves its model there (it ran out of fuel).
+pub(crate) open spec fn r_outcome(r: UnitOutcome, e: Evaluator, rs: RunState, rs2: RunState) -> bool {
+    !rs2.not_modeled ==> r_top(e, rs2.st) && !rs2.not_modeled && match r {
+        UnitOutcome::Completed => !rs2.quit && rs2.errors == rs.errors,
+        UnitOutcome::Failed => !rs2.quit && rs2.errors == bc_spec::top::failed(rs, rs2.st).errors,
+        UnitOutcome::Quit => rs2.quit,
+    }
+}
+
+/// `r_top` ignores the depth and the invocation `ibase`.
+proof fn lemma_r_top(e: Evaluator, st: EState, d: u64)
+    requires
+        r_state(e, with_depth(st, d)),
+    ensures
+        r_top(e, st),
+{
+}
+
+impl Evaluator {
+    /// Flushes standard output.
+    fn flush_stdout(&mut self)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            *final(self) == (Evaluator { stdout_writer: final(self).stdout_writer, ..*old(self) }),
+            out_log(&final(self).stdout_writer) == out_log(&old(self).stdout_writer),
+            out_col(&final(self).stdout_writer) == out_col(&old(self).stdout_writer),
+    {
+        let ghost e0 = *self;
+        self.stdout_writer.flush_out();
+        proof {
+            lemma_inv_frame(e0, *self);
+        }
+    }
+
+    /// Flushes the diagnostic stream.
+    fn flush_stderr(&mut self)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            same_but_err(*old(self), *final(self)),
+            err_log(&final(self).stderr_writer) == err_log(&old(self).stderr_writer),
+    {
+        let ghost e0 = *self;
+        self.stderr_writer.flush_err();
+        proof {
+            lemma_inv_frame(e0, *self);
+        }
+    }
+
+    /// Clears a pending `break` or `return` after an error.
+    fn clear_flags(&mut self)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            *final(self) == (Evaluator { break_flag: false, return_flag: false, ..*old(self) }),
+    {
+        let ghost e0 = *self;
+        self.break_flag = false;
+        self.return_flag = false;
+        proof {
+            lemma_inv_frame(e0, *self);
+        }
+    }
+
+    /// Writes `<source> <line>: ` for line `line` of a unit that starts at line `first` (the
+    /// specification's `at_line`).
+    fn write_at_line(&mut self, source: &str, first: usize, line: usize)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            same_but_err(*old(self), *final(self)),
+            err_log(&final(self).stderr_writer) == err_log(&old(self).stderr_writer).add(at_line(source.spec_bytes(), first as u64, line as u64)),
+    {
+        let ghost log0 = err_log(&self.stderr_writer);
+        let ghost e0 = *self;
+        self.stderr_writer.write_bytes(source.as_bytes());
+        let sp: [u8; 1] = [32];
+        self.stderr_writer.write_bytes(&sp);
+        let f = first as u64;
+        let l = line as u64;
+        let n = if l >= 1 && f <= 0xffff_ffff && l <= 0xffff_ffff { f + l - 1 } else { f };
+        let mut digits = Vec::new();
+        push_dec(&mut digits, n);
+        self.stderr_writer.write_bytes(digits.as_slice());
+        let sep: [u8; 2] = [58, 32];
+        self.stderr_writer.write_bytes(&sep);
+        proof {
+            assert(sp@ =~= seq![32u8]);
+            assert(sep@ =~= seq![58u8, 32]);
+            assert(err_log(&self.stderr_writer) =~= log0.add(at_line(source.spec_bytes(), first as u64, line as u64)));
+            lemma_inv_frame(e0, *self);
+        }
+    }
+
+    /// Writes the `-w` / `-s` diagnostics of the extension uses `ext` (the specification's
+    /// `ext_diags`), with GNU bc's prefixes.
+    #[allow(clippy::ptr_arg, reason = "the specification relates the list to the unit")]
+    #[allow(clippy::redundant_as_str, reason = "Verus specifies str::as_bytes and String::as_str, not String::as_bytes")]
+    fn write_ext_diags(&mut self, ext: &Vec<(usize, String)>, source: &str, first: usize, reject: bool, Ghost(sext): Ghost<SpecExt>)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            same_but_err(*old(self), *final(self)),
+            r_ext(ext@, sext) ==> err_log(&final(self).stderr_writer)
+                == err_log(&old(self).stderr_writer).add(ext_diags(sext, source.spec_bytes(), first as u64, reject)),
+    {
+        let ghost log0 = err_log(&self.stderr_writer);
+        let ghost hyp = r_ext(ext@, sext);
+        let ghost src = source.spec_bytes();
+        let error: [u8; 7] = [69, 114, 114, 111, 114, 58, 32];
+        let warning: [u8; 10] = [40, 87, 97, 114, 110, 105, 110, 103, 41, 32];
+        let nl: [u8; 1] = [10];
+        let mut i: usize = 0;
+        proof {
+            if hyp {
+                assert(sext.skip(0) =~= sext);
+                assert(log0.add(ext_diags(sext, src, first as u64, reject)) =~= log0.add(ext_diags(sext.skip(0), src, first as u64, reject)));
+            }
+        }
+        while i < ext.len()
+            invariant
+                self.inv(),
+                same_but_err(*old(self), *self),
+                i <= ext.len(),
+                hyp == r_ext(ext@, sext),
+                src == source.spec_bytes(),
+                error@ == seq![69u8, 114, 114, 111, 114, 58, 32],
+                warning@ == seq![40u8, 87, 97, 114, 110, 105, 110, 103, 41, 32],
+                nl@ == seq![10u8],
+                hyp ==> log0.add(ext_diags(sext, src, first as u64, reject))
+                    == err_log(&self.stderr_writer).add(ext_diags(sext.skip(i as int), src, first as u64, reject)),
+            decreases ext.len() - i,
+        {
+            let ghost log1 = err_log(&self.stderr_writer);
+            let ghost e1 = *self;
+            let (line, desc) = &ext[i];
+            self.write_at_line(source, first, *line);
+            if reject {
+                self.stderr_writer.write_bytes(&error);
+            } else {
+                self.stderr_writer.write_bytes(&warning);
+            }
+            self.stderr_writer.write_bytes(desc.as_str().as_bytes());
+            self.stderr_writer.write_bytes(&nl);
+            proof {
+                if hyp {
+                    let rest = sext.skip(i as int);
+                    assert(rest[0] == sext[i as int]);
+                    assert(rest.drop_first() =~= sext.skip(i as int + 1));
+                    assert(sext[i as int].line == *line as u64 && sext[i as int].desc == text_view(*desc));
+                    let prefix = if reject { seq![69u8, 114, 114, 111, 114, 58, 32] } else { seq![40u8, 87, 97, 114, 110, 105, 110, 103, 41, 32] };
+                    let one = at_line(src, first as u64, rest[0].line).add(prefix).add(rest[0].desc).push(10u8);
+                    assert(ext_diags(rest, src, first as u64, reject) == one.add(ext_diags(rest.drop_first(), src, first as u64, reject)));
+                    assert(err_log(&self.stderr_writer) =~= log1.add(one));
+                    assert(log1.add(one).add(ext_diags(sext.skip(i as int + 1), src, first as u64, reject))
+                        =~= log1.add(one.add(ext_diags(sext.skip(i as int + 1), src, first as u64, reject))));
+                }
+            }
+            proof {
+                lemma_inv_frame(e1, *self);
+            }
+            i += 1;
+        }
+        proof {
+            if hyp {
+                assert(sext.skip(i as int) =~= Seq::<ExtUse>::empty());
+                assert(err_log(&self.stderr_writer).add(Seq::<u8>::empty()) =~= err_log(&self.stderr_writer));
+            }
+        }
+    }
+
+    /// Writes the diagnostic `<source> <line>: <message>` of a syntax error.
+    #[allow(clippy::ptr_arg, reason = "the specification relates the message to the String")]
+    #[allow(clippy::redundant_as_str, reason = "Verus specifies str::as_bytes and String::as_str, not String::as_bytes")]
+    fn write_syntax_diag(&mut self, source: &str, first: usize, line: usize, message: &String)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            same_but_err(*old(self), *final(self)),
+            err_log(&final(self).stderr_writer) == err_log(&old(self).stderr_writer)
+                .add(at_line(source.spec_bytes(), first as u64, line as u64)).add(text_view(*message)).push(10u8),
+    {
+        let ghost log0 = err_log(&self.stderr_writer);
+        self.write_at_line(source, first, line);
+        self.stderr_writer.write_bytes(message.as_str().as_bytes());
+        let nl: [u8; 1] = [10];
+        self.stderr_writer.write_bytes(&nl);
+        proof {
+            assert(nl@ =~= seq![10u8]);
+            assert(err_log(&self.stderr_writer) =~= log0.add(at_line(source.spec_bytes(), first as u64, line as u64)).add(text_view(*message)).push(10u8));
+            lemma_inv_frame(*old(self), *self);
+        }
+    }
+
+    /// The part of `run_unit` after parsing (the specification's `run_unit` after
+    /// `parse_unit`): the `-w` / `-s` diagnostics, the statements, and the diagnostic of an
+    /// error. Its postcondition is the refinement theorem of a unit, relative to the parser's
+    /// correspondence `r_parsed`.
+    #[verifier::exec_allows_no_decreases_clause]
+    #[verifier::rlimit(50)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "three of them are the Ghost arguments of the refinement proof"
+    )]
+    pub(crate) fn run_parsed(&mut self, parsed: Result<Vec<Stmt>, BcError>, ext: &Vec<(usize, String)>, source: &str, first_line: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(u): Ghost<SpecUnit>) -> (r: UnitOutcome)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            (r_top(*old(self), rs.st) && r_opts(*old(self), opts) && u.line == first_line as u64
+                && r_parsed(parsed, ext@, parse_unit(tokenize(u.text), unit_cfg(opts))))
+                ==> r_outcome(r, *final(self), rs, run_unit(opts, rs, source.spec_bytes(), u)),
+    {
+        let ghost hyp = r_top(*self, rs.st) && r_opts(*self, opts) && u.line == first_line as u64
+            && r_parsed(parsed, ext@, parse_unit(tokenize(u.text), unit_cfg(opts)));
+        let ghost p = parse_unit(tokenize(u.text), unit_cfg(opts));
+        let ghost src = source.spec_bytes();
+        let ghost rs2 = run_unit(opts, rs, src, u);
+        let ghost st0 = with_call(with_depth(rs.st, 0), rs.st.calls, false, rs.st.inv_ibase);
+        let ghost e_old = *self;
+        // A unit starts at the top level; this also recovers if a front end caught a panic in
+        // the middle of the previous unit.
+        self.eval_depth = 0;
+        self.invocation_ibase = None;
+        proof {
+            lemma_inv_frame(e_old, *self);
+            if hyp {
+                assert(*self == (Evaluator { eval_depth: 0, invocation_ibase: None, ..e_old }));
+                assert(r_state(*self, st0));
+            }
+        }
+        let reject = matches!(self.extension_policy, ExtensionPolicy::Reject);
+        self.write_ext_diags(ext, source, first_line, reject, Ghost(p.st.ext));
+        let ghost st1 = with_err(st0, st0.err.add(ext_diags(p.st.ext, src, u.line, reject)));
+        proof {
+            if hyp {
+                assert(r_state(*self, st1));
+            }
+        }
+        if reject && !ext.is_empty() && parsed.is_ok() {
+            self.flush_stderr();
+            proof {
+                if hyp {
+                    lemma_r_top(*self, st1, 0);
+                }
+            }
+            return UnitOutcome::Failed;
+        }
+        match parsed {
+            Ok(stmts) => {
+                let ghost e1 = *self;
+                let r = self.exec_items_ref(&stmts, Ghost(p.st.nodes), Ghost(p.list), Ghost(st1));
+                let ghost e_run = *self;
+                self.flush_stdout();
+                let ghost x = bc_spec::top::exec_items(p.st.nodes, p.list, st1, 0x4000_0000_0000_0000u64);
+                match r {
+                    Ok(()) => {
+                        proof {
+                            if hyp && !rs2.not_modeled {
+                                assert(!p.err.out_of_fuel && p.ok);
+                                assert(done(x));
+                                assert(r_state(e1, st1));
+                                assert(r_unit(r, e_run, x, 0));
+                                lemma_r_top(*self, x.st, x.st.depth);
+                            }
+                        }
+                        UnitOutcome::Completed
+                    },
+                    Err(BcError::Runtime { kind, func }) => {
+                        self.clear_flags();
+                        let ghost e2 = *self;
+                        self.write_runtime_diag(&kind, &func);
+                        self.flush_stderr();
+                        proof {
+                            if hyp && !rs2.not_modeled {
+                                assert(!p.err.out_of_fuel && p.ok);
+                                assert(done(x));
+                                assert(r_state(e1, st1));
+                                assert(r_unit(Err(BcError::Runtime { kind, func }), e_run, x, 0));
+                                assert(r_err(BcError::Runtime { kind, func }, x.err));
+                                let st2 = with_flags(x.st, false, false, x.st.ret_val);
+                                assert(r_state(e2, with_depth(st2, 0)));
+                                lemma_r_top(*self, with_err(st2, st2.err.add(bc_spec::top::runtime_diag(x.err))), 0);
+                            }
+                        }
+                        UnitOutcome::Failed
+                    },
+                    Err(BcError::Quit) => UnitOutcome::Quit,
+                    Err(BcError::Syntax { line, message, .. }) => {
+                        // Not produced by execution.
+                        self.write_syntax_diag(source, first_line, line, &message);
+                        self.flush_stderr();
+                        UnitOutcome::Failed
+                    },
+                }
+            },
+            Err(BcError::Quit) => {
+                self.flush_stdout();
+                proof {
+                    if hyp {
+                        lemma_r_top(*self, st1, 0);
+                    }
+                }
+                UnitOutcome::Quit
+            },
+            Err(BcError::Syntax { line, message, .. }) => {
+                self.flush_stdout();
+                self.write_syntax_diag(source, first_line, line, &message);
+                self.flush_stderr();
+                proof {
+                    if hyp {
+                        lemma_r_top(*self, with_err(st1, st1.err.add(at_line(src, u.line, p.err.line)).add(p.err.msg).push(10u8)), 0);
+                    }
+                }
+                UnitOutcome::Failed
+            },
+            Err(BcError::Runtime { kind, func }) => {
+                // Not produced by the parser.
+                self.flush_stdout();
+                self.clear_flags();
+                self.write_runtime_diag(&kind, &func);
+                self.flush_stderr();
+                UnitOutcome::Failed
+            },
+        }
+    }
+}
+
+} // verus!
 
 /// Summary of processing a whole source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -101,16 +520,18 @@ impl UnitAccumulator {
     }
 }
 
+verus! {
+
 impl Evaluator {
     /// Parses and executes one input unit, reporting any error to `stderr_writer`.
     ///
     /// `source` names the input in syntax diagnostics (a file name, or [`STDIN_SOURCE`]) and
     /// `first_line` is the line number of the unit's first line within that source.
+    ///
+    /// Trusted glue: it only runs the parser (not verified) and passes its
+    /// result to the verified `run_parsed`.
+    #[verifier::external_body]
     pub fn run_unit(&mut self, unit: &str, source: &str, first_line: usize) -> UnitOutcome {
-        // A unit starts at the top level; this also recovers if a front end caught a panic in
-        // the middle of the previous unit.
-        self.eval_depth = 0;
-        self.invocation_ibase = None;
         let policy = self.extension_policy;
         let max_depth = self.max_depth;
         let mut extension_uses = Vec::new();
@@ -122,63 +543,14 @@ impl Evaluator {
             stmts
         });
 
-        // `-w` / `-s`: report every use of non-POSIX syntax with GNU bc's prefixes. Under `-s`
-        // the unit is not executed.
-        let prefix = if policy == ExtensionPolicy::Reject {
-            "Error: "
-        } else {
-            "(Warning) "
-        };
-        for (line, description) in &extension_uses {
-            let _ = writeln!(
-                self.stderr_writer,
-                "{} {}: {}{}",
-                source,
-                first_line + line - 1,
-                prefix,
-                description
-            );
-        }
-        if policy == ExtensionPolicy::Reject && !extension_uses.is_empty() && parsed.is_ok() {
-            let _ = self.stderr_writer.flush();
-            return UnitOutcome::Failed;
-        }
-
-        let result = parsed.and_then(|stmts| {
-            for stmt in &stmts {
-                self.try_execute(stmt)?;
-                if self.quit_flag {
-                    return Err(BcError::Quit);
-                }
-            }
-            Ok(())
-        });
-        let _ = self.stdout_writer.flush();
-
-        match result {
-            Ok(()) => UnitOutcome::Completed,
-            Err(BcError::Quit) => UnitOutcome::Quit,
-            Err(err) => {
-                self.break_flag = false;
-                self.return_flag = false;
-                // Diagnostic formats: `docs/COMPATIBILITY.md` §3.2.
-                if let BcError::Syntax { line, message, .. } = &err {
-                    let _ = writeln!(
-                        self.stderr_writer,
-                        "{} {}: {}",
-                        source,
-                        first_line + line - 1,
-                        message
-                    );
-                } else {
-                    let _ = writeln!(self.stderr_writer, "{}", err);
-                }
-                let _ = self.stderr_writer.flush();
-                UnitOutcome::Failed
-            }
-        }
+        self.run_parsed(parsed, &extension_uses, source, first_line, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
     }
 
+}
+
+} // verus!
+
+impl Evaluator {
     /// Splits `text` into units and runs each one, continuing after errors until the end of
     /// the text or `quit`.
     pub fn run_source(&mut self, text: &str, source: &str) -> RunSummary {

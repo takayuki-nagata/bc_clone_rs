@@ -51,6 +51,14 @@
   invocation `ibase`, the body, restoring the caller's state on every return path, and the
   attribution of errors to the function. Every expression and statement the parser builds is
   now covered when `-l` is not in effect; only `-l`'s functions remain outside the proof.
+- The execution of an input unit is proved to refine the specification's `run_unit` as well
+  (`Evaluator::run_parsed`): the `-w` / `-s` diagnostics, the statements, the syntax and
+  runtime diagnostics, `quit`, and whether the unit failed. The theorem assumes that the
+  parser's output corresponds to the specification's (`driver::r_parsed`; the parser
+  itself is not proved). `spec_differential.rs` checks that assumption on generated inputs.
+- A syntax error no longer clears the `break` and `return` flags (only a runtime error does, as
+  in the specification; no unit leaves them set). A diagnostic's line number above 2³² − 1 is
+  replaced by the unit's first line (`docs/COMPATIBILITY.md` §3.2).
 
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval

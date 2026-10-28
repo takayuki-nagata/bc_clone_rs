@@ -14,6 +14,7 @@ bc_core = { path = "../bc_core" }
 ctrlc = "3.4"
 
 [dev-dependencies]
+bc_spec = { path = "../bc_spec" }
 proptest = "1.5"
 
 [lints.rust]

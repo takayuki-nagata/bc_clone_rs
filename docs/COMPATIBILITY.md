@@ -152,7 +152,8 @@ negative power),
 `exponent too large in raise`, `scale too large`, `argument too large` (math library), and
 `nesting too deep` (§2). The last two are not in GNU. Input nested too deeply to parse is reported
 as `<source> <line>: nesting too deep` instead of `syntax error`. Unlike GNU, `bc_clone` does not print a bytecode
-address (`adr=N`).
+address (`adr=N`). `<line>` is the line within the source; a line number above 4294967295 (2³² − 1), within the
+unit or of the unit's first line, is not computed, and the unit's first line is printed instead.
 
 ### 3.3 Out-of-range and undefined operations
 | Situation (POSIX: undefined) | Behavior |
