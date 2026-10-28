@@ -28,6 +28,7 @@ use crate::parser::{
     AssignOp, BinOp, Expr, ExprOrArray, FunctionDef, Param, Register, RelOp, Stmt,
 };
 use crate::spec_num::*;
+use crate::trusted_std::axiom_string_view_injective;
 use crate::verified_kernels::BC_SCALE_MAX;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -369,6 +370,7 @@ pub open spec fn in_fragment(e: Expr) -> bool
 {
     match e {
         Expr::RegisterAccess(_) => true,
+        Expr::Variable(_) => true,
         Expr::Paren(a) => in_fragment(*a),
         Expr::Negate(a) => in_fragment(*a),
         Expr::LengthCall(a) => in_fragment(*a),
@@ -431,6 +433,67 @@ pub proof fn lemma_isqrt_unique(n: int, r1: int, r2: int)
             requires
                 0 <= r2,
                 r2 + 1 <= r1;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Names and variables
+// ---------------------------------------------------------------------------------------------
+
+/// Different names have different bytes.
+pub proof fn lemma_text_view_injective(a: String, b: String)
+    requires
+        text_view(a) == text_view(b),
+    ensures
+        a == b,
+{
+    vstd::utf8::encode_utf8_decode_utf8(a@);
+    vstd::utf8::encode_utf8_decode_utf8(b@);
+    axiom_string_view_injective(a, b);
+}
+
+/// A name bound in the association list is the name of one of its bindings.
+pub proof fn lemma_var_lookup_index(vars: Seq<VarBind>, nm: Seq<u8>)
+    requires
+        var_lookup(vars, nm) is Some,
+    ensures
+        exists|i: int| 0 <= i < vars.len() && #[trigger] vars[i].name == nm,
+    decreases vars.len(),
+{
+    if vars[0].name != nm {
+        lemma_var_lookup_index(vars.drop_first(), nm);
+        let i = choose|i: int| 0 <= i < vars.drop_first().len() && #[trigger] vars.drop_first()[i].name == nm;
+        assert(vars[i + 1].name == nm);
+    }
+}
+
+/// `var_get` is the top of the stack `var_lookup` finds (0 if none or empty).
+pub proof fn lemma_var_get(vars: Seq<VarBind>, nm: Seq<u8>)
+    ensures
+        var_get(vars, nm) == match var_lookup(vars, nm) {
+            Some(s) => if s.len() > 0 { s[s.len() - 1] } else { zero_num() },
+            None => zero_num(),
+        },
+    decreases vars.len(),
+{
+    if vars.len() > 0 && vars[0].name != nm {
+        lemma_var_get(vars.drop_first(), nm);
+    }
+}
+
+/// A name that production does not bind has no binding in the specification either.
+pub proof fn lemma_var_absent(m: Map<String, Vec<BCNum>>, vars: Seq<VarBind>, name: String)
+    requires
+        r_vars(m, vars),
+        !m.contains_key(name),
+    ensures
+        var_lookup(vars, text_view(name)) is None,
+{
+    if var_lookup(vars, text_view(name)) is Some {
+        lemma_var_lookup_index(vars, text_view(name));
+        let i = choose|i: int| 0 <= i < vars.len() && #[trigger] vars[i].name == text_view(name);
+        let k = choose|k: String| #[trigger] m.contains_key(k) && text_view(k) == vars[i].name;
+        lemma_text_view_injective(k, name);
     }
 }
 

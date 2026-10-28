@@ -39,7 +39,7 @@
   the POSIX operations exactly, assuming only the `num-bigint` operations listed in
   `crates/bc_core/src/trusted_bigint.rs`.
 - Expression evaluation is being proved to refine the specification: registers,
-  parentheses, unary minus, `length`, `scale`, `sqrt`, the arithmetic operators except `^`, and
+  variables, parentheses, unary minus, `length`, `scale`, `sqrt`, the arithmetic operators except `^`, and
   the relational operators so far, including the nesting limit and runtime errors.
 
 ### Math library

@@ -48,7 +48,7 @@ use bc_spec::eval::{
     ER, EState, er_ok, ev, ev_node, ev_unary, negate, num_u64, reg_get, with_depth,
 };
 #[cfg(verus_keep_ghost)]
-use bc_spec::eval::{arith as spec_arith, rel_holds};
+use bc_spec::eval::{arith as spec_arith, rel_holds, var_get};
 #[cfg(verus_keep_ghost)]
 use bc_spec::fuel::done;
 #[cfg(verus_keep_ghost)]
@@ -638,6 +638,7 @@ impl Evaluator {
     {
         match node {
             Expr::RegisterAccess(reg) => self.eval_register(*reg, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::Variable(name) => self.eval_variable(name, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Paren(inner) => self.eval_paren(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Negate(inner) => self.eval_negate(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::LengthCall(inner) => self.eval_length(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
@@ -1160,6 +1161,36 @@ impl Evaluator {
                     lemma_num_cmp(xa.val, xb.val);
                     assert(holds == rel_holds(rel_code(op), num_cmp(xa.val, xb.val)));
                 }
+            }
+        }
+        Ok(v)
+    }
+
+    /// The value of a variable (the specification's `var_get`).
+    fn eval_variable(&mut self, name: &String, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+        ensures
+            *final(self) == *old(self),
+            r is Ok && r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(Expr::Variable(*name), nodes, n)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let v = self.var_get(name);
+        proof {
+            if r_state(*self, st) && r_expr(Expr::Variable(*name), nodes, n) {
+                let nm = text_view(*name);
+                lemma_var_get(st.vars, nm);
+                if self.variables@.contains_key(*name) {
+                    let s = var_lookup(st.vars, nm)->Some_0;
+                    assert(r_stack(self.variables@[*name]@, s));
+                    if s.len() > 0 {
+                        assert(r_num(self.variables@[*name]@[s.len() - 1], s[s.len() - 1]));
+                    }
+                } else {
+                    lemma_var_absent(self.variables@, st.vars, *name);
+                }
+                assert(r_num(v, var_get(st.vars, nm)));
             }
         }
         Ok(v)
