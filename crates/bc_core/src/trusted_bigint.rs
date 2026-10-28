@@ -15,8 +15,9 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::*;
+use alloc::string::ToString;
 use num_bigint::BigInt;
-use num_traits::Zero;
+use num_traits::{Signed, Zero};
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
@@ -83,6 +84,52 @@ pub fn big_is_zero(a: &BigInt) -> (r: bool)
     a.is_zero()
 }
 
+#[verifier::external_body]
+pub fn big_from_usize(n: usize) -> (r: BigInt)
+    ensures
+        big_view(&r) == n,
+{
+    BigInt::from(n)
+}
+
+#[verifier::external_body]
+pub fn big_is_negative(a: &BigInt) -> (r: bool)
+    ensures
+        r == (big_view(a) < 0),
+{
+    a.is_negative()
+}
+
+#[verifier::external_body]
+pub fn big_abs(a: &BigInt) -> (r: BigInt)
+    ensures
+        big_view(&r) == (if big_view(a) >= 0 { big_view(a) } else { -big_view(a) }),
+{
+    a.abs()
+}
+
+/// The integer square root (`BigInt::sqrt`, which panics on a negative argument).
+#[verifier::external_body]
+pub fn big_isqrt(a: &BigInt) -> (r: BigInt)
+    requires
+        big_view(a) >= 0,
+    ensures
+        is_isqrt(big_view(a), big_view(&r)),
+{
+    a.sqrt()
+}
+
+/// The number of decimal digits of a positive integer (the length of its decimal text).
+#[verifier::external_body]
+pub fn big_decimal_digits(a: &BigInt) -> (r: usize)
+    requires
+        big_view(a) > 0,
+    ensures
+        is_digit_count(big_view(a), r as nat),
+{
+    a.to_string().len()
+}
+
 /// `10^n`.
 #[verifier::external_body]
 pub fn big_pow10(n: u32) -> (r: BigInt)
@@ -119,6 +166,23 @@ mod tests {
             if b != 0 {
                 prop_assert_eq!(big_tdiv(&big(a), &big(b)), big(tdiv(a, b)));
             }
+            prop_assert_eq!(big_is_negative(&big(a)), a < 0);
+            prop_assert_eq!(big_abs(&big(a)), big(a.abs()));
+        }
+
+        #[test]
+        fn isqrt_and_digit_count(a in 0i128..(1i128 << 100)) {
+            let r = big_isqrt(&big(a));
+            prop_assert!(&r * &r <= big(a) && big(a) < (&r + 1) * (&r + 1));
+            if a > 0 {
+                let k = big_decimal_digits(&big(a));
+                prop_assert!(k >= 1 && 10i128.pow(k as u32 - 1) <= a && (k >= 39 || a < 10i128.pow(k as u32)));
+            }
+        }
+
+        #[test]
+        fn from_usize(n in any::<usize>()) {
+            prop_assert_eq!(big_from_usize(n), BigInt::from(n));
         }
     }
 

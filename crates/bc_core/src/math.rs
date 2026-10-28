@@ -14,9 +14,10 @@ use crate::spec_num::*;
 #[cfg(verus_keep_ghost)]
 use crate::trusted_bigint::big_view;
 use crate::trusted_bigint::{
-    big_add, big_is_zero, big_mul, big_pow10, big_sub, big_tdiv, big_zero,
+    big_abs, big_add, big_decimal_digits, big_from_usize, big_is_negative, big_is_zero, big_isqrt,
+    big_mul, big_pow10, big_sub, big_tdiv, big_zero,
 };
-use crate::verified_kernels::BC_SCALE_MAX;
+use crate::verified_kernels::{BC_SCALE_MAX, MAX_VERIFIED_SCALE};
 use crate::verified_kernels::{
     verified_add_sub_scales, verified_alphanumeric_char_val, verified_bcnum_length,
     verified_div_scale_and_shift, verified_mul_scale_and_shift,
@@ -228,6 +229,75 @@ impl BCNum {
         let prod = Self::new(prod_coeff, prod_scale);
         Ok(self.sub(&prod))
     }
+    /// Computes the square root of self under scale, returning Err on negative input.
+    pub fn try_sqrt(&self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
+        requires
+            self.scale <= BC_SCALE_MAX,
+            global_scale <= BC_SCALE_MAX,
+        ensures
+            match r {
+                Ok(q) => self.val().coeff >= 0
+                    && q.scale == (if self.scale >= global_scale { self.scale } else { global_scale })
+                    && is_isqrt(self.val().coeff * spec_num::pow10((2 * q.scale - self.scale) as nat), q.val().coeff),
+                Err(e) => self.val().coeff < 0 && e == RuntimeError::NegativeSqrt,
+            },
+    {
+        if big_is_negative(&self.coeff) {
+            return Err(RuntimeError::NegativeSqrt);
+        }
+        let (sr, shift) = verified_sqrt_scale_and_shift(self.scale, global_scale);
+        let num = big_mul(&self.coeff, &pow10_within(shift));
+        proof {
+            lemma_pow10_pos(shift as nat);
+            assert(big_view(&num) >= 0) by (nonlinear_arith)
+                requires
+                    big_view(&num) == big_view(&self.coeff) * spec_num::pow10(shift as nat),
+                    big_view(&self.coeff) >= 0,
+                    spec_num::pow10(shift as nat) >= 1;
+        }
+        Ok(Self::new(big_isqrt(&num), sr))
+    }
+
+    /// Computes the total number of significant decimal digits.
+    pub fn length(&self) -> (r: Self)
+        requires
+            self.scale <= BC_SCALE_MAX,
+        ensures
+            r.scale == 0,
+            ({
+                let c = self.val().coeff;
+                let ip = (if c >= 0 { c } else { -c }) / spec_num::pow10(self.scale as nat);
+                &&& ip == 0 ==> r.val().coeff == (if self.scale >= 1 { self.scale as int } else { 1 })
+                &&& ip > 0 ==> r.val().coeff > self.scale
+                    && is_digit_count(ip, (r.val().coeff - self.scale) as nat)
+            }),
+    {
+        proof {
+            lemma_pow10_pos(self.scale as nat);
+        }
+        let int_part = big_tdiv(&big_abs(&self.coeff), &pow10_within(self.scale));
+        if big_is_zero(&int_part) {
+            let val = verified_bcnum_length(true, 0, self.scale);
+            Self::new(big_from_usize(val), 0)
+        } else {
+            let digits = big_decimal_digits(&int_part);
+            if digits <= MAX_VERIFIED_SCALE {
+                let val = verified_bcnum_length(false, digits, self.scale);
+                Self::new(big_from_usize(val), 0)
+            } else {
+                // More integer digits than the kernel's bound: add them as integers.
+                Self::new(big_add(&big_from_usize(digits), &big_from_usize(self.scale)), 0)
+            }
+        }
+    }
+
+    /// Returns the scale of self.
+    pub fn scale_func(&self) -> (r: Self)
+        ensures
+            r.val() == (SpecBCNum { coeff: self.scale as int, scale: 0 }),
+    {
+        Self::new(big_from_usize(self.scale), 0)
+    }
 }
 
 } // verus!
@@ -342,41 +412,11 @@ impl BCNum {
             .unwrap_or_else(|msg| panic!("{}", msg))
     }
 
-    /// Computes the square root of self under scale, returning Err on negative input.
-    pub fn try_sqrt(&self, global_scale: usize) -> Result<Self, RuntimeError> {
-        if self.coeff < BigInt::zero() {
-            return Err(RuntimeError::NegativeSqrt);
-        }
-        let (sr, shift) = verified_sqrt_scale_and_shift(self.scale, global_scale);
-        let num = &self.coeff * pow10(shift);
-        let coeff = num.sqrt();
-        Ok(Self::new(coeff, sr))
-    }
-
     /// Computes the square root of self under scale.
     #[cfg(test)]
     pub fn sqrt(&self, global_scale: usize) -> Self {
         self.try_sqrt(global_scale)
             .unwrap_or_else(|msg| panic!("{}", msg))
-    }
-
-    /// Computes the total number of significant decimal digits.
-    pub fn length(&self) -> Self {
-        let divisor = pow10(self.scale);
-        let int_part = self.coeff.abs() / divisor;
-        let is_zero = int_part.is_zero();
-        let digits = if is_zero {
-            0
-        } else {
-            int_part.to_string().len()
-        };
-        let val = verified_bcnum_length(is_zero, digits, self.scale);
-        Self::new(BigInt::from(val), 0)
-    }
-
-    /// Returns the scale of self.
-    pub fn scale_func(&self) -> Self {
-        Self::new(BigInt::from(self.scale), 0)
     }
 
     /// Formats the BCNum value as a string in `obase`.
