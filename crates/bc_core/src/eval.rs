@@ -25,6 +25,10 @@ use crate::parser::{
 };
 #[cfg(verus_keep_ghost)]
 use crate::refine::*;
+#[cfg(verus_keep_ghost)]
+use crate::spec_num::SpecBCNum;
+#[cfg(verus_keep_ghost)]
+use crate::trusted_std::axiom_string_obeys_cmp;
 use crate::verified_kernels::{
     BC_BASE_MAX, BC_DIM_MAX, BC_SCALE_MAX, IBASE_MAX, verified_clamp_register,
     verified_hex_char_val, verified_loop_post_body_action, verified_nesting_within_limit,
@@ -169,6 +173,287 @@ pub(crate) open spec fn r_state(e: Evaluator, st: EState) -> bool {
     &&& r_output(e.stdout_writer, e.stderr_writer, st)
 }
 
+/// Every number the evaluator holds has a scale of at most `BC_SCALE_MAX` (the precondition of
+/// the verified `BCNum` operations), and the registers are in their ranges.
+pub(crate) open spec fn nums_ok(s: Seq<BCNum>) -> bool {
+    forall|i: int| 0 <= i < s.len() ==> (#[trigger] s[i]).scale <= BC_SCALE_MAX
+}
+
+pub(crate) open spec fn frame_ok(f: Map<usize, BCNum>) -> bool {
+    forall|k: usize| #[trigger] f.contains_key(k) ==> f[k].scale <= BC_SCALE_MAX
+}
+
+pub(crate) open spec fn frames_ok(s: Seq<BTreeMap<usize, BCNum>>) -> bool {
+    forall|i: int| 0 <= i < s.len() ==> frame_ok((#[trigger] s[i])@)
+}
+
+impl Evaluator {
+    /// The evaluator's invariant (`docs/COMPATIBILITY.md` §2): registers in range, and every
+    /// stored number with a scale of at most `BC_SCALE_MAX`.
+    pub(crate) open spec fn inv(&self) -> bool {
+        &&& self.scale <= BC_SCALE_MAX
+        &&& 2 <= self.ibase <= IBASE_MAX
+        &&& 2 <= self.obase <= BC_BASE_MAX
+        &&& self.return_value.scale <= BC_SCALE_MAX
+        &&& match self.invocation_ibase {
+            Some(b) => 2 <= b <= IBASE_MAX,
+            None => true,
+        }
+        &&& forall|k: String| #[trigger] self.variables@.contains_key(k) ==> nums_ok(self.variables@[k]@)
+        &&& forall|k: String| #[trigger] self.arrays@.contains_key(k) ==> frames_ok(self.arrays@[k]@)
+    }
+
+    /// The current value of variable `name`: the top of its stack, 0 if it has none.
+    pub(crate) fn var_get(&self, name: &String) -> (r: BCNum)
+        requires
+            self.inv(),
+        ensures
+            r.scale <= BC_SCALE_MAX,
+            ({
+                let m = self.variables@;
+                if m.contains_key(*name) && m[*name]@.len() > 0 {
+                    r.val() == m[*name]@.last().val()
+                } else {
+                    r.val() == BCNum::spec_zero_val()
+                }
+            }),
+    {
+        proof {
+            axiom_string_obeys_cmp();
+            broadcast use vstd::std_specs::btree::group_btree_axioms;
+        }
+        match self.variables.get(name) {
+            Some(stack) => {
+                if !stack.is_empty() {
+                    stack[stack.len() - 1].copy()
+                } else {
+                    BCNum::zero()
+                }
+            },
+            None => BCNum::zero(),
+        }
+    }
+
+    /// Sets the top of variable `name`'s stack to `v` (a new name gets the stack `[v]`).
+    pub(crate) fn var_set(&mut self, name: String, v: BCNum)
+        requires
+            old(self).inv(),
+            v.scale <= BC_SCALE_MAX,
+        ensures
+            final(self).inv(),
+            ({
+                let m = old(self).variables@;
+                let s = if m.contains_key(name) { m[name]@ } else { Seq::empty() };
+                &&& final(self).variables@.dom() == m.dom().insert(name)
+                &&& final(self).variables@[name]@ == if s.len() > 0 { s.drop_last().push(v) } else { s.push(v) }
+                &&& forall|k: String| k != name && #[trigger] m.contains_key(k) ==> final(self).variables@[k] == m[k]
+            }),
+            final(self).arrays@ == old(self).arrays@,
+    {
+        proof {
+            axiom_string_obeys_cmp();
+            broadcast use vstd::std_specs::btree::group_btree_axioms;
+        }
+        let mut stack = self.variables.remove(&name).unwrap_or_default();
+        if !stack.is_empty() {
+            stack.pop();
+        }
+        stack.push(v);
+        self.variables.insert(name, stack);
+    }
+
+    /// Pushes `v` on variable `name`'s stack (a new name first gets its global frame 0).
+    pub(crate) fn var_push(&mut self, name: String, v: BCNum)
+        requires
+            old(self).inv(),
+            v.scale <= BC_SCALE_MAX,
+        ensures
+            final(self).inv(),
+            ({
+                let m = old(self).variables@;
+                let t = final(self).variables@[name]@;
+                &&& final(self).variables@.dom() == m.dom().insert(name)
+                &&& if m.contains_key(name) {
+                    t == m[name]@.push(v)
+                } else {
+                    t.len() == 2 && t[0].val() == BCNum::spec_zero_val() && t[0].scale == 0 && t[1] == v
+                }
+                &&& forall|k: String| k != name && #[trigger] m.contains_key(k) ==> final(self).variables@[k] == m[k]
+            }),
+            final(self).arrays@ == old(self).arrays@,
+    {
+        proof {
+            axiom_string_obeys_cmp();
+            broadcast use vstd::std_specs::btree::group_btree_axioms;
+        }
+        let mut stack = match self.variables.remove(&name) {
+            Some(s) => s,
+            None => vec![BCNum::zero()],
+        };
+        stack.push(v);
+        self.variables.insert(name, stack);
+    }
+
+    /// Pops the top of variable `name`'s stack, if it has one.
+    pub(crate) fn var_pop(&mut self, name: &String)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            ({
+                let m = old(self).variables@;
+                if m.contains_key(*name) {
+                    &&& final(self).variables@.dom() == m.dom()
+                    &&& final(self).variables@[*name]@ == if m[*name]@.len() > 0 { m[*name]@.drop_last() } else { m[*name]@ }
+                    &&& forall|k: String| k != *name && #[trigger] m.contains_key(k) ==> final(self).variables@[k] == m[k]
+                } else {
+                    final(self).variables@ == m
+                }
+            }),
+            final(self).arrays@ == old(self).arrays@,
+    {
+        proof {
+            axiom_string_obeys_cmp();
+            broadcast use vstd::std_specs::btree::group_btree_axioms;
+        }
+        if let Some(mut stack) = self.variables.remove(name) {
+            if !stack.is_empty() {
+                stack.pop();
+            }
+            self.variables.insert(name.clone(), stack);
+        }
+    }
+
+    /// Sets element `idx` of array `name`'s current frame to `v` (a new name, or an empty
+    /// stack, gets a frame).
+    pub(crate) fn arr_set(&mut self, name: String, idx: usize, v: BCNum)
+        requires
+            old(self).inv(),
+            v.scale <= BC_SCALE_MAX,
+        ensures
+            final(self).inv(),
+            ({
+                let m = old(self).arrays@;
+                let s = if m.contains_key(name) { m[name]@ } else { Seq::empty() };
+                let t = final(self).arrays@[name]@;
+                &&& final(self).arrays@.dom() == m.dom().insert(name)
+                &&& t.len() == if s.len() > 0 { s.len() } else { 1 }
+                &&& t.drop_last() == if s.len() > 0 { s.drop_last() } else { Seq::empty() }
+                &&& t.last()@ == if s.len() > 0 { s.last()@.insert(idx, v) } else { Map::empty().insert(idx, v) }
+                &&& forall|k: String| k != name && #[trigger] m.contains_key(k) ==> final(self).arrays@[k] == m[k]
+            }),
+            final(self).variables@ == old(self).variables@,
+    {
+        proof {
+            axiom_string_obeys_cmp();
+            broadcast use vstd::std_specs::btree::group_btree_axioms;
+            broadcast use vstd::laws_cmp::group_laws_cmp;
+        }
+        let mut stack = self.arrays.remove(&name).unwrap_or_default();
+        let mut frame = stack.pop().unwrap_or_default();
+        frame.insert(idx, v);
+        stack.push(frame);
+        self.arrays.insert(name, stack);
+    }
+
+    /// Pushes `frame` on array `name`'s stack (a new name first gets its empty global frame).
+    pub(crate) fn arr_push(&mut self, name: String, frame: BTreeMap<usize, BCNum>)
+        requires
+            old(self).inv(),
+            frame_ok(frame@),
+        ensures
+            final(self).inv(),
+            ({
+                let m = old(self).arrays@;
+                let t = final(self).arrays@[name]@;
+                &&& final(self).arrays@.dom() == m.dom().insert(name)
+                &&& if m.contains_key(name) {
+                    t == m[name]@.push(frame)
+                } else {
+                    t.len() == 2 && t[0]@ == Map::<usize, BCNum>::empty() && t[1] == frame
+                }
+                &&& forall|k: String| k != name && #[trigger] m.contains_key(k) ==> final(self).arrays@[k] == m[k]
+            }),
+            final(self).variables@ == old(self).variables@,
+    {
+        proof {
+            axiom_string_obeys_cmp();
+            broadcast use vstd::std_specs::btree::group_btree_axioms;
+        }
+        let mut stack = match self.arrays.remove(&name) {
+            Some(s) => s,
+            None => vec![BTreeMap::new()],
+        };
+        stack.push(frame);
+        self.arrays.insert(name, stack);
+    }
+
+    /// Pops the current frame of array `name`, if it has one.
+    pub(crate) fn arr_pop(&mut self, name: &String)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            ({
+                let m = old(self).arrays@;
+                if m.contains_key(*name) {
+                    &&& final(self).arrays@.dom() == m.dom()
+                    &&& final(self).arrays@[*name]@ == if m[*name]@.len() > 0 { m[*name]@.drop_last() } else { m[*name]@ }
+                    &&& forall|k: String| k != *name && #[trigger] m.contains_key(k) ==> final(self).arrays@[k] == m[k]
+                } else {
+                    final(self).arrays@ == m
+                }
+            }),
+            final(self).variables@ == old(self).variables@,
+    {
+        proof {
+            axiom_string_obeys_cmp();
+            broadcast use vstd::std_specs::btree::group_btree_axioms;
+        }
+        if let Some(mut stack) = self.arrays.remove(name) {
+            if !stack.is_empty() {
+                stack.pop();
+            }
+            self.arrays.insert(name.clone(), stack);
+        }
+    }
+
+    /// The value of element `idx` of array `name`'s current frame (0 if unset).
+    pub(crate) fn arr_get(&self, name: &String, idx: usize) -> (r: BCNum)
+        requires
+            self.inv(),
+        ensures
+            r.scale <= BC_SCALE_MAX,
+            ({
+                let m = self.arrays@;
+                if m.contains_key(*name) && m[*name]@.len() > 0 && m[*name]@.last()@.contains_key(idx) {
+                    r.val() == m[*name]@.last()@[idx].val()
+                } else {
+                    r.val() == BCNum::spec_zero_val()
+                }
+            }),
+    {
+        proof {
+            axiom_string_obeys_cmp();
+            broadcast use vstd::std_specs::btree::group_btree_axioms;
+            broadcast use vstd::laws_cmp::group_laws_cmp;
+        }
+        match self.arrays.get(name) {
+            Some(stack) => {
+                if !stack.is_empty() {
+                    match stack[stack.len() - 1].get(&idx) {
+                        Some(v) => v.copy(),
+                        None => BCNum::zero(),
+                    }
+                } else {
+                    BCNum::zero()
+                }
+            },
+            None => BCNum::zero(),
+        }
+    }
+}
+
 } // verus!
 
 impl ErrWriter {
@@ -271,12 +556,8 @@ impl Evaluator {
     /// Reads the current value of a resolved target.
     fn load(&mut self, place: &Place) -> BCNum {
         match place {
-            Place::Variable(name) => self.variable_top(name.clone()).clone(),
-            Place::Element(name, index) => self
-                .array_top(name.clone())
-                .get(index)
-                .cloned()
-                .unwrap_or_else(BCNum::zero),
+            Place::Variable(name) => self.var_get(name),
+            Place::Element(name, index) => self.arr_get(name, *index),
             Place::Register(reg) => BCNum::new(BigInt::from(self.register(*reg)), 0),
         }
     }
@@ -285,12 +566,8 @@ impl Evaluator {
     /// it to their range).
     fn store(&mut self, place: Place, val: &BCNum) -> BCNum {
         match place {
-            Place::Variable(name) => {
-                *self.variable_top(name) = val.clone();
-            }
-            Place::Element(name, index) => {
-                self.array_top(name).insert(index, val.clone());
-            }
+            Place::Variable(name) => self.var_set(name, val.clone()),
+            Place::Element(name, index) => self.arr_set(name, index, val.clone()),
             Place::Register(reg) => {
                 let stored = self.store_register(reg, val);
                 return BCNum::new(BigInt::from(stored), 0);
@@ -307,41 +584,13 @@ impl Evaluator {
         }
     }
 
-    /// The innermost frame of a scope stack. The evaluator keeps a global frame at the bottom of
-    /// every stack; a stack emptied through the public `variables`/`arrays` fields gets a fresh
-    /// one from `init`, so this never fails.
-    /// The current value of variable `name`.
-    fn variable_top(&mut self, name: String) -> &mut BCNum {
-        let stack = self.variable_stack(name);
-        if stack.is_empty() {
-            stack.push(BCNum::zero());
+    /// A copy of the current frame of array `name` (empty if it has none), for an array
+    /// argument. Not verified yet.
+    fn arr_frame_clone(&self, name: &str) -> BTreeMap<usize, BCNum> {
+        match self.arrays.get(name).and_then(|stack| stack.last()) {
+            Some(frame) => frame.clone(),
+            None => BTreeMap::new(),
         }
-        let top = stack.len() - 1;
-        &mut stack[top]
-    }
-
-    /// The current frame of array `name`.
-    fn array_top(&mut self, name: String) -> &mut BTreeMap<usize, BCNum> {
-        let stack = self.array_stack(name);
-        if stack.is_empty() {
-            stack.push(BTreeMap::new());
-        }
-        let top = stack.len() - 1;
-        &mut stack[top]
-    }
-
-    /// The scope stack of variable `name`, created with its global frame (0) if needed.
-    fn variable_stack(&mut self, name: String) -> &mut Vec<BCNum> {
-        self.variables
-            .entry(name)
-            .or_insert_with(|| vec![BCNum::zero()])
-    }
-
-    /// The scope stack of array `name`, created with its global frame (empty) if needed.
-    fn array_stack(&mut self, name: String) -> &mut Vec<BTreeMap<usize, BCNum>> {
-        self.arrays
-            .entry(name)
-            .or_insert_with(|| vec![BTreeMap::new()])
     }
 
     /// Whether an expression statement is an assignment, whose value is not printed (POSIX).
@@ -432,11 +681,9 @@ impl Evaluator {
         self.invocation_ibase = saved.invocation_ibase;
         for param in func.autos.iter().rev().chain(func.params.iter().rev()) {
             if param.is_array {
-                if let Some(stack) = self.arrays.get_mut(&param.name) {
-                    stack.pop();
-                }
-            } else if let Some(stack) = self.variables.get_mut(&param.name) {
-                stack.pop();
+                self.arr_pop(&param.name);
+            } else {
+                self.var_pop(&param.name);
             }
         }
     }
@@ -474,15 +721,11 @@ impl Evaluator {
     fn evaluate_node(&mut self, node: &Expr) -> Result<BCNum, BcError> {
         match node {
             Expr::Number(value) => self.literal(value),
-            Expr::Variable(name) => Ok(self.variable_top(name.clone()).clone()),
+            Expr::Variable(name) => Ok(self.var_get(name)),
             Expr::ArrayAccess(name, index_expr) => {
                 let idx = self.try_evaluate(index_expr)?;
                 let idx_val = Self::array_index(name, &idx)?;
-                Ok(self
-                    .array_top(name.clone())
-                    .get(&idx_val)
-                    .cloned()
-                    .unwrap_or_else(BCNum::zero))
+                Ok(self.arr_get(name, idx_val))
             }
             Expr::RegisterAccess(reg) => Ok(BCNum::new(BigInt::from(self.register(*reg)), 0)),
             Expr::Negate(expr) => {
@@ -575,7 +818,7 @@ impl Evaluator {
                         let param = &func.params[i];
                         if param.is_array {
                             if let ExprOrArray::ArrayArg(arg_name) = arg {
-                                let arr_copy = self.array_top(arg_name.clone()).clone();
+                                let arr_copy = self.arr_frame_clone(arg_name);
                                 evaluated_args
                                     .push((param.name.clone(), ArgValue::Array(arr_copy)));
                             } else {
@@ -599,16 +842,16 @@ impl Evaluator {
                     // (a name first seen as a parameter or `auto` stays usable afterwards).
                     for (pname, value) in evaluated_args {
                         match value {
-                            ArgValue::Array(arr) => self.array_stack(pname).push(arr),
-                            ArgValue::Scalar(val) => self.variable_stack(pname).push(val),
+                            ArgValue::Array(arr) => self.arr_push(pname, arr),
+                            ArgValue::Scalar(val) => self.var_push(pname, val),
                         }
                     }
 
                     for auto in &func.autos {
                         if auto.is_array {
-                            self.array_stack(auto.name.clone()).push(BTreeMap::new());
+                            self.arr_push(auto.name.clone(), BTreeMap::new());
                         } else {
-                            self.variable_stack(auto.name.clone()).push(BCNum::zero());
+                            self.var_push(auto.name.clone(), BCNum::zero());
                         }
                     }
 

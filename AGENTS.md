@@ -253,6 +253,11 @@ as possible and state the reason next to it.
   declared outside `verus!` (Verus rejects derived impls on recursive types) and made visible to
   Verus with `external_type_specification`; the output streams `WrappedStdout` and `ErrWriter`
   are opaque (`external_body`) and modeled by `out_log`, `out_col` and `err_log`.
+- Variables and arrays are read and written only through the verified storage functions
+  (`var_get`, `var_set`, `var_push`, `var_pop`, `arr_get`, `arr_set`, `arr_push`, `arr_pop` in
+  `src/eval.rs`), which maintain `Evaluator::inv` (registers in range, every stored scale at most
+  `BC_SCALE_MAX`). Reading a name does not create its binding. Other trusted facts about the
+  standard library (`String` keys) are the axioms in `trusted_std.rs`.
 - Trusted assumptions about `BigInt` go only in `trusted_bigint.rs`, as `#[verifier::external_body]`
   one-line wrappers with a test each. Name a function there rather than using an operator on
   `BigInt` in verified code.

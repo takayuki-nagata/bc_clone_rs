@@ -241,6 +241,20 @@ impl BCNum {
         Self::new(big_tdiv(&num, &frac_denominator), fs.len())
     }
 
+    /// The value of `BCNum::zero()`.
+    pub open spec fn spec_zero_val() -> SpecBCNum {
+        SpecBCNum { coeff: 0, scale: 0 }
+    }
+
+    /// A copy of the number (the derived `Clone`, with a specification).
+    pub fn copy(&self) -> (r: Self)
+        ensures
+            r.val() == self.val(),
+            r.scale == self.scale,
+    {
+        Self { coeff: big_clone(&self.coeff), scale: self.scale }
+    }
+
     /// Returns true if the number is mathematically zero.
     pub fn is_zero(&self) -> (r: bool)
         ensures

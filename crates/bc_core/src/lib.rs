@@ -41,6 +41,8 @@ pub use bc_spec::spec_num;
 #[cfg(verus_keep_ghost)]
 mod refine;
 mod trusted_bigint;
+#[cfg(verus_keep_ghost)]
+mod trusted_std;
 pub mod verified_kernels;
 #[cfg(verus_keep_ghost)]
 pub mod verus_proofs;
