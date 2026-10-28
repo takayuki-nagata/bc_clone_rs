@@ -108,6 +108,15 @@ fn main() -> ! {
             "1267650600228229401496703205376",
         ),
         (
+            // The exact scale of a power is computed in u64: on 32-bit targets an exponent
+            // beyond usize::MAX must not make a scale-0 power "scale too large".
+            "Power with an exponent beyond u32",
+            "1^5000000000; (-1)^5000000001; 0^5000000000\n",
+            false,
+            0,
+            "1\n-1\n0",
+        ),
+        (
             "Recursive Factorial f(20)",
             "define f(n) { if (n <= 1) return (1); return (n * f(n - 1)); }; f(20)\n",
             false,

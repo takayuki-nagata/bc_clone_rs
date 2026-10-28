@@ -14,8 +14,8 @@ use crate::spec_num::*;
 #[cfg(verus_keep_ghost)]
 use crate::trusted_bigint::big_view;
 use crate::trusted_bigint::{
-    big_abs, big_add, big_decimal_digits, big_from_usize, big_is_negative, big_is_zero, big_isqrt,
-    big_mul, big_pow10, big_sub, big_tdiv, big_zero,
+    big_abs, big_add, big_clone, big_decimal_digits, big_from_usize, big_is_negative, big_is_zero,
+    big_isqrt, big_mul, big_pow10, big_sub, big_tdiv, big_to_i64, big_zero,
 };
 use crate::verified_kernels::{BC_SCALE_MAX, MAX_VERIFIED_SCALE};
 use crate::verified_kernels::{
@@ -28,7 +28,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use num_bigint::BigInt;
-use num_traits::{Signed, ToPrimitive, Zero};
+use num_traits::{Signed, Zero};
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
@@ -70,6 +70,33 @@ fn pow10_within(n: usize) -> (r: BigInt)
         big_view(&r) == spec_num::pow10(n as nat),
 {
     big_pow10(n as u32)
+}
+
+/// A nonzero base has a nonzero power.
+proof fn lemma_pow_int_nonzero(c: int, n: nat)
+    requires
+        c != 0,
+    ensures
+        spec_pow_int(c, n) != 0,
+    decreases n,
+{
+    if n > 0 {
+        lemma_pow_int_nonzero(c, (n - 1) as nat);
+        assert(c * spec_pow_int(c, (n - 1) as nat) != 0) by (nonlinear_arith)
+            requires
+                c != 0,
+                spec_pow_int(c, (n - 1) as nat) != 0;
+    }
+}
+
+/// A positive power of zero is zero.
+proof fn lemma_pow_int_zero_base(n: nat)
+    requires
+        n >= 1,
+    ensures
+        spec_pow_int(0, n) == 0,
+{
+    assert(spec_pow_int(0, n) == 0 * spec_pow_int(0, (n - 1) as nat));
 }
 
 /// Arbitrary-precision decimal number representation for bc.
@@ -291,6 +318,141 @@ impl BCNum {
         }
     }
 
+    /// Raises self to the power of the integer part of other under scale.
+    ///
+    /// Returns Err when a negative power of zero divides by zero, when the exponent does not
+    /// fit in an `i64`, or when the exact intermediate scale `scale(self) * |exponent|` would
+    /// exceed `BC_SCALE_MAX` (`docs/COMPATIBILITY.md` §2).
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "Verus proves each cast lossless: a non-negative i64 to u64, and an exact scale \
+                  of at most BC_SCALE_MAX to usize"
+    )]
+    pub fn try_pow(&self, other: &Self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
+        requires
+            self.scale <= BC_SCALE_MAX,
+            other.scale <= BC_SCALE_MAX,
+            global_scale <= BC_SCALE_MAX,
+        ensures
+            ({
+                let e = spec_int_part(other.val());
+                let n = if e >= 0 { e } else { -e };
+                let in_i64 = i64::MIN <= e <= i64::MAX;
+                match r {
+                    Err(RuntimeError::ExponentTooLarge) => !in_i64,
+                    Err(RuntimeError::ScaleTooLarge) => in_i64 && self.scale * n > BC_SCALE_MAX,
+                    Err(RuntimeError::NegativePowerOfZero) => in_i64 && self.scale * n <= BC_SCALE_MAX
+                        && e < 0 && self.val().coeff == 0,
+                    Ok(q) => in_i64 && self.scale * n <= BC_SCALE_MAX && !(e < 0 && self.val().coeff == 0)
+                        && q.val() == spec_pow(self.val(), other.val(), global_scale as nat),
+                    _ => false,
+                }
+            }),
+    {
+        proof {
+            lemma_pow10_pos(other.scale as nat);
+        }
+        let b_val = big_tdiv(&other.coeff, &pow10_within(other.scale));
+        let b_i64 = match big_to_i64(&b_val) {
+            Some(x) => x,
+            None => return Err(RuntimeError::ExponentTooLarge),
+        };
+        // |b|, without overflow for i64::MIN.
+        let b_abs: u64 = if b_i64 >= 0 { b_i64 as u64 } else { (-(b_i64 + 1)) as u64 + 1 };
+        // The exact scale of the power, computed in u64 so that it does not depend on the width
+        // of usize: a scale of 0 gives 0 for any exponent.
+        let exact_scale: usize = if self.scale == 0 {
+            0
+        } else if b_abs > BC_SCALE_MAX as u64 {
+            proof {
+                assert(self.scale * b_abs > BC_SCALE_MAX) by (nonlinear_arith)
+                    requires
+                        self.scale >= 1,
+                        b_abs > BC_SCALE_MAX;
+            }
+            return Err(RuntimeError::ScaleTooLarge);
+        } else {
+            proof {
+                assert(self.scale * b_abs <= BC_SCALE_MAX * BC_SCALE_MAX) by (nonlinear_arith)
+                    requires
+                        self.scale <= BC_SCALE_MAX,
+                        b_abs <= BC_SCALE_MAX;
+            }
+            let s = (self.scale as u64) * b_abs;
+            if s > BC_SCALE_MAX as u64 {
+                return Err(RuntimeError::ScaleTooLarge);
+            }
+            s as usize
+        };
+        proof {
+            if self.scale == 0 {
+                assert(self.scale * b_abs == 0) by (nonlinear_arith)
+                    requires
+                        self.scale == 0;
+            }
+        }
+
+        // Exponentiation by squaring on the coefficient; the scale of the exact power is
+        // `exact_scale`. The base is only squared while bits remain, so it never exceeds
+        // the size of the result.
+        let ghost c = big_view(&self.coeff);
+        let mut res_coeff = big_from_usize(1);
+        let mut base_coeff = big_clone(&self.coeff);
+        let mut remaining = b_abs;
+        while remaining > 0
+            invariant
+                big_view(&res_coeff) * spec_pow_int(big_view(&base_coeff), remaining as nat)
+                    == spec_pow_int(c, b_abs as nat),
+            decreases remaining,
+        {
+            let ghost (r0, b0, k0) = (big_view(&res_coeff), big_view(&base_coeff), remaining as nat);
+            proof {
+                lemma_pow_int_squaring(b0, k0);
+            }
+            if remaining % 2 == 1 {
+                res_coeff = big_mul(&res_coeff, &base_coeff);
+                proof {
+                    assert(r0 * (b0 * spec_pow_int(b0 * b0, k0 / 2)) == (r0 * b0) * spec_pow_int(b0 * b0, k0 / 2))
+                        by (nonlinear_arith);
+                }
+            }
+            remaining /= 2;
+            if remaining > 0 {
+                base_coeff = big_mul(&base_coeff, &base_coeff);
+            } else {
+                proof {
+                    assert(spec_pow_int(b0 * b0, 0) == 1 && spec_pow_int(b0, 0) == 1);
+                }
+            }
+        }
+        proof {
+            assert(spec_pow_int(big_view(&base_coeff), 0) == 1);
+        }
+
+        if !big_is_negative(&b_val) {
+            let (sr, diff) = verified_pow_scale_and_shift(exact_scale, self.scale, global_scale);
+            proof {
+                lemma_pow10_pos(diff as nat);
+            }
+            Ok(Self::new(big_tdiv(&res_coeff, &pow10_within(diff)), sr))
+        } else if big_is_zero(&res_coeff) {
+            proof {
+                if c != 0 {
+                    lemma_pow_int_nonzero(c, b_abs as nat);
+                }
+            }
+            Err(RuntimeError::NegativePowerOfZero)
+        } else {
+            proof {
+                if c == 0 {
+                    lemma_pow_int_zero_base(b_abs as nat);
+                }
+            }
+            Self::new(big_from_usize(1), 0).try_div(&Self::new(res_coeff, exact_scale), global_scale)
+        }
+    }
+
     /// Returns the scale of self.
     pub fn scale_func(&self) -> (r: Self)
         ensures
@@ -360,49 +522,6 @@ impl BCNum {
     pub fn mod_op(&self, other: &Self, global_scale: usize) -> Self {
         self.try_mod_op(other, global_scale)
             .unwrap_or_else(|msg| panic!("{}", msg))
-    }
-
-    /// Raises self to the power of the integer part of other under scale.
-    ///
-    /// Returns Err when a negative power of zero divides by zero, when the exponent does not
-    /// fit in an `i64`, or when the exact intermediate scale `scale(self) * |exponent|` would
-    /// exceed `BC_SCALE_MAX` (`docs/COMPATIBILITY.md` §2).
-    pub fn try_pow(&self, other: &Self, global_scale: usize) -> Result<Self, RuntimeError> {
-        let b_val = &other.coeff / pow10(other.scale);
-        let b_abs = b_val
-            .to_i64()
-            .ok_or(RuntimeError::ExponentTooLarge)?
-            .unsigned_abs();
-        let exact_scale = usize::try_from(b_abs)
-            .ok()
-            .and_then(|b| self.scale.checked_mul(b))
-            .filter(|&s| s <= BC_SCALE_MAX)
-            .ok_or(RuntimeError::ScaleTooLarge)?;
-
-        // Exponentiation by squaring on the coefficient; the scale of the exact power is
-        // `exact_scale`. The base is only squared while bits remain, so it never exceeds
-        // the size of the result.
-        let mut res_coeff = BigInt::from(1);
-        let mut base_coeff = self.coeff.clone();
-        let mut remaining = b_abs;
-        while remaining > 0 {
-            if remaining & 1 == 1 {
-                res_coeff *= &base_coeff;
-            }
-            remaining >>= 1;
-            if remaining > 0 {
-                base_coeff = &base_coeff * &base_coeff;
-            }
-        }
-
-        if b_val >= BigInt::zero() {
-            let (sr, diff) = verified_pow_scale_and_shift(exact_scale, self.scale, global_scale);
-            Ok(Self::new(res_coeff / pow10(diff), sr))
-        } else if res_coeff.is_zero() {
-            Err(RuntimeError::NegativePowerOfZero)
-        } else {
-            Self::new(BigInt::from(1), 0).try_div(&Self::new(res_coeff, exact_scale), global_scale)
-        }
     }
 
     /// Raises self to the power of other under scale.
@@ -636,6 +755,18 @@ mod tests {
         let p_neg = a.pow(&neg_exp, 4);
         assert_eq!(p_neg.coeff, BigInt::from(1600));
         assert_eq!(p_neg.scale, 4); // 1 / 6.25 = 0.1600
+
+        // Exponents beyond u32 with a scale-0 base (the exact scale is computed in u64).
+        let huge = BCNum::new(BigInt::from(5_000_000_000u64), 0);
+        assert_eq!(
+            BCNum::new(BigInt::from(1), 0).pow(&huge, 0).coeff,
+            BigInt::from(1)
+        );
+        assert_eq!(BCNum::zero().pow(&huge, 0).coeff, BigInt::from(0));
+        assert_eq!(
+            BCNum::from_string("0.5", 10).try_pow(&huge, 0),
+            Err(RuntimeError::ScaleTooLarge)
+        );
 
         let val_4 = BCNum::from_string("4", 10);
         let root = val_4.sqrt(2);

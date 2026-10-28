@@ -17,7 +17,7 @@
 use crate::spec_num::*;
 use alloc::string::ToString;
 use num_bigint::BigInt;
-use num_traits::{Signed, Zero};
+use num_traits::{Signed, ToPrimitive, Zero};
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
@@ -130,6 +130,26 @@ pub fn big_decimal_digits(a: &BigInt) -> (r: usize)
     a.to_string().len()
 }
 
+#[verifier::external_body]
+pub fn big_clone(a: &BigInt) -> (r: BigInt)
+    ensures
+        big_view(&r) == big_view(a),
+{
+    a.clone()
+}
+
+/// The value as an `i64`, if it fits.
+#[verifier::external_body]
+pub fn big_to_i64(a: &BigInt) -> (r: Option<i64>)
+    ensures
+        match r {
+            Some(x) => x as int == big_view(a),
+            None => big_view(a) < i64::MIN || big_view(a) > i64::MAX,
+        },
+{
+    a.to_i64()
+}
+
 /// `10^n`.
 #[verifier::external_body]
 pub fn big_pow10(n: u32) -> (r: BigInt)
@@ -178,6 +198,14 @@ mod tests {
                 let k = big_decimal_digits(&big(a));
                 prop_assert!(k >= 1 && 10i128.pow(k as u32 - 1) <= a && (k >= 39 || a < 10i128.pow(k as u32)));
             }
+        }
+
+        #[test]
+        fn clone_and_to_i64(a in any::<i64>(), wide in any::<i128>()) {
+            prop_assert_eq!(big_clone(&big(i128::from(a))), big(i128::from(a)));
+            prop_assert_eq!(big_to_i64(&big(i128::from(a))), Some(a));
+            let fits = i128::from(i64::MIN) <= wide && wide <= i128::from(i64::MAX);
+            prop_assert_eq!(big_to_i64(&big(wide)).is_some(), fits);
         }
 
         #[test]

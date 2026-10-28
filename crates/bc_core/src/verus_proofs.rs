@@ -19,7 +19,7 @@
 //!   the GNU differential and oracle tests in `bc_cli`).
 //!
 //! Model → production correspondence (production line numbers are not tracked):
-//! `verified_pow_binary_loop` → `BCNum::try_pow`; `verified_obase_frac_*` and
+//! `verified_pow_binary_loop` → `BCNum::try_pow` (now itself verified in `math.rs`); `verified_obase_frac_*` and
 //! `verified_multi_digit_obase_padding` → `BCNum::format_obase`; `verified_trig_range_reduction`
 //! → `mathlib::reduce_angle`; `verified_exp_ln2_reduction`, `verified_ln_cayley_transform`,
 //! `verified_atan_inversion_reduction`, `verified_taylor_series_convergence_loop` → the series in

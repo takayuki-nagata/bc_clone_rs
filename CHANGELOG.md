@@ -21,8 +21,8 @@
 - Lemmas for the refinement proofs, in `crates/bc_spec`: an evaluation that did not run out of
   fuel gives the same result with more fuel (`fuel.rs`), and array subscripts and register
   stores depend only on the value of a number, not on its digit sequence (`values.rs`).
-- `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_sqrt`, `length` and `scale_func` are
-  verified with Verus: they compute the integer (L0) definitions of the POSIX operations
+- `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length` and
+  `scale_func` are verified with Verus: they compute the integer (L0) definitions of the POSIX operations
   exactly, assuming only the `num-bigint` operations listed in
   `crates/bc_core/src/trusted_bigint.rs`.
 
@@ -36,6 +36,9 @@
   instead of a computation that cannot finish.
 
 ### Fixes
+- On 32-bit targets (RISC-V, Wasm), a power of a number without fractional digits whose exponent
+  does not fit in 32 bits, such as `1^5000000000`, is no longer `scale too large`: the exact scale
+  of a power is computed in 64 bits. Found by the refinement proof of `^`.
 - A NUL character in the input no longer ends the input unit silently. It is reported as
   `illegal character: ^@` and processing continues with the next unit. Other control characters
   are shown as `^X`, and DEL and non-ASCII characters as octal escapes (`\177`), as in GNU `bc`.
