@@ -252,7 +252,9 @@ as possible and state the reason next to it.
   state; it reads `pub(crate)` fields, so it must stay `pub(crate)`). The syntax-tree types are
   declared outside `verus!` (Verus rejects derived impls on recursive types) and made visible to
   Verus with `external_type_specification`; the output streams `WrappedStdout` and `ErrWriter`
-  are opaque (`external_body`) and modeled by `out_log`, `out_col` and `err_log`.
+  are opaque (`external_body`) and modeled by `out_log`, `out_col` and `err_log`;
+  `ErrWriter::write_bytes` is the trusted statement that a diagnostic write appends exactly its
+  bytes to `err_log`.
 - Variables and arrays are read and written only through the verified storage functions
   (`var_get`, `var_set`, `var_push`, `var_pop`, `arr_get`, `arr_set`, `arr_push`, `arr_pop` in
   `src/eval.rs`), which maintain `Evaluator::inv` (registers in range, every stored scale at most

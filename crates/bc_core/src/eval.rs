@@ -70,7 +70,7 @@ use bc_spec::power::lemma_one_mag;
 #[cfg(verus_keep_ghost)]
 use bc_spec::power::lemma_u64_mag;
 #[cfg(verus_keep_ghost)]
-use bc_spec::power::{NumRes, lemma_num_sqrt, num_sqrt};
+use bc_spec::power::{NumRes, lemma_num_pow, lemma_num_sqrt, num_sqrt};
 #[cfg(verus_keep_ghost)]
 use bc_spec::values::lemma_array_index_value;
 #[cfg(not(verus_keep_ghost))]
@@ -517,6 +517,41 @@ pub(crate) open spec fn r_result(r: Result<BCNum, BcError>, e: Evaluator, x: ER,
     }
 }
 
+/// `e1` and `e2` differ at most in their diagnostic stream.
+pub(crate) open spec fn same_but_err(e1: Evaluator, e2: Evaluator) -> bool {
+    &&& e1.variables == e2.variables
+    &&& e1.arrays == e2.arrays
+    &&& e1.functions == e2.functions
+    &&& e1.scale == e2.scale
+    &&& e1.ibase == e2.ibase
+    &&& e1.obase == e2.obase
+    &&& e1.math_enabled == e2.math_enabled
+    &&& e1.stdout_writer == e2.stdout_writer
+    &&& e1.break_flag == e2.break_flag
+    &&& e1.return_flag == e2.return_flag
+    &&& e1.return_value == e2.return_value
+    &&& e1.quit_flag == e2.quit_flag
+    &&& e1.extension_policy == e2.extension_policy
+    &&& e1.call_stack == e2.call_stack
+    &&& e1.max_depth == e2.max_depth
+    &&& e1.eval_depth == e2.eval_depth
+    &&& e1.invocation_ibase == e2.invocation_ibase
+}
+
+impl ErrWriter {
+    /// Writes `b` (UTF-8 text) to the diagnostic stream. Trusted: the stream receives exactly
+    /// these bytes; a failing writer is outside the model (diagnostics ignore write errors).
+    #[verifier::external_body]
+    pub(crate) fn write_bytes(&mut self, b: &[u8])
+        ensures
+            err_log(final(self)) == err_log(old(self)).add(b@),
+    {
+        if let Ok(text) = core::str::from_utf8(b) {
+            let _ = self.writer.write_str(text);
+        }
+    }
+}
+
 /// `e1` and `e2` differ at most in their evaluation depth.
 pub(crate) open spec fn same_but_depth(e1: Evaluator, e2: Evaluator) -> bool {
     &&& e1.variables == e2.variables
@@ -924,7 +959,7 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             res is Ok ==> res->Ok_0.scale <= BC_SCALE_MAX,
-            (op != BinOp::Pow && r_state(*old(self), st) && r_num(*l, a) && r_num(*r, b)) ==>
+            (r_state(*old(self), st) && r_num(*l, a) && r_num(*r, b)) ==>
                 r_result(res, *final(self), spec_arith(st, bin_code(op), a, b), old(self).eval_depth),
     {
         let ghost hyp = op != BinOp::Pow && r_state(*self, st) && r_num(*l, a) && r_num(*r, b);
@@ -967,22 +1002,10 @@ impl Evaluator {
                     Err(k) => Err(BcError::Runtime { kind: k, func: None }),
                 }
             },
-            BinOp::Pow => self.power_other(l, r),
+            BinOp::Pow => self.power_ref(l, r, Ghost(a), Ghost(b), Ghost(st)),
         }
     }
 
-    /// The trusted boundary of `^` (not proved yet): `power`, assumed to keep the invariant.
-    #[verifier::external_body]
-    fn power_other(&mut self, l: &BCNum, r: &BCNum) -> (res: Result<BCNum, BcError>)
-        requires
-            old(self).inv(),
-        ensures
-            final(self).inv(),
-            final(self).eval_depth == old(self).eval_depth,
-            res is Ok ==> res->Ok_0.scale <= BC_SCALE_MAX,
-    {
-        self.power(l, r)
-    }
 
     /// `l <op> r` (the specification's `ev_binary`): both operands are evaluated, left first,
     /// before the operator applies.
@@ -1322,6 +1345,88 @@ impl Evaluator {
             }
         }
         Ok(w)
+    }
+
+    /// Writes `Runtime warning (func=<current function>): <msg>` to the diagnostic stream (the
+    /// specification's `warn`).
+    fn warn_ref(&mut self, msg: &[u8], Ghost(st): Ghost<SpecState>)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            same_but_err(*old(self), *final(self)),
+            r_state(*old(self), st) ==> r_state(*final(self), bc_spec::eval::warn(st, msg@)),
+    {
+        let ghost e0 = *self;
+        let head: [u8; 22] = [82, 117, 110, 116, 105, 109, 101, 32, 119, 97, 114, 110, 105, 110, 103, 32, 40, 102, 117, 110, 99, 61];
+        self.stderr_writer.write_bytes(&head);
+        let n = self.call_stack.len();
+        let main: [u8; 6] = [40, 109, 97, 105, 110, 41];
+        if n > 0 {
+            #[allow(
+                clippy::redundant_as_str,
+                reason = "Verus specifies str::as_bytes and String::as_str, not String::as_bytes"
+            )]
+            self.stderr_writer.write_bytes(self.call_stack[n - 1].as_str().as_bytes());
+        } else {
+            self.stderr_writer.write_bytes(&main);
+        }
+        let sep: [u8; 3] = [41, 58, 32];
+        self.stderr_writer.write_bytes(&sep);
+        self.stderr_writer.write_bytes(msg);
+        let nl: [u8; 1] = [10];
+        self.stderr_writer.write_bytes(&nl);
+        proof {
+            if r_state(e0, st) {
+                let w = bc_spec::eval::warn(st, msg@);
+                assert(head@ == seq![82u8, 117, 110, 116, 105, 109, 101, 32, 119, 97, 114, 110, 105, 110, 103, 32, 40, 102, 117, 110, 99, 61]);
+                assert(main@ == seq![40u8, 109, 97, 105, 110, 41]);
+                assert(sep@ == seq![41u8, 58, 32]);
+                assert(nl@ == seq![10u8]);
+                if n > 0 {
+                    assert(text_view(e0.call_stack@[n - 1]) == st.calls[st.calls.len() - 1]);
+                }
+                assert(err_log(&self.stderr_writer) =~= w.err);
+            }
+        }
+    }
+
+    /// `l ^ r` at the current `scale` (the specification's `arith` for `^`): a warning when the
+    /// exponent has a fraction, then the verified `try_pow`.
+    fn power_ref(&mut self, l: &BCNum, r: &BCNum, Ghost(a): Ghost<SpecNum>, Ghost(b): Ghost<SpecNum>, Ghost(st): Ghost<SpecState>) -> (res: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            l.scale <= BC_SCALE_MAX,
+            r.scale <= BC_SCALE_MAX,
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            res is Ok ==> res->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_num(*l, a) && r_num(*r, b)) ==>
+                r_result(res, *final(self), spec_arith(st, 5u8, a, b), old(self).eval_depth),
+    {
+        let ghost e0 = *self;
+        let ghost st2 = if b.scale > 0 { bc_spec::eval::warn(st, seq![110u8, 111, 110, 45, 122, 101, 114, 111, 32, 115, 99, 97, 108, 101, 32, 105, 110, 32, 101, 120, 112, 111, 110, 101, 110, 116]) } else { st };
+        if r.scale > 0 {
+            let msg: [u8; 26] = [110, 111, 110, 45, 122, 101, 114, 111, 32, 115, 99, 97, 108, 101, 32, 105, 110, 32, 101, 120, 112, 111, 110, 101, 110, 116];
+            proof {
+                assert(msg@ == seq![110u8, 111, 110, 45, 122, 101, 114, 111, 32, 115, 99, 97, 108, 101, 32, 105, 110, 32, 101, 120, 112, 111, 110, 101, 110, 116]);
+            }
+            self.warn_ref(&msg, Ghost(st));
+        }
+        let q = l.try_pow(r, self.scale);
+        let res = match q {
+            Ok(v) => Ok(v),
+            Err(k) => Err(BcError::Runtime { kind: k, func: None }),
+        };
+        proof {
+            if r_state(e0, st) && r_num(*l, a) && r_num(*r, b) {
+                assert(r_state(*self, st2));
+                assert(with_depth(st2, self.eval_depth as u64) == st2);
+                lemma_num_pow(a, b, st2.scale);
+            }
+        }
+        res
     }
 
     /// The trusted boundary of the expressions not proved yet: `evaluate_node`'s code for them,
