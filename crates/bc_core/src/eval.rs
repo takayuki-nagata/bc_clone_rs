@@ -23,11 +23,19 @@ use crate::parser::{
     AssignOp, BinOp, DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Register,
     RelOp, Stmt,
 };
+#[cfg(verus_keep_ghost)]
+use crate::refine::*;
 use crate::verified_kernels::{
     BC_BASE_MAX, BC_DIM_MAX, BC_SCALE_MAX, IBASE_MAX, verified_clamp_register,
     verified_hex_char_val, verified_loop_post_body_action, verified_nesting_within_limit,
     verified_should_abort_execution,
 };
+#[cfg(verus_keep_ghost)]
+use bc_spec::eval::EState;
+#[cfg(not(verus_keep_ghost))]
+use verus_builtin_macros::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
 
 /// Abstract output writer trait compatible with both no_std and std environments.
 pub trait BcWriter: FmtWrite + Send {
@@ -38,12 +46,6 @@ pub trait BcWriter: FmtWrite + Send {
 }
 
 impl BcWriter for String {}
-
-/// Wrapper to write output characters with POSIX-style 70-character line wrapping.
-pub struct WrappedStdout {
-    writer: Box<dyn BcWriter>,
-    col: usize,
-}
 
 impl WrappedStdout {
     /// Creates a new WrappedStdout writing to the given writer.
@@ -70,19 +72,44 @@ impl WrappedStdout {
     }
 }
 
+verus! {
+
+/// Wrapper to write output characters with POSIX-style 70-character line wrapping. Opaque to
+/// Verus: the refinement proofs see it through `out_log` and `out_col`.
+#[verifier::external_body]
+pub struct WrappedStdout {
+    writer: Box<dyn BcWriter>,
+    col: usize,
+}
+
+/// The diagnostic stream. Opaque to Verus: the refinement proofs see it through `err_log`.
+#[verifier::external_body]
+pub struct ErrWriter {
+    writer: Box<dyn BcWriter>,
+}
+
+/// The bytes written to standard output so far (the model of the output stream).
+pub uninterp spec fn out_log(w: &WrappedStdout) -> Seq<u8>;
+
+/// The output column of standard output (`write_wrapped`'s column).
+pub uninterp spec fn out_col(w: &WrappedStdout) -> u64;
+
+/// The bytes written to the diagnostic stream so far.
+pub uninterp spec fn err_log(w: &ErrWriter) -> Seq<u8>;
+
 /// Evaluator maintaining registers, scoped variables, functions, and state.
 pub struct Evaluator {
     pub variables: BTreeMap<String, Vec<BCNum>>,
-    pub arrays: BTreeMap<String, Vec<BTreeMap<BigInt, BCNum>>>,
+    pub arrays: BTreeMap<String, Vec<BTreeMap<usize, BCNum>>>,
     pub functions: BTreeMap<String, FunctionDef>,
     // Registers are private so that every value stays within its valid range; in particular
     // `scale <= BC_SCALE_MAX` is what the verified scale kernels rely on.
-    scale: usize,
-    ibase: usize,
-    obase: usize,
+    pub(crate) scale: usize,
+    pub(crate) ibase: usize,
+    pub(crate) obase: usize,
     pub math_enabled: bool,
     pub stdout_writer: WrappedStdout,
-    pub stderr_writer: Box<dyn BcWriter>,
+    pub stderr_writer: ErrWriter,
 
     pub break_flag: bool,
     pub return_flag: bool,
@@ -92,7 +119,7 @@ pub struct Evaluator {
     pub extension_policy: ExtensionPolicy,
 
     /// Names of the user functions currently executing, innermost last (for diagnostics).
-    call_stack: Vec<String>,
+    pub(crate) call_stack: Vec<String>,
 
     /// Nesting limit: the syntax tree of an input unit is at most this deep, and at most this
     /// many expressions and statements (across function calls) are evaluated at once. It bounds
@@ -109,7 +136,7 @@ pub struct Evaluator {
 /// An assignment target whose array subscript has already been evaluated.
 enum Place {
     Variable(String),
-    Element(String, BigInt),
+    Element(String, usize),
     Register(Register),
 }
 
@@ -118,6 +145,54 @@ struct SavedCall {
     return_flag: bool,
     return_value: BCNum,
     invocation_ibase: Option<usize>,
+}
+
+/// The output streams as written so far.
+pub(crate) open spec fn r_output(out: WrappedStdout, err: ErrWriter, st: EState) -> bool {
+    out_log(&out) == st.out && out_col(&out) == st.col && err_log(&err) == st.err
+}
+
+/// The whole evaluator state corresponds to the specification's `EState` (without `-l`).
+pub(crate) open spec fn r_state(e: Evaluator, st: EState) -> bool {
+    &&& !e.math_enabled
+    &&& r_vars(e.variables@, st.vars)
+    &&& r_arrays(e.arrays@, st.arrays)
+    &&& r_funcs(e.functions@, st.funcs)
+    &&& e.scale == st.scale && e.ibase == st.ibase && e.obase == st.obase
+    &&& e.break_flag == st.brk && e.return_flag == st.ret && r_num(e.return_value, st.ret_val)
+    &&& r_calls(e.call_stack@, st.calls)
+    &&& e.eval_depth == st.depth && e.max_depth == st.max_depth
+    &&& match e.invocation_ibase {
+        Some(b) => st.has_inv && b == st.inv_ibase,
+        None => !st.has_inv,
+    }
+    &&& r_output(e.stdout_writer, e.stderr_writer, st)
+}
+
+} // verus!
+
+impl ErrWriter {
+    /// Creates the diagnostic stream writing to the given writer.
+    pub fn new(writer: Box<dyn BcWriter>) -> Self {
+        Self { writer }
+    }
+
+    /// Flushes the underlying writer.
+    pub fn flush(&mut self) -> core::fmt::Result {
+        self.writer.flush()
+    }
+
+    /// Writes formatted text, so that `writeln!(evaluator.stderr_writer, ...)` works without
+    /// importing `fmt::Write`.
+    pub fn write_fmt(&mut self, args: core::fmt::Arguments<'_>) -> core::fmt::Result {
+        FmtWrite::write_fmt(self, args)
+    }
+}
+
+impl FmtWrite for ErrWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.writer.write_str(s)
+    }
 }
 
 impl Evaluator {
@@ -136,7 +211,7 @@ impl Evaluator {
             obase: 10,
             math_enabled,
             stdout_writer: WrappedStdout::new(stdout_writer),
-            stderr_writer,
+            stderr_writer: ErrWriter::new(stderr_writer),
             break_flag: false,
             return_flag: false,
             return_value: BCNum::zero(),
@@ -246,7 +321,7 @@ impl Evaluator {
     }
 
     /// The current frame of array `name`.
-    fn array_top(&mut self, name: String) -> &mut BTreeMap<BigInt, BCNum> {
+    fn array_top(&mut self, name: String) -> &mut BTreeMap<usize, BCNum> {
         let stack = self.array_stack(name);
         if stack.is_empty() {
             stack.push(BTreeMap::new());
@@ -263,7 +338,7 @@ impl Evaluator {
     }
 
     /// The scope stack of array `name`, created with its global frame (empty) if needed.
-    fn array_stack(&mut self, name: String) -> &mut Vec<BTreeMap<BigInt, BCNum>> {
+    fn array_stack(&mut self, name: String) -> &mut Vec<BTreeMap<usize, BCNum>> {
         self.arrays
             .entry(name)
             .or_insert_with(|| vec![BTreeMap::new()])
@@ -282,12 +357,12 @@ impl Evaluator {
 
     /// Converts the subscript `idx` of array `name` to an index, truncating it to an integer.
     /// Negative subscripts and subscripts of at least `BC_DIM_MAX` are runtime errors.
-    fn array_index(name: &str, idx: &BCNum) -> Result<BigInt, BcError> {
+    fn array_index(name: &str, idx: &BCNum) -> Result<usize, BcError> {
         let index = &idx.coeff / pow10(idx.scale);
-        if idx.coeff.is_negative() || index >= BigInt::from(BC_DIM_MAX) {
-            return Err(RuntimeError::ArraySubscriptOutOfBounds(String::from(name)).into());
+        match index.to_usize() {
+            Some(i) if !idx.coeff.is_negative() && i < BC_DIM_MAX => Ok(i),
+            _ => Err(RuntimeError::ArraySubscriptOutOfBounds(String::from(name)).into()),
         }
-        Ok(index)
     }
 
     /// Stores `val`, truncated to an integer, into register `reg`, clamping it to the register's range with a warning (`docs/COMPATIBILITY.md`
@@ -492,7 +567,7 @@ impl Evaluator {
 
                     /// A parameter value, evaluated before any frame is pushed.
                     enum ArgValue {
-                        Array(BTreeMap<BigInt, BCNum>),
+                        Array(BTreeMap<usize, BCNum>),
                         Scalar(BCNum),
                     }
                     let mut evaluated_args = Vec::new();

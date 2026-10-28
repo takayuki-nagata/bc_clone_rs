@@ -97,6 +97,10 @@
   `Negate(…)` instead of `UnaryOp(char, …)`, and `Update(increment, prefix, target)` instead of
   `UpdateOp(String, prefix, target)`. Their order matches the operator codes of the
   executable specification.
+- `Evaluator::stderr_writer` is an `ErrWriter` (a wrapper of the `Box<dyn BcWriter>` given to
+  `Evaluator::new`, with `write_fmt` and `flush`, so `writeln!` works as before), and array
+  frames are `BTreeMap<usize, BCNum>` instead of `BTreeMap<BigInt, BCNum>` (subscripts are below
+  `BC_DIM_MAX`).
 
 ## v0.4.0 — 2026-10-26
 

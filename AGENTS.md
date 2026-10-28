@@ -247,6 +247,12 @@ as possible and state the reason next to it.
   `#[cfg(not(verus_keep_ghost))] use verus_builtin_macros::verus;` and `vstd::prelude` only under
   `cfg(verus_keep_ghost)`. A `Ghost<T>` parameter stays in the signature after erasure, so its
   type must exist without `vstd` and `bc_spec`.
+- The refinement relations between `bc_core` and `bc_spec` are in `src/refine.rs` (syntax trees,
+  numbers, variables, arrays, functions) and `Evaluator::r_state` in `src/eval.rs` (the whole
+  state; it reads `pub(crate)` fields, so it must stay `pub(crate)`). The syntax-tree types are
+  declared outside `verus!` (Verus rejects derived impls on recursive types) and made visible to
+  Verus with `external_type_specification`; the output streams `WrappedStdout` and `ErrWriter`
+  are opaque (`external_body`) and modeled by `out_log`, `out_col` and `err_log`.
 - Trusted assumptions about `BigInt` go only in `trusted_bigint.rs`, as `#[verifier::external_body]`
   one-line wrappers with a test each. Name a function there rather than using an operator on
   `BigInt` in verified code.

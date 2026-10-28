@@ -682,7 +682,6 @@ impl BCNum {
 }
 
 // The `-l` math library lives in `mathlib.rs`.
-#[cfg(not(verus_keep_ghost))]
 pub use crate::mathlib::{EXP_ARG_MAX, bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
 
 #[cfg(test)]

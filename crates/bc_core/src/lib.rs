@@ -27,35 +27,28 @@ compile_error!("verify bc_core with `cargo verus verify -p bc_core --features ve
 #[cfg(test)]
 extern crate std;
 
-#[cfg(not(verus_keep_ghost))]
 pub mod driver;
 pub mod error;
-#[cfg(not(verus_keep_ghost))]
 pub mod eval;
 pub(crate) mod format;
 #[cfg(kani)]
 mod kani_proofs;
 pub mod math;
-#[cfg(not(verus_keep_ghost))]
 mod mathlib;
-#[cfg(not(verus_keep_ghost))]
 pub mod parser;
 #[cfg(verus_keep_ghost)]
 pub use bc_spec::spec_num;
+#[cfg(verus_keep_ghost)]
+mod refine;
 mod trusted_bigint;
 pub mod verified_kernels;
 #[cfg(verus_keep_ghost)]
 pub mod verus_proofs;
 
-#[cfg(not(verus_keep_ghost))]
 pub use driver::{RunSummary, STDIN_SOURCE, UnitAccumulator, UnitOutcome};
-#[cfg(not(verus_keep_ghost))]
 pub use error::{BcError, RuntimeError};
-#[cfg(not(verus_keep_ghost))]
-pub use eval::{BcWriter, Evaluator, WrappedStdout};
-#[cfg(not(verus_keep_ghost))]
+pub use eval::{BcWriter, ErrWriter, Evaluator, WrappedStdout};
 pub use math::BCNum;
-#[cfg(not(verus_keep_ghost))]
 pub use parser::{
     DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Lexer, Param, Parser,
     Register, Stmt, Token, TokenType,

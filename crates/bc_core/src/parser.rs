@@ -16,6 +16,10 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
+#[cfg(not(verus_keep_ghost))]
+use verus_builtin_macros::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
 
 /// The types of tokens supported by the bc lexer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -604,17 +608,6 @@ pub enum Register {
     Obase,
 }
 
-impl Register {
-    /// The register's name as written in bc source.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Scale => "scale",
-            Self::Ibase => "ibase",
-            Self::Obase => "obase",
-        }
-    }
-}
-
 /// A binary arithmetic operator. The order is that of the specification's operator codes
 /// (`crates/bc_spec`, `binop_code`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -625,21 +618,6 @@ pub enum BinOp {
     Div,
     Mod,
     Pow,
-}
-
-impl BinOp {
-    /// The operator of a `+`, `-`, `*`, `/`, `%` or `^` token (as `binop_code`: `^` for any
-    /// other text, which the lexer does not produce).
-    pub fn from_symbol(text: &str) -> Self {
-        match text.as_bytes().first() {
-            Some(b'+') => Self::Add,
-            Some(b'-') => Self::Sub,
-            Some(b'*') => Self::Mul,
-            Some(b'/') => Self::Div,
-            Some(b'%') => Self::Mod,
-            _ => Self::Pow,
-        }
-    }
 }
 
 /// A relational operator, in the order of the specification's `rel_code`.
@@ -653,47 +631,11 @@ pub enum RelOp {
     Ge,
 }
 
-impl RelOp {
-    /// The operator of a relational token (as `rel_code`).
-    pub fn from_symbol(text: &str) -> Self {
-        let two = text.len() == 2;
-        match text.as_bytes().first() {
-            Some(b'=') => Self::Eq,
-            Some(b'!') => Self::Ne,
-            Some(b'<') => {
-                if two {
-                    Self::Le
-                } else {
-                    Self::Lt
-                }
-            }
-            _ => {
-                if two {
-                    Self::Ge
-                } else {
-                    Self::Gt
-                }
-            }
-        }
-    }
-}
-
 /// An assignment operator: `=`, or `op=` for a binary operator (as `assign_code`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssignOp {
     Assign,
     Compound(BinOp),
-}
-
-impl AssignOp {
-    /// The operator of an assignment token.
-    pub fn from_symbol(text: &str) -> Self {
-        if text.len() == 1 {
-            Self::Assign
-        } else {
-            Self::Compound(BinOp::from_symbol(text))
-        }
-    }
 }
 
 /// Enum representing an expression in bc AST.
@@ -761,6 +703,114 @@ pub enum ExtensionPolicy {
     Warn,
     /// Record each use as an error; the input unit must not be executed (`-s`).
     Reject,
+}
+
+verus! {
+
+// The syntax tree as Verus sees it (for the refinement proofs). The types are
+// declared outside `verus!` because Verus rejects derived trait impls on recursive types.
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExParam(Param);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExRegister(Register);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExBinOp(BinOp);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExRelOp(RelOp);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExAssignOp(AssignOp);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExExpr(Expr);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExExprOrArray(ExprOrArray);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExFunctionDef(FunctionDef);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExStmt(Stmt);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExExtensionPolicy(ExtensionPolicy);
+
+} // verus!
+
+impl Register {
+    /// The register's name as written in bc source.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Scale => "scale",
+            Self::Ibase => "ibase",
+            Self::Obase => "obase",
+        }
+    }
+}
+
+impl BinOp {
+    /// The operator of a `+`, `-`, `*`, `/`, `%` or `^` token (as `binop_code`: `^` for any
+    /// other text, which the lexer does not produce).
+    pub fn from_symbol(text: &str) -> Self {
+        match text.as_bytes().first() {
+            Some(b'+') => Self::Add,
+            Some(b'-') => Self::Sub,
+            Some(b'*') => Self::Mul,
+            Some(b'/') => Self::Div,
+            Some(b'%') => Self::Mod,
+            _ => Self::Pow,
+        }
+    }
+}
+
+impl RelOp {
+    /// The operator of a relational token (as `rel_code`).
+    pub fn from_symbol(text: &str) -> Self {
+        let two = text.len() == 2;
+        match text.as_bytes().first() {
+            Some(b'=') => Self::Eq,
+            Some(b'!') => Self::Ne,
+            Some(b'<') => {
+                if two {
+                    Self::Le
+                } else {
+                    Self::Lt
+                }
+            }
+            _ => {
+                if two {
+                    Self::Ge
+                } else {
+                    Self::Gt
+                }
+            }
+        }
+    }
+}
+
+impl AssignOp {
+    /// The operator of an assignment token.
+    pub fn from_symbol(text: &str) -> Self {
+        if text.len() == 1 {
+            Self::Assign
+        } else {
+            Self::Compound(BinOp::from_symbol(text))
+        }
+    }
 }
 
 /// Recursive descent parser with operator precedence support for bc.
