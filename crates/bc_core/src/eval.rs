@@ -11,6 +11,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 use core::fmt::Write as FmtWrite;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive};
@@ -23,8 +24,7 @@ use crate::parser::{
 use crate::verified_kernels::{
     BC_BASE_MAX, BC_DIM_MAX, BC_SCALE_MAX, IBASE_MAX, verified_clamp_register,
     verified_hex_char_val, verified_loop_post_body_action, verified_nesting_within_limit,
-    verified_relational_scale_shifts, verified_should_abort_execution,
-    verified_wrapped_stdout_step,
+    verified_should_abort_execution, verified_wrapped_stdout_step,
 };
 
 /// Abstract output writer trait compatible with both no_std and std environments.
@@ -426,17 +426,14 @@ impl Evaluator {
             Expr::RelationalOp(op, left, right) => {
                 let l = self.try_evaluate(left)?;
                 let r = self.try_evaluate(right)?;
-                let (shift_l, shift_r) = verified_relational_scale_shifts(l.scale, r.scale);
-                let coeff_l = &l.coeff * pow10(shift_l);
-                let coeff_r = &r.coeff * pow10(shift_r);
-
+                let ord = l.cmp_val(&r);
                 let res = match op.as_str() {
-                    "==" => coeff_l == coeff_r,
-                    "<=" => coeff_l <= coeff_r,
-                    ">=" => coeff_l >= coeff_r,
-                    "!=" => coeff_l != coeff_r,
-                    "<" => coeff_l < coeff_r,
-                    ">" => coeff_l > coeff_r,
+                    "==" => ord == Ordering::Equal,
+                    "<=" => ord != Ordering::Greater,
+                    ">=" => ord != Ordering::Less,
+                    "!=" => ord != Ordering::Equal,
+                    "<" => ord == Ordering::Less,
+                    ">" => ord == Ordering::Greater,
                     _ => false,
                 };
                 Ok(BCNum::new(BigInt::from(if res { 1 } else { 0 }), 0))

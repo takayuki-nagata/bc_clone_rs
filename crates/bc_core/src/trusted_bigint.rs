@@ -16,6 +16,7 @@
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::*;
 use alloc::string::ToString;
+use core::cmp::Ordering;
 use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive, Zero};
 #[cfg(not(verus_keep_ghost))]
@@ -74,6 +75,16 @@ pub fn big_tdiv(a: &BigInt, b: &BigInt) -> (r: BigInt)
         big_view(&r) == spec_tdiv(big_view(a), big_view(b)),
 {
     a / b
+}
+
+#[verifier::external_body]
+pub fn big_cmp(a: &BigInt, b: &BigInt) -> (r: Ordering)
+    ensures
+        (r == Ordering::Less) == (big_view(a) < big_view(b)),
+        (r == Ordering::Equal) == (big_view(a) == big_view(b)),
+        (r == Ordering::Greater) == (big_view(a) > big_view(b)),
+{
+    a.cmp(b)
 }
 
 #[verifier::external_body]
@@ -187,6 +198,7 @@ mod tests {
                 prop_assert_eq!(big_tdiv(&big(a), &big(b)), big(tdiv(a, b)));
             }
             prop_assert_eq!(big_is_negative(&big(a)), a < 0);
+            prop_assert_eq!(big_cmp(&big(a), &big(b)), a.cmp(&b));
             prop_assert_eq!(big_abs(&big(a)), big(a.abs()));
         }
 

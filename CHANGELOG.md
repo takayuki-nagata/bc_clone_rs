@@ -21,8 +21,8 @@
 - Lemmas for the refinement proofs, in `crates/bc_spec`: an evaluation that did not run out of
   fuel gives the same result with more fuel (`fuel.rs`), and array subscripts and register
   stores depend only on the value of a number, not on its digit sequence (`values.rs`).
-- `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length` and
-  `scale_func` are verified with Verus: they compute the integer (L0) definitions of the POSIX operations
+- `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`,
+  `scale_func` and the comparison used by `==`, `<`, … (`cmp_val`) are verified with Verus: they compute the integer (L0) definitions of the POSIX operations
   exactly, assuming only the `num-bigint` operations listed in
   `crates/bc_core/src/trusted_bigint.rs`.
 

@@ -14,19 +14,20 @@ use crate::spec_num::*;
 #[cfg(verus_keep_ghost)]
 use crate::trusted_bigint::big_view;
 use crate::trusted_bigint::{
-    big_abs, big_add, big_clone, big_decimal_digits, big_from_usize, big_is_negative, big_is_zero,
-    big_isqrt, big_mul, big_pow10, big_sub, big_tdiv, big_to_i64, big_zero,
+    big_abs, big_add, big_clone, big_cmp, big_decimal_digits, big_from_usize, big_is_negative,
+    big_is_zero, big_isqrt, big_mul, big_pow10, big_sub, big_tdiv, big_to_i64, big_zero,
 };
 use crate::verified_kernels::{BC_SCALE_MAX, MAX_VERIFIED_SCALE};
 use crate::verified_kernels::{
     verified_add_sub_scales, verified_alphanumeric_char_val, verified_bcnum_length,
     verified_div_scale_and_shift, verified_mul_scale_and_shift,
     verified_multi_digit_obase_pad_zeros, verified_pow_scale_and_shift,
-    verified_sqrt_scale_and_shift,
+    verified_relational_scale_shifts, verified_sqrt_scale_and_shift,
 };
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::cmp::Ordering;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
 #[cfg(not(verus_keep_ghost))]
@@ -451,6 +452,44 @@ impl BCNum {
             }
             Self::new(big_from_usize(1), 0).try_div(&Self::new(res_coeff, exact_scale), global_scale)
         }
+    }
+
+    /// Compares the values of self and other (as `==`, `<`, … do).
+    pub fn cmp_val(&self, other: &Self) -> (r: Ordering)
+        requires
+            self.scale <= BC_SCALE_MAX,
+            other.scale <= BC_SCALE_MAX,
+        ensures
+            (r == Ordering::Less) == spec_bcnum_lt(self.val(), other.val()),
+            (r == Ordering::Equal) == spec_bcnum_eq(self.val(), other.val()),
+            (r == Ordering::Greater) == spec_bcnum_gt(self.val(), other.val()),
+    {
+        let (shift_l, shift_r) = verified_relational_scale_shifts(self.scale, other.scale);
+        proof {
+            assert(spec_num::pow10(0) == 1);
+        }
+        let coeff_l = big_mul(&self.coeff, &pow10_within(shift_l));
+        let coeff_r = big_mul(&other.coeff, &pow10_within(shift_r));
+        proof {
+            let (a, b) = (self.val(), other.val());
+            if self.scale >= other.scale {
+                assert(shift_l == 0);
+                assert(big_view(&coeff_l) == a.coeff);
+                assert(spec_rel_norm_lhs(a, b) == a.coeff);
+                if self.scale == other.scale {
+                    assert(big_view(&coeff_r) == b.coeff);
+                    assert(spec_rel_norm_rhs(a, b) == b.coeff);
+                } else {
+                    assert(spec_rel_norm_rhs(a, b) == big_view(&coeff_r));
+                }
+            } else {
+                assert(shift_r == 0);
+                assert(big_view(&coeff_r) == b.coeff);
+                assert(spec_rel_norm_rhs(a, b) == b.coeff);
+                assert(spec_rel_norm_lhs(a, b) == big_view(&coeff_l));
+            }
+        }
+        big_cmp(&coeff_l, &coeff_r)
     }
 
     /// Returns the scale of self.
