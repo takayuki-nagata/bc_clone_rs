@@ -24,7 +24,7 @@
 //! itself verified as `format_bytes` in `format.rs`); `verified_trig_range_reduction`
 //! → `mathlib::reduce_angle`; `verified_exp_ln2_reduction`, `verified_ln_cayley_transform`,
 //! `verified_atan_inversion_reduction`, `verified_taylor_series_convergence_loop` → the series in
-//! `mathlib.rs`; `verified_scope_guard_lifecycle` → `eval::ScopeGuard` (production
+//! `mathlib.rs`; `verified_scope_guard_lifecycle` → `Evaluator::leave_call` (production
 //! additionally keeps a global frame at the bottom of every stack, which the model assumes as
 //! `old(stack).len() >= 1`); `verified_lexer_*` → `parser::Lexer`; `verified_cli_parse_args` →
 //! `bc_cli::run_app`; `verified_c_ffi_copy_nul_terminated` → `bc_c_api::write_c_string`;
@@ -808,10 +808,10 @@ pub fn verified_exp_ln2_reduction(x_abs: i64, ln2_val: i64) -> (res: (i64, i64))
 /// 1. Pushes `num_params` parameter bindings and `num_autos` local `auto` bindings (initialized to 0).
 /// 2. Mutates the active top-of-stack binding during function execution.
 /// 3. Restores `prev_return_flag` / `prev_return_value` and pops all `num_autos` and `num_params`
-///    in reverse order upon `ScopeGuard::drop`.
+///    in reverse order upon `Evaluator::leave_call` (formerly `ScopeGuard::drop`).
 ///
 /// Formally proves the **Stack Frame Restoration Theorem**:
-/// After `ScopeGuard` cleanup, `stack@ == old(stack)@` (every caller binding and stack depth
+/// After `leave_call`, `stack@ == old(stack)@` (every caller binding and stack depth
 /// is 100% preserved without shadowing leaks).
 pub fn verified_scope_guard_lifecycle(
     stack: &mut alloc::vec::Vec<i64>,
@@ -880,7 +880,7 @@ pub fn verified_scope_guard_lifecycle(
         }
     }
 
-    // 4. ScopeGuard::drop: pop `autos` in reverse, then `params` in reverse
+    // 4. leave_call: pop `autos` in reverse, then `params` in reverse
     let mut pop_a: usize = 0;
     while pop_a < num_autos
         invariant

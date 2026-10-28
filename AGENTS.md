@@ -111,8 +111,10 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
 ### Evaluator (`src/eval.rs`)
 - Dynamic scoping: each variable or array name maps to a stack. Function parameters and `auto`
   locals push a new entry on entry. `BTreeMap` keeps the storage `no_std`-friendly and deterministic.
-- `ScopeGuard` (RAII) pops the parameter and `auto` frames and restores the caller's control-flow
-  flags on every exit path, including `Err` returns and panics.
+- `Evaluator::leave_call` pops the parameter and `auto` frames and restores the caller's
+  control-flow flags and invocation `ibase` on every return path of a call, including `Err`
+  returns. It is called explicitly (there is no RAII guard, which Verus cannot reason about), so
+  a panic inside a call would leave the frames pushed; `bc_core` must not panic.
 - Output goes through the `BcWriter` trait. `WrappedStdout` wraps long numbers at 70 columns with
   `\` + newline, as POSIX requires. The wrapping itself is `format::wrap_output`, verified against
   the specification's `write_wrapped`; `write_str` passes its result to the writer in one call.
@@ -141,7 +143,8 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   sets it for the stack it runs on; `bc_cli` runs the engine on a 512 MiB-stack thread. When
   you add a recursive walk over the AST, it must stay within the same bound.
 - `bc_cli` additionally wraps each unit in `catch_unwind`. A panic there is a bug in `bc_core`; it
-  is reported as `bc_clone: internal error: …` and counted as a failed unit.
+  is reported as `bc_clone: internal error: …` and counted as a failed unit. After such a panic
+  the evaluator's state may be inconsistent (frames of an interrupted call are not popped).
 
 ## Verified Kernels (`src/verified_kernels.rs`)
 

@@ -20,8 +20,8 @@ use crate::error::{BcError, RuntimeError};
 use crate::format::wrap_output;
 use crate::math::{BCNum, pow10};
 use crate::parser::{
-    AssignOp, BinOp, DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Param,
-    Register, RelOp, Stmt,
+    AssignOp, BinOp, DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Register,
+    RelOp, Stmt,
 };
 use crate::verified_kernels::{
     BC_BASE_MAX, BC_DIM_MAX, BC_SCALE_MAX, IBASE_MAX, verified_clamp_register,
@@ -113,41 +113,11 @@ enum Place {
     Register(Register),
 }
 
-struct ScopeGuard<'a> {
-    evaluator: &'a mut Evaluator,
-    autos: &'a [Param],
-    params: &'a [Param],
-    prev_return_flag: bool,
-    prev_return_value: BCNum,
-    prev_invocation_ibase: Option<usize>,
-}
-
-impl<'a> Drop for ScopeGuard<'a> {
-    fn drop(&mut self) {
-        self.evaluator.call_stack.pop();
-        self.evaluator.return_flag = self.prev_return_flag;
-        self.evaluator.return_value = self.prev_return_value.clone();
-        self.evaluator.invocation_ibase = self.prev_invocation_ibase;
-
-        for auto in self.autos.iter().rev() {
-            if auto.is_array {
-                if let Some(stack) = self.evaluator.arrays.get_mut(&auto.name) {
-                    stack.pop();
-                }
-            } else if let Some(stack) = self.evaluator.variables.get_mut(&auto.name) {
-                stack.pop();
-            }
-        }
-        for param in self.params.iter().rev() {
-            if param.is_array {
-                if let Some(stack) = self.evaluator.arrays.get_mut(&param.name) {
-                    stack.pop();
-                }
-            } else if let Some(stack) = self.evaluator.variables.get_mut(&param.name) {
-                stack.pop();
-            }
-        }
-    }
+/// The caller's state saved when a function is entered, restored by `Evaluator::leave_call`.
+struct SavedCall {
+    return_flag: bool,
+    return_value: BCNum,
+    invocation_ibase: Option<usize>,
 }
 
 impl Evaluator {
@@ -265,22 +235,24 @@ impl Evaluator {
     /// The innermost frame of a scope stack. The evaluator keeps a global frame at the bottom of
     /// every stack; a stack emptied through the public `variables`/`arrays` fields gets a fresh
     /// one from `init`, so this never fails.
-    fn top_frame<T>(stack: &mut Vec<T>, init: impl FnOnce() -> T) -> &mut T {
+    /// The current value of variable `name`.
+    fn variable_top(&mut self, name: String) -> &mut BCNum {
+        let stack = self.variable_stack(name);
         if stack.is_empty() {
-            stack.push(init());
+            stack.push(BCNum::zero());
         }
         let top = stack.len() - 1;
         &mut stack[top]
     }
 
-    /// The current value of variable `name`.
-    fn variable_top(&mut self, name: String) -> &mut BCNum {
-        Self::top_frame(self.variable_stack(name), BCNum::zero)
-    }
-
     /// The current frame of array `name`.
     fn array_top(&mut self, name: String) -> &mut BTreeMap<BigInt, BCNum> {
-        Self::top_frame(self.array_stack(name), BTreeMap::new)
+        let stack = self.array_stack(name);
+        if stack.is_empty() {
+            stack.push(BTreeMap::new());
+        }
+        let top = stack.len() - 1;
+        &mut stack[top]
     }
 
     /// The scope stack of variable `name`, created with its global frame (0) if needed.
@@ -362,6 +334,36 @@ impl Evaluator {
             self.warn("non-zero scale in exponent");
         }
         Ok(base.try_pow(exp, self.scale)?)
+    }
+
+    /// Executes a function body, stopping after `return` (or `quit`).
+    fn run_body(&mut self, body: &[Stmt]) -> Result<(), BcError> {
+        for stmt in body {
+            self.try_execute(stmt)?;
+            if self.return_flag || self.quit_flag {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Leaves function `func`: pops the call, restores the caller's return state and
+    /// invocation `ibase`, and pops the `auto` frames and then the parameter frames, each list
+    /// last first (the specification's `leave_call`).
+    fn leave_call(&mut self, func: &FunctionDef, saved: SavedCall) {
+        self.call_stack.pop();
+        self.return_flag = saved.return_flag;
+        self.return_value = saved.return_value;
+        self.invocation_ibase = saved.invocation_ibase;
+        for param in func.autos.iter().rev().chain(func.params.iter().rev()) {
+            if param.is_array {
+                if let Some(stack) = self.arrays.get_mut(&param.name) {
+                    stack.pop();
+                }
+            } else if let Some(stack) = self.variables.get_mut(&param.name) {
+                stack.pop();
+            }
+        }
     }
 
     /// `l <op> r` at the current `scale` (the specification's `arith`).
@@ -518,7 +520,7 @@ impl Evaluator {
                     }
 
                     // Every name keeps its global frame at the bottom of its stack, so popping
-                    // the function's frames in `ScopeGuard::drop` never leaves an empty stack
+                    // the function's frames in `leave_call` never leaves an empty stack
                     // (a name first seen as a parameter or `auto` stays usable afterwards).
                     for (pname, value) in evaluated_args {
                         match value {
@@ -535,36 +537,20 @@ impl Evaluator {
                         }
                     }
 
-                    let prev_return_flag = self.return_flag;
-                    let prev_return_value = self.return_value.clone();
+                    let saved = SavedCall {
+                        return_flag: self.return_flag,
+                        return_value: self.return_value.clone(),
+                        invocation_ibase: self.invocation_ibase.replace(self.ibase),
+                    };
                     self.return_flag = false;
                     self.return_value = BCNum::zero();
-
                     self.call_stack.push(name.clone());
-                    let prev_invocation_ibase = self.invocation_ibase.replace(self.ibase);
-                    let guard = ScopeGuard {
-                        evaluator: self,
-                        autos: &func.autos,
-                        params: &func.params,
-                        prev_return_flag,
-                        prev_return_value,
-                        prev_invocation_ibase,
-                    };
 
-                    for stmt in &func.body {
-                        guard
-                            .evaluator
-                            .try_execute(stmt)
-                            .map_err(|e| e.in_function(name))?;
-                        if guard.evaluator.return_flag || guard.evaluator.quit_flag {
-                            break;
-                        }
-                    }
-
-                    let ret_val = guard.evaluator.return_value.clone();
-                    drop(guard);
-
-                    return Ok(ret_val);
+                    let body = self.run_body(&func.body).map_err(|e| e.in_function(name));
+                    let ret_val = self.return_value.clone();
+                    // Restored on every return path, including errors.
+                    self.leave_call(&func, saved);
+                    return body.map(|()| ret_val);
                 }
 
                 if self.math_enabled {
@@ -726,6 +712,7 @@ impl Evaluator {
 mod tests {
     use super::*;
     use crate::parser::Lexer;
+    use crate::parser::Param;
     use crate::parser::Parser;
     use alloc::string::ToString;
 
@@ -1076,7 +1063,7 @@ mod tests {
             vec![ExprOrArray::ArrayArg("uninit_arr_arg".to_string())],
         ));
 
-        // 19. ScopeGuard unwinding test
+        // 19. Frames are restored when a function returns an error
         evaluator.quit_flag = false;
         evaluator.variables.insert(
             "shadowed_var".to_string(),
@@ -1899,7 +1886,7 @@ mod tests {
             assert!(ev.try_execute(&stmt).is_ok());
         }
 
-        // Calling bad(10, a[]) must fail with "Divide by zero" inside bad() AND ScopeGuard must restore x = 42
+        // Calling bad(10, a[]) must fail with "Divide by zero" inside bad() AND leave_call must restore x = 42
         let mut p_call = Parser::try_new(Lexer::new("bad(10, a[])\n")).unwrap();
         let call_stmts = p_call.try_parse_program().unwrap();
         assert_eq!(
