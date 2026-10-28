@@ -20,7 +20,8 @@ use crate::error::{BcError, RuntimeError};
 use crate::format::wrap_output;
 use crate::math::{BCNum, pow10};
 use crate::parser::{
-    DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Param, Register, Stmt,
+    AssignOp, BinOp, DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Param,
+    Register, RelOp, Stmt,
 };
 use crate::verified_kernels::{
     BC_BASE_MAX, BC_DIM_MAX, BC_SCALE_MAX, IBASE_MAX, verified_clamp_register,
@@ -302,7 +303,7 @@ impl Evaluator {
     fn is_assignment(expr: &Expr) -> bool {
         match expr {
             Expr::AssignOp(..) => true,
-            Expr::UnaryOp('-', inner) => Self::is_assignment(inner),
+            Expr::Negate(inner) => Self::is_assignment(inner),
             _ => false,
         }
     }
@@ -363,6 +364,18 @@ impl Evaluator {
         Ok(base.try_pow(exp, self.scale)?)
     }
 
+    /// `l <op> r` at the current `scale` (the specification's `arith`).
+    fn arith(&mut self, op: BinOp, l: &BCNum, r: &BCNum) -> Result<BCNum, BcError> {
+        match op {
+            BinOp::Add => Ok(l.add(r)),
+            BinOp::Sub => Ok(l.sub(r)),
+            BinOp::Mul => Ok(l.mul(r, self.scale)),
+            BinOp::Div => Ok(l.try_div(r, self.scale)?),
+            BinOp::Mod => Ok(l.try_mod_op(r, self.scale)?),
+            BinOp::Pow => self.power(l, r),
+        }
+    }
+
     /// Evaluates an AST expression node, returning Err on runtime math/call errors.
     pub fn try_evaluate(&mut self, node: &Expr) -> Result<BCNum, BcError> {
         self.enter_eval()?;
@@ -395,39 +408,26 @@ impl Evaluator {
                     .unwrap_or_else(BCNum::zero))
             }
             Expr::RegisterAccess(reg) => Ok(BCNum::new(BigInt::from(self.register(*reg)), 0)),
-            Expr::UnaryOp(op, expr) => {
+            Expr::Negate(expr) => {
                 let val = self.try_evaluate(expr)?;
-                if *op == '-' {
-                    Ok(BCNum::new(-val.coeff, val.scale))
-                } else {
-                    Ok(val)
-                }
+                Ok(BCNum::new(-val.coeff, val.scale))
             }
             Expr::BinaryOp(op, left, right) => {
                 let l = self.try_evaluate(left)?;
                 let r = self.try_evaluate(right)?;
-                match op.as_str() {
-                    "+" => Ok(l.add(&r)),
-                    "-" => Ok(l.sub(&r)),
-                    "*" => Ok(l.mul(&r, self.scale)),
-                    "/" => l.try_div(&r, self.scale).map_err(BcError::from),
-                    "%" => l.try_mod_op(&r, self.scale).map_err(BcError::from),
-                    "^" => self.power(&l, &r),
-                    _ => Ok(BCNum::zero()),
-                }
+                self.arith(*op, &l, &r)
             }
             Expr::RelationalOp(op, left, right) => {
                 let l = self.try_evaluate(left)?;
                 let r = self.try_evaluate(right)?;
                 let ord = l.cmp_val(&r);
-                let res = match op.as_str() {
-                    "==" => ord == Ordering::Equal,
-                    "<=" => ord != Ordering::Greater,
-                    ">=" => ord != Ordering::Less,
-                    "!=" => ord != Ordering::Equal,
-                    "<" => ord == Ordering::Less,
-                    ">" => ord == Ordering::Greater,
-                    _ => false,
+                let res = match op {
+                    RelOp::Eq => ord == Ordering::Equal,
+                    RelOp::Ne => ord != Ordering::Equal,
+                    RelOp::Lt => ord == Ordering::Less,
+                    RelOp::Le => ord != Ordering::Greater,
+                    RelOp::Gt => ord == Ordering::Greater,
+                    RelOp::Ge => ord != Ordering::Less,
                 };
                 Ok(BCNum::new(BigInt::from(if res { 1 } else { 0 }), 0))
             }
@@ -436,32 +436,24 @@ impl Evaluator {
                 // GNU bc: `a[i++] = i` stores into a[0], and `c += c++` adds the old value.
                 let place = self.resolve_place(target)?;
 
-                let val = match (&place, op.as_str(), &**expr) {
+                let val = match (&place, op, &**expr) {
                     // POSIX: a single digit assigned to ibase or obase is read as hexadecimal.
                     (
                         Some(Place::Register(Register::Ibase | Register::Obase)),
-                        "=",
+                        AssignOp::Assign,
                         Expr::Number(digits),
                     ) if digits.replace("\\\n", "").len() == 1 => {
                         let b = digits.replace("\\\n", "").as_bytes()[0];
                         BCNum::new(BigInt::from(verified_hex_char_val(b)), 0)
                     }
-                    (_, "=", _) => self.try_evaluate(expr)?,
-                    _ => {
+                    (_, AssignOp::Assign, _) => self.try_evaluate(expr)?,
+                    (_, AssignOp::Compound(bin), _) => {
                         let old_val = match &place {
                             Some(place) => self.load(place),
                             None => self.try_evaluate(target)?,
                         };
                         let rhs = self.try_evaluate(expr)?;
-                        match &op[..op.len() - 1] {
-                            "+" => old_val.add(&rhs),
-                            "-" => old_val.sub(&rhs),
-                            "*" => old_val.mul(&rhs, self.scale),
-                            "/" => old_val.try_div(&rhs, self.scale)?,
-                            "%" => old_val.try_mod_op(&rhs, self.scale)?,
-                            "^" => self.power(&old_val, &rhs)?,
-                            _ => BCNum::zero(),
-                        }
+                        self.arith(*bin, &old_val, &rhs)?
                     }
                 };
 
@@ -472,14 +464,14 @@ impl Evaluator {
                 }
                 Ok(val)
             }
-            Expr::UpdateOp(op, is_prefix, target) => {
+            Expr::Update(increment, is_prefix, target) => {
                 let place = self.resolve_place(target)?;
                 let old_val = match &place {
                     Some(place) => self.load(place),
                     None => self.try_evaluate(target)?,
                 };
                 let step = BCNum::new(BigInt::from(1), 0);
-                let new_val = if op == "++" {
+                let new_val = if *increment {
                     old_val.add(&step)
                 } else {
                     old_val.sub(&step)
@@ -855,7 +847,7 @@ mod tests {
 
         // 1. Array access with fractional index (lines 108-109)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::ArrayAccess(
                 "a".to_string(),
                 Box::new(Expr::Number("1.5".to_string())),
@@ -867,39 +859,16 @@ mod tests {
             Box::new(Expr::Number("1.5".to_string())),
         )));
 
-        // 3. Unreachable binary op operator
-        let node_bin = Expr::BinaryOp(
-            "dummy".to_string(),
-            Box::new(Expr::Number("1".to_string())),
-            Box::new(Expr::Number("1".to_string())),
-        );
-        let res_bin = evaluator.evaluate(&node_bin);
-        assert_eq!(res_bin.coeff, BigInt::from(0));
-
-        // 4. Unreachable relational op operator
-        let node_rel = Expr::RelationalOp(
-            "dummy".to_string(),
-            Box::new(Expr::Number("1".to_string())),
-            Box::new(Expr::Number("1".to_string())),
-        );
-        let res_rel = evaluator.evaluate(&node_rel);
-        assert_eq!(res_rel.coeff, BigInt::from(0));
-
-        // 5. Unary op not minus (line 138)
-        let node_unary = Expr::UnaryOp('+', Box::new(Expr::Number("5".to_string())));
-        let res_unary = evaluator.evaluate(&node_unary);
-        assert_eq!(res_unary.coeff, BigInt::from(5));
-
         // 6. Assign single non-hex char to ibase and obase
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("Z".to_string())),
         )));
         assert_eq!(evaluator.ibase, 2);
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("Z".to_string())),
         )));
@@ -907,85 +876,55 @@ mod tests {
 
         // Assign single non-hex char to variable (distinguishes is_base_reg && op == "=" from ||)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::Variable("var_g".to_string())),
             Box::new(Expr::Number("G".to_string())),
         )));
         let var_g = evaluator.evaluate(&Expr::Variable("var_g".to_string()));
         assert_eq!(var_g.coeff, BigInt::from(16));
 
-        // 7. Unreachable AssignOp fallback (line 223)
-        let node_assign = Expr::AssignOp(
-            "dummy=".to_string(),
-            Box::new(Expr::Variable("x".to_string())),
-            Box::new(Expr::Number("1".to_string())),
-        );
-        let res_assign_val = evaluator.evaluate(&node_assign);
-        assert_eq!(res_assign_val.coeff, BigInt::from(0));
-
         // 8. Assign fractional value to register (lines 257-258)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Scale)),
             Box::new(Expr::Number("2.5".to_string())),
         )));
 
         // 9. obase < 2 update (line 290)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("1".to_string())),
         )));
 
         // 10. Update of a non-named expression (unreachable from the parser)
-        let node_update_unreach = Expr::UpdateOp(
-            "++".to_string(),
-            true,
-            Box::new(Expr::Number("1".to_string())),
-        );
+        let node_update_unreach = Expr::Update(true, true, Box::new(Expr::Number("1".to_string())));
         let res_unreach_val = evaluator.evaluate(&node_update_unreach);
         assert_eq!(res_unreach_val.coeff, BigInt::from(2));
 
         // 10b. Additional tests for ibase single-character assignment edge cases
         // A) multi-character number (cleaned.len() != 1)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("10".to_string())),
         )));
         // B) non-number (expr is not Expr::Number)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Variable("x".to_string())),
         )));
         // C) single character non-hex digit (c is not ascii digit or A-F)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number(".".to_string())),
         )));
 
-        // Unreachable BinaryOp / RelationalOp fallback (line 151, 175)
-        let node_bin_unreach = Expr::BinaryOp(
-            "dummy".to_string(),
-            Box::new(Expr::Number("1".to_string())),
-            Box::new(Expr::Number("2".to_string())),
-        );
-        let res_bin_val = evaluator.evaluate(&node_bin_unreach);
-        assert_eq!(res_bin_val.coeff, BigInt::from(0));
-
-        let node_rel_unreach = Expr::RelationalOp(
-            "dummy".to_string(),
-            Box::new(Expr::Number("1".to_string())),
-            Box::new(Expr::Number("2".to_string())),
-        );
-        let res_rel_val = evaluator.evaluate(&node_rel_unreach);
-        assert_eq!(res_rel_val.coeff, BigInt::from(0));
-
         // AssignOp non-lvalue target fallback (line 301)
         let node_assign_unreach = Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::Number("1".to_string())),
             Box::new(Expr::Number("2".to_string())),
         );
@@ -993,8 +932,8 @@ mod tests {
         assert_eq!(res_assign_unreach.coeff, BigInt::from(2));
 
         // 11. Increment/decrement array at a fractional index (lines 325-326)
-        evaluator.execute(&Stmt::Expr(Expr::UpdateOp(
-            "++".to_string(),
+        evaluator.execute(&Stmt::Expr(Expr::Update(
+            true,
             true,
             Box::new(Expr::ArrayAccess(
                 "a".to_string(),
@@ -1004,24 +943,24 @@ mod tests {
 
         // 12. Increment/decrement a register with a fractional value (lines 340-341)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Scale)),
             Box::new(Expr::Number("2.5".to_string())),
         )));
-        evaluator.execute(&Stmt::Expr(Expr::UpdateOp(
-            "++".to_string(),
+        evaluator.execute(&Stmt::Expr(Expr::Update(
+            true,
             true,
             Box::new(Expr::RegisterAccess(Register::Scale)),
         )));
 
         // 13. Update obase with cap (line 360)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("2".to_string())),
         )));
-        evaluator.execute(&Stmt::Expr(Expr::UpdateOp(
-            "--".to_string(),
+        evaluator.execute(&Stmt::Expr(Expr::Update(
+            false,
             true,
             Box::new(Expr::RegisterAccess(Register::Obase)),
         )));
@@ -1095,25 +1034,25 @@ mod tests {
             Box::new(Expr::Number("0".to_string())),
         ));
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::Variable("uninit_var_assign".to_string())),
             Box::new(Expr::Number("10".to_string())),
         )));
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::ArrayAccess(
                 "uninit_arr_assign".to_string(),
                 Box::new(Expr::Number("0".to_string())),
             )),
             Box::new(Expr::Number("10".to_string())),
         )));
-        let _ = evaluator.evaluate(&Expr::UpdateOp(
-            "++".to_string(),
+        let _ = evaluator.evaluate(&Expr::Update(
+            true,
             true,
             Box::new(Expr::Variable("uninit_var_inc".to_string())),
         ));
-        let _ = evaluator.evaluate(&Expr::UpdateOp(
-            "++".to_string(),
+        let _ = evaluator.evaluate(&Expr::Update(
+            true,
             true,
             Box::new(Expr::ArrayAccess(
                 "uninit_arr_inc".to_string(),
@@ -1153,7 +1092,7 @@ mod tests {
                     is_array: false,
                 }],
                 body: vec![Stmt::Expr(Expr::BinaryOp(
-                    "/".to_string(),
+                    BinOp::Div,
                     Box::new(Expr::Number("1".to_string())),
                     Box::new(Expr::Number("0".to_string())),
                 ))],
@@ -1183,7 +1122,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    "==".to_string(),
+                    RelOp::Eq,
                     Box::new(Expr::Number("1".to_string())),
                     Box::new(Expr::Number("1".to_string()))
                 ))
@@ -1193,7 +1132,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    "==".to_string(),
+                    RelOp::Eq,
                     Box::new(Expr::Number("1".to_string())),
                     Box::new(Expr::Number("2".to_string()))
                 ))
@@ -1204,7 +1143,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    "!=".to_string(),
+                    RelOp::Ne,
                     Box::new(Expr::Number("1".to_string())),
                     Box::new(Expr::Number("2".to_string()))
                 ))
@@ -1214,7 +1153,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    "!=".to_string(),
+                    RelOp::Ne,
                     Box::new(Expr::Number("1".to_string())),
                     Box::new(Expr::Number("1".to_string()))
                 ))
@@ -1225,7 +1164,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    "<".to_string(),
+                    RelOp::Lt,
                     Box::new(Expr::Number("1".to_string())),
                     Box::new(Expr::Number("2".to_string()))
                 ))
@@ -1235,7 +1174,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    "<".to_string(),
+                    RelOp::Lt,
                     Box::new(Expr::Number("2".to_string())),
                     Box::new(Expr::Number("2".to_string()))
                 ))
@@ -1246,7 +1185,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    "<=".to_string(),
+                    RelOp::Le,
                     Box::new(Expr::Number("2".to_string())),
                     Box::new(Expr::Number("2".to_string()))
                 ))
@@ -1256,7 +1195,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    "<=".to_string(),
+                    RelOp::Le,
                     Box::new(Expr::Number("3".to_string())),
                     Box::new(Expr::Number("2".to_string()))
                 ))
@@ -1267,7 +1206,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    ">".to_string(),
+                    RelOp::Gt,
                     Box::new(Expr::Number("3".to_string())),
                     Box::new(Expr::Number("2".to_string()))
                 ))
@@ -1277,7 +1216,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    ">".to_string(),
+                    RelOp::Gt,
                     Box::new(Expr::Number("2".to_string())),
                     Box::new(Expr::Number("2".to_string()))
                 ))
@@ -1288,7 +1227,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    ">=".to_string(),
+                    RelOp::Ge,
                     Box::new(Expr::Number("2".to_string())),
                     Box::new(Expr::Number("2".to_string()))
                 ))
@@ -1298,7 +1237,7 @@ mod tests {
         assert_eq!(
             evaluator
                 .evaluate(&Expr::RelationalOp(
-                    ">=".to_string(),
+                    RelOp::Ge,
                     Box::new(Expr::Number("1".to_string())),
                     Box::new(Expr::Number("2".to_string()))
                 ))
@@ -1308,12 +1247,12 @@ mod tests {
 
         // Test compound assignments +=, -=, *=, /=, %=, ^=
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::Variable("x".to_string())),
             Box::new(Expr::Number("10".to_string())),
         )));
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "+=".to_string(),
+            AssignOp::Compound(BinOp::Add),
             Box::new(Expr::Variable("x".to_string())),
             Box::new(Expr::Number("5".to_string())),
         )));
@@ -1323,7 +1262,7 @@ mod tests {
         );
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "-=".to_string(),
+            AssignOp::Compound(BinOp::Sub),
             Box::new(Expr::Variable("x".to_string())),
             Box::new(Expr::Number("3".to_string())),
         )));
@@ -1333,7 +1272,7 @@ mod tests {
         );
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "*=".to_string(),
+            AssignOp::Compound(BinOp::Mul),
             Box::new(Expr::Variable("x".to_string())),
             Box::new(Expr::Number("2".to_string())),
         )));
@@ -1343,7 +1282,7 @@ mod tests {
         );
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "/=".to_string(),
+            AssignOp::Compound(BinOp::Div),
             Box::new(Expr::Variable("x".to_string())),
             Box::new(Expr::Number("4".to_string())),
         )));
@@ -1353,7 +1292,7 @@ mod tests {
         );
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "%=".to_string(),
+            AssignOp::Compound(BinOp::Mod),
             Box::new(Expr::Variable("x".to_string())),
             Box::new(Expr::Number("4".to_string())),
         )));
@@ -1363,7 +1302,7 @@ mod tests {
         );
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "^=".to_string(),
+            AssignOp::Compound(BinOp::Pow),
             Box::new(Expr::Variable("x".to_string())),
             Box::new(Expr::Number("3".to_string())),
         )));
@@ -1373,15 +1312,15 @@ mod tests {
         );
 
         // Test pre/post increment and decrement
-        let pre_inc = evaluator.evaluate(&Expr::UpdateOp(
-            "++".to_string(),
+        let pre_inc = evaluator.evaluate(&Expr::Update(
+            true,
             true,
             Box::new(Expr::Variable("x".to_string())),
         ));
         assert_eq!(pre_inc.coeff, BigInt::from(9));
 
-        let post_inc = evaluator.evaluate(&Expr::UpdateOp(
-            "++".to_string(),
+        let post_inc = evaluator.evaluate(&Expr::Update(
+            true,
             false,
             Box::new(Expr::Variable("x".to_string())),
         ));
@@ -1391,15 +1330,15 @@ mod tests {
             BigInt::from(10)
         );
 
-        let pre_dec = evaluator.evaluate(&Expr::UpdateOp(
-            "--".to_string(),
+        let pre_dec = evaluator.evaluate(&Expr::Update(
+            false,
             true,
             Box::new(Expr::Variable("x".to_string())),
         ));
         assert_eq!(pre_dec.coeff, BigInt::from(9));
 
-        let post_dec = evaluator.evaluate(&Expr::UpdateOp(
-            "--".to_string(),
+        let post_dec = evaluator.evaluate(&Expr::Update(
+            false,
             false,
             Box::new(Expr::Variable("x".to_string())),
         ));
@@ -1412,20 +1351,16 @@ mod tests {
         // Test Stmt::For and Stmt::If control flow branches
         evaluator.execute(&Stmt::For(
             Expr::AssignOp(
-                "=".to_string(),
+                AssignOp::Assign,
                 Box::new(Expr::Variable("var_i".to_string())),
                 Box::new(Expr::Number("0".to_string())),
             ),
             Expr::RelationalOp(
-                "<".to_string(),
+                RelOp::Lt,
                 Box::new(Expr::Variable("var_i".to_string())),
                 Box::new(Expr::Number("3".to_string())),
             ),
-            Expr::UpdateOp(
-                "++".to_string(),
-                true,
-                Box::new(Expr::Variable("var_i".to_string())),
-            ),
+            Expr::Update(true, true, Box::new(Expr::Variable("var_i".to_string()))),
             Box::new(Stmt::Block(vec![])),
         ));
         assert_eq!(
@@ -1455,7 +1390,7 @@ mod tests {
 
         // 1. Assign to array using fractional index a[3.8] = 99
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::ArrayAccess(
                 "arr".to_string(),
                 Box::new(Expr::Number("3.8".to_string())),
@@ -1472,21 +1407,21 @@ mod tests {
 
         // 2. Assign fractional values to scale, obase, ibase registers
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Scale)),
             Box::new(Expr::Number("5.9".to_string())),
         )));
         assert_eq!(evaluator.scale, 5);
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("10.4".to_string())),
         )));
         assert_eq!(evaluator.obase, 10);
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("16.7".to_string())),
         )));
@@ -1525,12 +1460,12 @@ mod tests {
             evaluator.variables.clear();
             evaluator.execute(&Stmt::If(
                 Expr::RelationalOp(
-                    op.to_string(),
+                    RelOp::from_symbol(op),
                     Box::new(Expr::Number(lhs.to_string())),
                     Box::new(Expr::Number(rhs.to_string())),
                 ),
                 Box::new(Stmt::Expr(Expr::AssignOp(
-                    "=".to_string(),
+                    AssignOp::Assign,
                     Box::new(Expr::Variable("hit".to_string())),
                     Box::new(Expr::Number("1".to_string())),
                 ))),
@@ -1554,20 +1489,20 @@ mod tests {
 
         // 1. Compound assignment scale propagation
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Scale)),
             Box::new(Expr::Number("4".to_string())),
         )));
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::Variable("x".to_string())),
             Box::new(Expr::Number("5.5".to_string())),
         )));
 
         // x += 1.25 -> 6.75 (max scale = 2)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "+=".to_string(),
+            AssignOp::Compound(BinOp::Add),
             Box::new(Expr::Variable("x".to_string())),
             Box::new(Expr::Number("1.25".to_string())),
         )));
@@ -1577,7 +1512,7 @@ mod tests {
 
         // x /= 2 -> 3.3750
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "/=".to_string(),
+            AssignOp::Compound(BinOp::Div),
             Box::new(Expr::Variable("x".to_string())),
             Box::new(Expr::Number("2".to_string())),
         )));
@@ -1598,7 +1533,7 @@ mod tests {
             }],
             body: vec![
                 Stmt::Expr(Expr::AssignOp(
-                    "=".to_string(),
+                    AssignOp::Assign,
                     Box::new(Expr::Variable("auto1".to_string())),
                     Box::new(Expr::Number("99".to_string())),
                 )),
@@ -1630,26 +1565,23 @@ mod tests {
         };
         let mut evaluator = Evaluator::new(false, Box::new(stdout), Box::new(stderr));
 
-        // 1. Unary plus and unary minus scale preservation
+        // 1. Unary minus scale preservation
         let num_expr = Box::new(Expr::Number("5.25".to_string()));
-        let uplus = evaluator.evaluate(&Expr::UnaryOp('+', num_expr.clone()));
-        assert_eq!(uplus.coeff, BigInt::from(525));
-        assert_eq!(uplus.scale, 2);
 
-        let uminus = evaluator.evaluate(&Expr::UnaryOp('-', num_expr));
+        let uminus = evaluator.evaluate(&Expr::Negate(num_expr));
         assert_eq!(uminus.coeff, BigInt::from(-525));
         assert_eq!(uminus.scale, 2);
 
         // 2. Register assignments to ibase and obase
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("10".to_string())),
         )));
         assert_eq!(evaluator.obase, 10);
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("16".to_string())),
         )));
@@ -1657,7 +1589,7 @@ mod tests {
         assert!(stderr_buf.lock().unwrap().is_empty());
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("2".to_string())),
         )));
@@ -1666,8 +1598,8 @@ mod tests {
 
         // UpdateOp on ibase and obase registers
         evaluator.ibase = 10;
-        let ibase_inc = evaluator.evaluate(&Expr::UpdateOp(
-            "++".to_string(),
+        let ibase_inc = evaluator.evaluate(&Expr::Update(
+            true,
             true,
             Box::new(Expr::RegisterAccess(Register::Ibase)),
         ));
@@ -1675,8 +1607,8 @@ mod tests {
         assert_eq!(evaluator.ibase, 11);
 
         evaluator.obase = 10;
-        let obase_inc = evaluator.evaluate(&Expr::UpdateOp(
-            "++".to_string(),
+        let obase_inc = evaluator.evaluate(&Expr::Update(
+            true,
             true,
             Box::new(Expr::RegisterAccess(Register::Obase)),
         ));
@@ -1709,21 +1641,21 @@ mod tests {
 
         // 1. Relational Ops with scale_left < scale_right (diff < 0)
         let expr_eq_lt = Expr::RelationalOp(
-            "==".to_string(),
+            RelOp::Eq,
             Box::new(Expr::Number("1.5".to_string())), // scale 1
             Box::new(Expr::Number("1.500".to_string())), // scale 3
         );
         assert_eq!(evaluator.evaluate(&expr_eq_lt).coeff, BigInt::from(1));
 
         let expr_lt = Expr::RelationalOp(
-            "<".to_string(),
+            RelOp::Lt,
             Box::new(Expr::Number("1.5".to_string())), // scale 1
             Box::new(Expr::Number("1.501".to_string())), // scale 3
         );
         assert_eq!(evaluator.evaluate(&expr_lt).coeff, BigInt::from(1));
 
         let expr_gt = Expr::RelationalOp(
-            ">".to_string(),
+            RelOp::Gt,
             Box::new(Expr::Number("1.5".to_string())), // scale 1
             Box::new(Expr::Number("1.499".to_string())), // scale 3
         );
@@ -1731,7 +1663,7 @@ mod tests {
 
         // 2. Relational Ops with scale_left > scale_right (diff > 0)
         let expr_eq_gt = Expr::RelationalOp(
-            "==".to_string(),
+            RelOp::Eq,
             Box::new(Expr::Number("1.500".to_string())), // scale 3
             Box::new(Expr::Number("1.5".to_string())),   // scale 1
         );
@@ -1739,7 +1671,7 @@ mod tests {
 
         // 3. Register access for scale
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Scale)),
             Box::new(Expr::Number("4".to_string())),
         )));
@@ -1763,14 +1695,14 @@ mod tests {
 
         // 1. Single character hex base assignment (ibase = A -> 10, ibase = F -> 15)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("A".to_string())),
         )));
         assert_eq!(evaluator.ibase, 10);
 
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Ibase)),
             Box::new(Expr::Number("F".to_string())),
         )));
@@ -1781,7 +1713,7 @@ mod tests {
 
         // 2. obase min clamping (obase < 2 -> 2)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::RegisterAccess(Register::Obase)),
             Box::new(Expr::Number("0".to_string())),
         )));
@@ -1789,7 +1721,7 @@ mod tests {
 
         // 3. Fractional array index truncation (a[2.7] = 42 -> a[2] == 42)
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::ArrayAccess(
                 "a".to_string(),
                 Box::new(Expr::Number("2.7".to_string())),
@@ -1804,8 +1736,8 @@ mod tests {
         assert_eq!(arr_val.coeff, BigInt::from(42));
 
         // Fractional array index truncation in UpdateOp (++b[2.7] -> b[2] == 1)
-        evaluator.evaluate(&Expr::UpdateOp(
-            "++".to_string(),
+        evaluator.evaluate(&Expr::Update(
+            true,
             true,
             Box::new(Expr::ArrayAccess(
                 "b".to_string(),
@@ -1822,7 +1754,7 @@ mod tests {
         evaluator.execute(&Stmt::Block(vec![
             Stmt::Quit,
             Stmt::Expr(Expr::AssignOp(
-                "=".to_string(),
+                AssignOp::Assign,
                 Box::new(Expr::Variable("stopped".to_string())),
                 Box::new(Expr::Number("1".to_string())),
             )),
@@ -1893,7 +1825,7 @@ mod tests {
         let mut evaluator = Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
         evaluator.break_flag = true;
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::Variable("mut_var".to_string())),
             Box::new(Expr::Number("99".to_string())),
         )));
@@ -1903,7 +1835,7 @@ mod tests {
         evaluator.break_flag = false;
         evaluator.return_flag = true;
         evaluator.execute(&Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::Variable("mut_var2".to_string())),
             Box::new(Expr::Number("99".to_string())),
         )));
@@ -1915,7 +1847,7 @@ mod tests {
             Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
         let stmt_ret = Stmt::Return(Some(Expr::Number("10".to_string())));
         let stmt_assign1 = Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::Variable("block_var1".to_string())),
             Box::new(Expr::Number("99".to_string())),
         ));
@@ -1928,7 +1860,7 @@ mod tests {
             Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
         let stmt_break = Stmt::Break;
         let stmt_assign2 = Stmt::Expr(Expr::AssignOp(
-            "=".to_string(),
+            AssignOp::Assign,
             Box::new(Expr::Variable("block_var2".to_string())),
             Box::new(Expr::Number("99".to_string())),
         ));

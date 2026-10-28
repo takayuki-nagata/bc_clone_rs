@@ -92,6 +92,11 @@
 - `BCNum::from_string` is replaced by `BCNum::try_from_string`, which returns `ScaleTooLarge`
   for a constant with more than `BC_SCALE_MAX` fraction digits before converting it; the
   panicking `from_string` remains for tests only.
+- Operators in the syntax tree are enums instead of strings: `Expr::BinaryOp(BinOp, …)`,
+  `RelationalOp(RelOp, …)`, `AssignOp(AssignOp, …)` (`Assign` or `Compound(BinOp)`),
+  `Negate(…)` instead of `UnaryOp(char, …)`, and `Update(increment, prefix, target)` instead of
+  `UpdateOp(String, prefix, target)`. Their order matches the operator codes of the
+  executable specification.
 
 ## v0.4.0 — 2026-10-26
 

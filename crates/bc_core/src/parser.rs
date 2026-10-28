@@ -615,6 +615,87 @@ impl Register {
     }
 }
 
+/// A binary arithmetic operator. The order is that of the specification's operator codes
+/// (`crates/bc_spec`, `binop_code`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Pow,
+}
+
+impl BinOp {
+    /// The operator of a `+`, `-`, `*`, `/`, `%` or `^` token (as `binop_code`: `^` for any
+    /// other text, which the lexer does not produce).
+    pub fn from_symbol(text: &str) -> Self {
+        match text.as_bytes().first() {
+            Some(b'+') => Self::Add,
+            Some(b'-') => Self::Sub,
+            Some(b'*') => Self::Mul,
+            Some(b'/') => Self::Div,
+            Some(b'%') => Self::Mod,
+            _ => Self::Pow,
+        }
+    }
+}
+
+/// A relational operator, in the order of the specification's `rel_code`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelOp {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl RelOp {
+    /// The operator of a relational token (as `rel_code`).
+    pub fn from_symbol(text: &str) -> Self {
+        let two = text.len() == 2;
+        match text.as_bytes().first() {
+            Some(b'=') => Self::Eq,
+            Some(b'!') => Self::Ne,
+            Some(b'<') => {
+                if two {
+                    Self::Le
+                } else {
+                    Self::Lt
+                }
+            }
+            _ => {
+                if two {
+                    Self::Ge
+                } else {
+                    Self::Gt
+                }
+            }
+        }
+    }
+}
+
+/// An assignment operator: `=`, or `op=` for a binary operator (as `assign_code`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignOp {
+    Assign,
+    Compound(BinOp),
+}
+
+impl AssignOp {
+    /// The operator of an assignment token.
+    pub fn from_symbol(text: &str) -> Self {
+        if text.len() == 1 {
+            Self::Assign
+        } else {
+            Self::Compound(BinOp::from_symbol(text))
+        }
+    }
+}
+
 /// Enum representing an expression in bc AST.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
@@ -622,11 +703,14 @@ pub enum Expr {
     Variable(String),
     ArrayAccess(String, Box<Expr>),
     RegisterAccess(Register),
-    UnaryOp(char, Box<Expr>),
-    BinaryOp(String, Box<Expr>, Box<Expr>),
-    RelationalOp(String, Box<Expr>, Box<Expr>),
-    UpdateOp(String, bool, Box<Expr>),      // op, is_prefix, target
-    AssignOp(String, Box<Expr>, Box<Expr>), // op, target, expr
+    /// Unary minus.
+    Negate(Box<Expr>),
+    BinaryOp(BinOp, Box<Expr>, Box<Expr>),
+    RelationalOp(RelOp, Box<Expr>, Box<Expr>),
+    /// `++`/`--` as `(increment, prefix, target)`.
+    Update(bool, bool, Box<Expr>),
+    /// `(operator, target, value)`.
+    AssignOp(AssignOp, Box<Expr>, Box<Expr>),
     Call(String, Vec<ExprOrArray>),
     LengthCall(Box<Expr>),
     SqrtCall(Box<Expr>),
@@ -1153,7 +1237,11 @@ impl Parser {
             self.eat(TokenType::RelOp)?;
             let (right, right_h) = self.parse_expression_h()?;
             self.check_height(1 + left_h.max(right_h))?;
-            Ok(Expr::RelationalOp(op, Box::new(left), Box::new(right)))
+            Ok(Expr::RelationalOp(
+                RelOp::from_symbol(&op),
+                Box::new(left),
+                Box::new(right),
+            ))
         } else {
             Ok(left)
         }
@@ -1199,7 +1287,7 @@ impl Parser {
             let (right, right_height) = self.parse_expr_precedence(next_min_prec)?;
             // A left-associative chain grows without recursion, so its height is checked here.
             height = self.check_height(1 + height.max(right_height))?;
-            left = Expr::BinaryOp(op_val, Box::new(left), Box::new(right));
+            left = Expr::BinaryOp(BinOp::from_symbol(&op_val), Box::new(left), Box::new(right));
         }
         Ok((left, self.check_height(height)?))
     }
@@ -1223,12 +1311,15 @@ impl Parser {
         if t == TokenType::Minus {
             self.eat(TokenType::Minus)?;
             let (expr, h) = self.parse_expr_precedence(5)?;
-            Ok((Expr::UnaryOp('-', Box::new(expr)), h + 1))
+            Ok((Expr::Negate(Box::new(expr)), h + 1))
         } else if t == TokenType::IncrDecr {
             let op = self.current_token.value.clone();
             self.eat(TokenType::IncrDecr)?;
             let (target, h) = self.parse_named_expression()?;
-            Ok((Expr::UpdateOp(op, true, Box::new(target)), h + 1))
+            Ok((
+                Expr::Update(op.starts_with('+'), true, Box::new(target)),
+                h + 1,
+            ))
         } else {
             self.parse_primary()
         }
@@ -1283,7 +1374,10 @@ impl Parser {
                     TokenType::IncrDecr => {
                         let op = self.current_token.value.clone();
                         self.eat(TokenType::IncrDecr)?;
-                        Ok((Expr::UpdateOp(op, false, Box::new(target)), target_h + 1))
+                        Ok((
+                            Expr::Update(op.starts_with('+'), false, Box::new(target)),
+                            target_h + 1,
+                        ))
                     }
                     // As in GNU bc's grammar, an assignment operator binds to the named
                     // expression right before it: `a + b = 3` is `a + (b = 3)` and `-a = 5`
@@ -1294,7 +1388,11 @@ impl Parser {
                         let (_, _, rhs_min_prec) = verified_pratt_infix_info(TOK_ASSIGN_OP);
                         let (value, value_h) = self.parse_expr_precedence(rhs_min_prec)?;
                         Ok((
-                            Expr::AssignOp(op, Box::new(target), Box::new(value)),
+                            Expr::AssignOp(
+                                AssignOp::from_symbol(&op),
+                                Box::new(target),
+                                Box::new(value),
+                            ),
                             1 + target_h.max(value_h),
                         ))
                     }
@@ -1465,10 +1563,10 @@ mod tests {
         assert_eq!(
             prog[0],
             Stmt::Block(vec![Stmt::Expr(Expr::BinaryOp(
-                "+".to_string(),
+                BinOp::Add,
                 Box::new(Expr::Number("2".to_string())),
                 Box::new(Expr::BinaryOp(
-                    "*".to_string(),
+                    BinOp::Mul,
                     Box::new(Expr::Number("3".to_string())),
                     Box::new(Expr::Number("4".to_string()))
                 ))
@@ -1537,22 +1635,23 @@ mod tests {
         assert_eq!(
             parse("a + b = 3\n"),
             Expr::BinaryOp(
-                "+".to_string(),
+                BinOp::Add,
                 var("a"),
-                Box::new(Expr::AssignOp("=".to_string(), var("b"), num("3")))
+                Box::new(Expr::AssignOp(AssignOp::Assign, var("b"), num("3")))
             )
         );
         assert_eq!(
             parse("-a = 5\n"),
-            Expr::UnaryOp(
-                '-',
-                Box::new(Expr::AssignOp("=".to_string(), var("a"), num("5")))
-            )
+            Expr::Negate(Box::new(Expr::AssignOp(
+                AssignOp::Assign,
+                var("a"),
+                num("5")
+            )))
         );
         assert_eq!(
             parse("(a = 5)\n"),
             Expr::Paren(Box::new(Expr::AssignOp(
-                "=".to_string(),
+                AssignOp::Assign,
                 var("a"),
                 num("5")
             )))
@@ -1752,10 +1851,10 @@ mod tests {
             other => other,
         };
         if let Stmt::Expr(Expr::BinaryOp(op1, left1, right1)) = target_stmt {
-            assert_eq!(op1, "^");
+            assert_eq!(*op1, BinOp::Pow);
             assert_eq!(**left1, Expr::Number("2".to_string()));
             if let Expr::BinaryOp(op2, left2, right2) = &**right1 {
-                assert_eq!(op2, "^");
+                assert_eq!(*op2, BinOp::Pow);
                 assert_eq!(**left2, Expr::Number("3".to_string()));
                 assert_eq!(**right2, Expr::Number("2".to_string()));
             } else {
