@@ -19,7 +19,8 @@
 //!
 //! **For the refinement proofs** of `bc_core`: `fuel` proves that a result
 //! that did not run out of fuel stays the same with more fuel, and `values` that the evaluator
-//! uses numbers only through their L0 values.
+//! uses numbers only through their L0 values, and `format` that `format_num`
+//! writes the L0 output definition `l0_format` of the value.
 //!
 //! **Writing rules** (forced by `exec_spec_verified!`):
 //! - recurse on `drop_first`, not on an index `i + 1`;
@@ -43,6 +44,7 @@
 
 pub mod convert;
 pub mod eval;
+pub mod format;
 pub mod fuel;
 pub mod lexer;
 pub mod num;

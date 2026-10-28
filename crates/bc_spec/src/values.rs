@@ -11,7 +11,7 @@
 //!   and conditions test `is_zero_mag` (`lemma_is_zero_mag`);
 //! - this module states the remaining uses by value: array subscripts (`array_index`) and register
 //!   stores (`store_register`);
-//! - `format_num` is characterized by value together with the output proofs.
+//! - `format_num` is characterized by value in `format.rs` (`lemma_format_num`).
 
 // Explicit, because `vstd::prelude` also exports an `array_index`; erased in normal builds.
 #[cfg(verus_keep_ghost)]

@@ -99,7 +99,9 @@ pub open spec fn format_num(v: Num, obase: u32) -> Seq<u8> {
         seq![48u8]
     } else {
         let ip = drop_mag(v.mag, v.scale);
-        let steps = if v.mag.len() < 0x0fff_ffffusize { (4 * v.mag.len() + 4) as u64 } else { 0u64 };
+        // Enough divisions for any number of digits below 2^60 (each digit is at most 4 bits of
+        // value per decimal digit); `u64::MAX` beyond that.
+        let steps = if (v.mag.len() as u64) < 0x1000_0000_0000_0000u64 { (4 * (v.mag.len() as u64) + 4) as u64 } else { 0xffff_ffff_ffff_ffffu64 };
         let int_str = int_digits(ip, obase, steps, seq![]);
         let frac_str = if v.scale == 0 {
             seq![]

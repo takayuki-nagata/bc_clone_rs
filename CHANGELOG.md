@@ -21,6 +21,11 @@
 - Lemmas for the refinement proofs, in `crates/bc_spec`: an evaluation that did not run out of
   fuel gives the same result with more fuel (`fuel.rs`), and array subscripts and register
   stores depend only on the value of a number, not on its digit sequence (`values.rs`).
+- The output of a number has an integer-level definition in the specification (`l0_format` in
+  `crates/bc_spec/src/format.rs`: digits by repeated division and multiplication, and the
+  smallest `k` with `obase^k >= 10^scale` fraction digits), and Verus proves that the executable
+  `format_num` computes it for every `obase` from 2 to `BC_BASE_MAX`. The specification now also
+  prints the integer part of numbers with 2^28 or more digits, which it used to omit.
 - `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`,
   `scale_func`, the comparison used by `==`, `<`, … (`cmp_val`) and the value of a constant
   (`from_digit_values`) are verified with Verus: they compute the integer (L0) definitions of
