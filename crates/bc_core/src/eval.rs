@@ -18,6 +18,7 @@ use num_traits::{Signed, ToPrimitive};
 
 use crate::error::{BcError, RuntimeError};
 use crate::format::wrap_output;
+use crate::math::pow10_within;
 use crate::math::{BCNum, pow10};
 use crate::parser::{
     AssignOp, BinOp, DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Register,
@@ -33,7 +34,9 @@ use crate::spec_num::SpecBCNum;
 use crate::spec_num::lemma_pow10_pos;
 #[cfg(verus_keep_ghost)]
 use crate::trusted_bigint::{axiom_bigint_size, big_view};
-use crate::trusted_bigint::{big_from_usize, big_neg};
+use crate::trusted_bigint::{
+    big_cmp, big_from_usize, big_is_negative, big_neg, big_tdiv, big_to_u64_small,
+};
 #[cfg(verus_keep_ghost)]
 use crate::trusted_std::axiom_string_obeys_cmp;
 use crate::verified_kernels::{
@@ -48,7 +51,7 @@ use bc_spec::eval::{
     ER, EState, er_ok, ev, ev_node, ev_unary, negate, num_u64, reg_get, with_depth,
 };
 #[cfg(verus_keep_ghost)]
-use bc_spec::eval::{arith as spec_arith, rel_holds, var_get};
+use bc_spec::eval::{arith as spec_arith, arr_top, array_index, elem_get, rel_holds, var_get};
 #[cfg(verus_keep_ghost)]
 use bc_spec::fuel::done;
 #[cfg(verus_keep_ghost)]
@@ -68,6 +71,8 @@ use bc_spec::power::lemma_one_mag;
 use bc_spec::power::lemma_u64_mag;
 #[cfg(verus_keep_ghost)]
 use bc_spec::power::{NumRes, lemma_num_sqrt, num_sqrt};
+#[cfg(verus_keep_ghost)]
+use bc_spec::values::lemma_array_index_value;
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin::Ghost;
 #[cfg(not(verus_keep_ghost))]
@@ -639,6 +644,7 @@ impl Evaluator {
         match node {
             Expr::RegisterAccess(reg) => self.eval_register(*reg, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Variable(name) => self.eval_variable(name, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::ArrayAccess(name, index) => self.eval_array(Ghost(*node), name, index, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Paren(inner) => self.eval_paren(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Negate(inner) => self.eval_negate(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::LengthCall(inner) => self.eval_length(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
@@ -1194,6 +1200,128 @@ impl Evaluator {
             }
         }
         Ok(v)
+    }
+
+    /// Converts the subscript `idx` of array `name` to an index, truncating it to an integer
+    /// (the specification's `array_index`). Negative subscripts and subscripts of at least
+    /// `BC_DIM_MAX` are runtime errors.
+    #[allow(clippy::cast_possible_truncation, reason = "the index is below BC_DIM_MAX = 2^24")]
+    #[allow(clippy::ptr_arg, reason = "the specification relates the error to the String")]
+    fn array_index_ref(name: &String, idx: &BCNum) -> (r: Result<usize, BcError>)
+        requires
+            idx.scale <= BC_SCALE_MAX,
+        ensures
+            forall|x: SpecNum| #[trigger] r_num(*idx, x) ==> match r {
+                Ok(i) => array_index(x).0 && array_index(x).1 == i,
+                Err(e) => !array_index(x).0 && e == BcError::Runtime {
+                    kind: RuntimeError::ArraySubscriptOutOfBounds(*name),
+                    func: None,
+                },
+            },
+    {
+        proof {
+            lemma_pow10_pos(idx.scale as nat);
+        }
+        let index = big_tdiv(&idx.coeff, &pow10_within(idx.scale));
+        let below = matches!(big_cmp(&index, &big_from_usize(BC_DIM_MAX)), Ordering::Less);
+        let r = if big_is_negative(&idx.coeff) || !below {
+            Err(BcError::Runtime { kind: RuntimeError::ArraySubscriptOutOfBounds(name.clone()), func: None })
+        } else {
+            Ok(big_to_u64_small(&index) as usize)
+        };
+        proof {
+            assert forall|x: SpecNum| #[trigger] r_num(*idx, x) implies match r {
+                Ok(i) => array_index(x).0 && array_index(x).1 == i,
+                Err(e) => !array_index(x).0 && e == BcError::Runtime {
+                    kind: RuntimeError::ArraySubscriptOutOfBounds(*name),
+                    func: None,
+                },
+            } by {
+                lemma_array_index_value(x);
+                lemma_mag_bounds(x.mag);
+            }
+        }
+        r
+    }
+
+    /// An array element (the specification's `ev_array`): the subscript is evaluated first.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn eval_array(&mut self, Ghost(node): Ghost<Expr>, name: &String, index: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            node == Expr::ArrayAccess(*name, Box::new(*index)),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(node, nodes, n) && in_fragment(node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n) && in_fragment(node);
+        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Array(_, j) => j, _ => 0usize } } else { 0usize };
+        let r0 = self.eval_ref(index, Ghost(nodes), Ghost(j), Ghost(st));
+        let v = match r0 {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            assert(f >= 2);
+                            assert(done(ev(nodes, j, st, (f - 2) as u64)));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let i = match Self::array_index_ref(name, &v) {
+            Ok(i) => i,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            assert(f >= 2);
+                            let x = ev(nodes, j, st, (f - 2) as u64);
+                            assert(done(x));
+                            assert(r_num(v, x.val));
+                            assert(with_depth(x.st, d as u64) == x.st);
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let w = self.arr_get(name, i);
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Ok(w), *self, ev_node(nodes, n, st, f), d) by {
+                    assert(f >= 2);
+                    let x = ev(nodes, j, st, (f - 2) as u64);
+                    assert(done(x));
+                    assert(r_num(v, x.val));
+                    let nm = text_view(*name);
+                    lemma_array_index_value(x.val);
+                    let idx = array_index(x.val).1;
+                    assert(i == idx && (idx as int) < 16777216);
+                    lemma_arr_top(x.st.arrays, nm);
+                    lemma_elem_get(arr_top(x.st.arrays, nm).elems, idx);
+                    let m = self.arrays@;
+                    if m.contains_key(*name) {
+                        let ss = arr_lookup(x.st.arrays, nm)->Some_0;
+                        assert(r_frames(m[*name]@, ss));
+                        if ss.len() > 0 {
+                            assert(r_frame(m[*name]@[ss.len() - 1]@, ss[ss.len() - 1]));
+                            assert(i < 16777216);
+                        }
+                    } else {
+                        lemma_arr_absent(m, x.st.arrays, *name);
+                    }
+                    assert(r_num(w, elem_get(arr_top(x.st.arrays, nm).elems, idx)));
+                }
+            }
+        }
+        Ok(w)
     }
 
     /// The trusted boundary of the expressions not proved yet: `evaluate_node`'s code for them,

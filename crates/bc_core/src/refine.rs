@@ -276,16 +276,15 @@ pub open spec fn elem_val(elems: Seq<Elem>, idx: int) -> Option<Num>
     }
 }
 
-/// An array frame: every subscript below `BC_DIM_MAX` reads the same value (unset is 0 on both
-/// sides), and production stores no other subscripts.
+/// An array frame: a subscript below `BC_DIM_MAX` is set in both or in neither, with
+/// corresponding values, and production stores no other subscripts.
 pub open spec fn r_frame(pf: Map<usize, BCNum>, sf: ArrFrame) -> bool {
     &&& forall|k: usize| #[trigger] pf.contains_key(k) ==> k < 16777216
     &&& forall|k: usize| #![trigger pf.contains_key(k)] #![trigger elem_val(sf.elems, k as int)]
         k < 16777216 ==> match (pf.contains_key(k), elem_val(sf.elems, k as int)) {
         (true, Some(x)) => r_num(pf[k], x),
-        (true, None) => pf[k].val().coeff == 0,
-        (false, Some(x)) => to_l0(x).coeff == 0 && wf_num(x),
         (false, None) => true,
+        _ => false,
     }
 }
 
@@ -371,6 +370,7 @@ pub open spec fn in_fragment(e: Expr) -> bool
     match e {
         Expr::RegisterAccess(_) => true,
         Expr::Variable(_) => true,
+        Expr::ArrayAccess(_, i) => in_fragment(*i),
         Expr::Paren(a) => in_fragment(*a),
         Expr::Negate(a) => in_fragment(*a),
         Expr::LengthCall(a) => in_fragment(*a),
@@ -494,6 +494,67 @@ pub proof fn lemma_var_absent(m: Map<String, Vec<BCNum>>, vars: Seq<VarBind>, na
         let i = choose|i: int| 0 <= i < vars.len() && #[trigger] vars[i].name == text_view(name);
         let k = choose|k: String| #[trigger] m.contains_key(k) && text_view(k) == vars[i].name;
         lemma_text_view_injective(k, name);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Arrays
+// ---------------------------------------------------------------------------------------------
+
+pub proof fn lemma_arr_lookup_index(arrays: Seq<ArrBind>, nm: Seq<u8>)
+    requires
+        arr_lookup(arrays, nm) is Some,
+    ensures
+        exists|i: int| 0 <= i < arrays.len() && #[trigger] arrays[i].name == nm,
+    decreases arrays.len(),
+{
+    if arrays[0].name != nm {
+        lemma_arr_lookup_index(arrays.drop_first(), nm);
+        let i = choose|i: int| 0 <= i < arrays.drop_first().len() && #[trigger] arrays.drop_first()[i].name == nm;
+        assert(arrays[i + 1].name == nm);
+    }
+}
+
+/// `arr_top` is the top frame of the stack `arr_lookup` finds (empty if none or empty).
+pub proof fn lemma_arr_top(arrays: Seq<ArrBind>, nm: Seq<u8>)
+    ensures
+        arr_top(arrays, nm) == match arr_lookup(arrays, nm) {
+            Some(s) => if s.len() > 0 { s[s.len() - 1] } else { ArrFrame { elems: seq![] } },
+            None => ArrFrame { elems: seq![] },
+        },
+    decreases arrays.len(),
+{
+    if arrays.len() > 0 && arrays[0].name != nm {
+        lemma_arr_top(arrays.drop_first(), nm);
+    }
+}
+
+pub proof fn lemma_arr_absent(m: Map<String, Vec<BTreeMap<usize, BCNum>>>, arrays: Seq<ArrBind>, name: String)
+    requires
+        r_arrays(m, arrays),
+        !m.contains_key(name),
+    ensures
+        arr_lookup(arrays, text_view(name)) is None,
+{
+    if arr_lookup(arrays, text_view(name)) is Some {
+        lemma_arr_lookup_index(arrays, text_view(name));
+        let i = choose|i: int| 0 <= i < arrays.len() && #[trigger] arrays[i].name == text_view(name);
+        let k = choose|k: String| #[trigger] m.contains_key(k) && text_view(k) == arrays[i].name;
+        lemma_text_view_injective(k, name);
+    }
+}
+
+/// `elem_get` is the value `elem_val` finds (0 if unset).
+pub proof fn lemma_elem_get(elems: Seq<Elem>, idx: u32)
+    ensures
+        elem_get(elems, idx) == match elem_val(elems, idx as int) {
+            Some(v) => v,
+            None => zero_num(),
+        },
+    decreases elems.len(),
+{
+    if elems.len() > 0 && elems[0].idx != idx {
+        lemma_elem_get(elems.drop_first(), idx);
     }
 }
 
