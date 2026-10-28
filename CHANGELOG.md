@@ -43,6 +43,9 @@
   arithmetic and relational operators, `length`, `scale`, `sqrt`, assignments (including
   compound ones, register clamping with its warnings, and a single hexadecimal digit for
   `ibase`/`obase`) and `++`/`--`, with runtime errors and the nesting limit.
+- Statement execution is proved to refine the specification as well: expression statements
+  (printing the value unless it is an assignment), strings, blocks, `if`, `while`, `for`,
+  `break`, `return` and function definitions. `try_execute` now runs the verified executor.
 
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval

@@ -227,7 +227,8 @@ pub open spec fn r_stmt(s: Stmt, nodes: Seq<Node>, n: usize) -> bool
 pub open spec fn r_stmts(list: Seq<Stmt>, nodes: Seq<Node>, ns: Seq<usize>) -> bool
     decreases list,
 {
-    list.len() == ns.len() && forall|i: int| 0 <= i < list.len() ==> #[trigger] r_stmt(list[i], nodes, ns[i])
+    list.len() == ns.len() && (list.len() == 0
+        || (r_stmt(list[0], nodes, ns[0]) && r_stmts(list.drop_first(), nodes, ns.drop_first())))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -979,6 +980,224 @@ pub proof fn lemma_r_frame_set(pf: Map<usize, BCNum>, sf: ArrFrame, idx: usize, 
 /// A named expression: what the parser accepts on the left of an assignment and for `++`/`--`.
 pub open spec fn named(e: Expr) -> bool {
     e is Variable || e is ArrayAccess || e is RegisterAccess
+}
+
+// ---------------------------------------------------------------------------------------------
+// Statements and functions
+// ---------------------------------------------------------------------------------------------
+
+/// The statements whose execution is proved to refine the specification so far: all except
+/// `quit` (never built), with their expressions in `in_fragment`.
+pub open spec fn in_fragment_stmt(s: Stmt) -> bool
+    decreases s,
+{
+    match s {
+        Stmt::Block(list) => in_fragment_stmts(list@),
+        Stmt::Expr(e) => in_fragment(e),
+        Stmt::StringLiteral(_) => true,
+        Stmt::Break => true,
+        Stmt::Quit => false,
+        Stmt::Return(v) => match v {
+            Some(e) => in_fragment(e),
+            None => true,
+        },
+        Stmt::If(c, b) => in_fragment(c) && in_fragment_stmt(*b),
+        Stmt::While(c, b) => in_fragment(c) && in_fragment_stmt(*b),
+        Stmt::For(i, c, p, b) => in_fragment(i) && in_fragment(c) && in_fragment(p) && in_fragment_stmt(*b),
+        Stmt::FunctionDef(_) => true,
+    }
+}
+
+/// Every statement of `list` is in `in_fragment_stmt`.
+pub open spec fn in_fragment_stmts(list: Seq<Stmt>) -> bool
+    decreases list,
+{
+    list.len() == 0 || (in_fragment_stmt(list[0]) && in_fragment_stmts(list.drop_first()))
+}
+
+/// `Evaluator::is_assignment_ref`: an assignment, possibly under unary minus.
+pub open spec fn prod_is_assignment(e: Expr) -> bool
+    decreases e,
+{
+    match e {
+        Expr::AssignOp(..) => true,
+        Expr::Negate(a) => prod_is_assignment(*a),
+        _ => false,
+    }
+}
+
+/// Once the expression evaluated with fuel `f`, production's `is_assignment_ref` is the
+/// specification's with fuel `f + 1` (each unary minus costs `ev` three levels).
+pub proof fn lemma_prod_is_assignment(e: Expr, nodes: Seq<Node>, n: usize, st: EState, f: u64)
+    requires
+        r_expr(e, nodes, n),
+        ev(nodes, n, st, f).ok,
+        f < u64::MAX,
+    ensures
+        prod_is_assignment(e) == is_assignment(nodes, n, (f + 1) as u64),
+    decreases e,
+{
+    match e {
+        Expr::Negate(a) => {
+            match nodes[n as int] {
+                Node::Neg(j) => {
+                    let st1 = with_depth(st, (st.depth + 1) as u64);
+                    assert(ev_node(nodes, n, st1, (f - 1) as u64).ok);
+                    assert(ev_unary(nodes, 0u8, j, st1, (f - 2) as u64).ok);
+                    lemma_prod_is_assignment(*a, nodes, j, st1, (f - 3) as u64);
+                    bc_spec::fuel::lemma_is_assignment_stable(nodes, j, st1, (f - 3) as u64, (f - 2) as u64, f);
+                },
+                _ => {},
+            }
+        },
+        _ => {},
+    }
+}
+
+pub proof fn lemma_find_func_push(acc: Seq<Func>, g: Func, k: Seq<u8>)
+    ensures
+        find_func(acc.push(g), k) == if find_func(acc, k) is Some { find_func(acc, k) } else if g.name == k { Some(g) } else { None },
+    decreases acc.len(),
+{
+    reveal_with_fuel(find_func, 2);
+    if acc.len() > 0 {
+        assert(acc.push(g)[0] == acc[0]);
+        assert(acc.push(g).drop_first() =~= acc.drop_first().push(g));
+        lemma_find_func_push(acc.drop_first(), g, k);
+    } else {
+        assert(acc.push(g)[0] == g);
+        assert(acc.push(g).drop_first() =~= Seq::<Func>::empty());
+    }
+}
+
+pub proof fn lemma_find_func_add(a: Seq<Func>, b: Seq<Func>, k: Seq<u8>)
+    ensures
+        find_func(a.add(b), k) == if find_func(a, k) is Some { find_func(a, k) } else { find_func(b, k) },
+    decreases a.len(),
+{
+    if a.len() > 0 {
+        assert(a.add(b).drop_first() =~= a.drop_first().add(b));
+        lemma_find_func_add(a.drop_first(), b, k);
+    } else {
+        assert(a.add(b) =~= b);
+    }
+}
+
+/// The functions after `define_func`: `g.name` finds `g`, the others keep theirs.
+pub proof fn lemma_define_func(funcs: Seq<Func>, g: Func, acc: Seq<Func>, k: Seq<u8>)
+    requires
+        find_func(acc, g.name) is None,
+    ensures
+        find_func(define_func(funcs, g, acc), k) == if find_func(acc, k) is Some {
+            find_func(acc, k)
+        } else if k == g.name {
+            Some(g)
+        } else {
+            find_func(funcs, k)
+        },
+    decreases funcs.len(),
+{
+    if funcs.len() == 0 {
+        lemma_find_func_push(acc, g, k);
+    } else if funcs[0].name == g.name {
+        lemma_find_func_add(acc.push(g), funcs.drop_first(), k);
+        lemma_find_func_push(acc, g, k);
+    } else {
+        lemma_find_func_push(acc, funcs[0], g.name);
+        lemma_define_func(funcs.drop_first(), g, acc.push(funcs[0]), k);
+        lemma_find_func_push(acc, funcs[0], k);
+    }
+}
+
+pub proof fn lemma_find_func_some(funcs: Seq<Func>, i: int)
+    requires
+        0 <= i < funcs.len(),
+    ensures
+        find_func(funcs, funcs[i].name) is Some,
+    decreases funcs.len(),
+{
+    if i > 0 && funcs[0].name != funcs[i].name {
+        assert(funcs.drop_first()[i - 1] == funcs[i]);
+        lemma_find_func_some(funcs.drop_first(), i - 1);
+    }
+}
+
+pub proof fn lemma_find_func_index(funcs: Seq<Func>, k: Seq<u8>)
+    requires
+        find_func(funcs, k) is Some,
+    ensures
+        exists|i: int| 0 <= i < funcs.len() && #[trigger] funcs[i].name == k,
+        find_func(funcs, k)->Some_0.name == k,
+    decreases funcs.len(),
+{
+    if funcs[0].name != k {
+        lemma_find_func_index(funcs.drop_first(), k);
+        let i = choose|i: int| 0 <= i < funcs.drop_first().len() && #[trigger] funcs.drop_first()[i].name == k;
+        assert(funcs[i + 1].name == k);
+    }
+}
+
+/// `r_funcs` holds after production defines `fd` under its name and the specification
+/// defines `g` (with `r_func(fd, g)`).
+pub proof fn lemma_r_funcs_define(m: Map<String, FunctionDef>, funcs: Seq<Func>, fd: FunctionDef, g: Func)
+    requires
+        r_funcs(m, funcs),
+        r_func(fd, g),
+    ensures
+        r_funcs(m.insert(fd.name, fd), define_func(funcs, g, Seq::empty())),
+{
+    let m2 = m.insert(fd.name, fd);
+    let r = define_func(funcs, g, Seq::empty());
+    assert forall|k: String| #[trigger] m2.contains_key(k) implies find_func(r, text_view(k)) is Some
+        && r_func(m2[k], find_func(r, text_view(k))->Some_0) by {
+        lemma_define_func(funcs, g, Seq::empty(), text_view(k));
+        if k != fd.name && text_view(k) == g.name {
+            lemma_text_view_injective(k, fd.name);
+        }
+    }
+    assert forall|i: int| #![trigger r[i]] 0 <= i < r.len() implies exists|k: String| #[trigger] m2.contains_key(k)
+        && text_view(k) == r[i].name by {
+        let y = r[i].name;
+        lemma_find_func_some(r, i);
+        lemma_define_func(funcs, g, Seq::empty(), y);
+        if y == g.name {
+            assert(m2.contains_key(fd.name));
+        } else {
+            lemma_find_func_index(funcs, y);
+            let j = choose|j: int| 0 <= j < funcs.len() && #[trigger] funcs[j].name == y;
+            let k = choose|k: String| #[trigger] m.contains_key(k) && text_view(k) == funcs[j].name;
+            assert(m2.contains_key(k));
+        }
+    }
+}
+
+/// An element of a related statement list is related.
+pub proof fn lemma_r_stmts_index(list: Seq<Stmt>, nodes: Seq<Node>, ns: Seq<usize>, i: int)
+    requires
+        r_stmts(list, nodes, ns),
+        0 <= i < list.len(),
+    ensures
+        ns.len() == list.len(),
+        r_stmt(list[i], nodes, ns[i]),
+    decreases i,
+{
+    if i > 0 {
+        lemma_r_stmts_index(list.drop_first(), nodes, ns.drop_first(), i - 1);
+    }
+}
+
+/// An element of a statement list in the fragment is in the fragment.
+pub proof fn lemma_in_fragment_stmts_index(list: Seq<Stmt>, i: int)
+    requires
+        in_fragment_stmts(list),
+        0 <= i < list.len(),
+    ensures
+        in_fragment_stmt(list[i]),
+    decreases i,
+{
+    if i > 0 {
+        lemma_in_fragment_stmts_index(list.drop_first(), i - 1);
+    }
 }
 
 } // verus!
