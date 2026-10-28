@@ -9,6 +9,12 @@ description = "Arbitrary-precision decimal math engine, parser, and AST evaluato
 num-bigint = { version = "0.5", default-features = false }
 num-traits = { version = "0.2", default-features = false }
 num-integer = { version = "0.1", default-features = false }
+# Verification only (`verify`): the Verus standard library, whose version matches the Verus
+# release pinned in `scripts/verus_env.sh`, and the executable specification for the refinement
+# proofs. Neither is linked into production builds: vstd needs atomic compare-and-swap, which
+# riscv32imc (ESP32-C3) lacks, and bc_spec needs `std`.
+vstd = { version = "=0.0.0-2026-10-18-0147", default-features = false, features = ["alloc"], optional = true }
+bc_spec = { path = "../bc_spec", optional = true }
 
 [dev-dependencies]
 proptest = "1.5"
@@ -16,6 +22,11 @@ proptest = "1.5"
 [features]
 default = []
 c-api = []
+# For `cargo verus verify -p bc_core --features verify`.
+verify = ["dep:vstd", "dep:bc_spec"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)', 'cfg(kani)', 'cfg(miri)'] }
+
+[package.metadata.verus]
+verify = true

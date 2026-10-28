@@ -2,10 +2,9 @@
 
 //! Mathematical (L0) specification of `bc` numbers over the unbounded integers.
 //!
-//! These definitions are the meaning of every number in the executable specification
-//! (`crates/bc_spec`) and the reference point for the design models in `verus_proofs.rs`.
-//! They use only `vstd`, so `crates/bc_spec` includes this file with `#[path]`. Compiled only
-//! under `cfg(verus_keep_ghost)`.
+//! These definitions are the meaning of every number in the executable specification and the
+//! reference point for the proofs about `bc_core` (its design models in `verus_proofs.rs`, and
+//! the refinement proofs), which uses them through `bc_core::spec_num`.
 
 use vstd::prelude::*;
 

@@ -6,8 +6,8 @@
 //! `cfg(verus_keep_ghost)`.
 //!
 //! **What is proved here and what is not.** Spec functions (`spec fn`) and lemmas (`proof fn`)
-//! state mathematical facts, e.g. about `SpecBCNum` (defined in `spec_num.rs`, which the
-//! executable specification in `crates/bc_spec` shares). The executable `verified_*` functions in
+//! state mathematical facts, e.g. about `SpecBCNum` (defined in `crates/bc_spec/src/spec_num.rs`
+//! and re-exported as `crate::spec_num`). The executable `verified_*` functions in
 //! this file are **design models**: production code does not call them. Many use fixed-width
 //! integers or small bounds where production uses `BigInt`. Their proofs show that the
 //! *algorithm* is sound, not that `math.rs` or `eval.rs` implements it correctly. Production code

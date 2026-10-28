@@ -30,10 +30,12 @@ dependencies = [
 name = "bc_core"
 version = "0.4.0"
 dependencies = [
+ "bc_spec",
  "num-bigint",
  "num-integer",
  "num-traits",
  "proptest",
+ "vstd",
 ]
 
 [[package]]

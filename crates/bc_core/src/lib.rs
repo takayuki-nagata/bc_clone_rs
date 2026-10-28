@@ -20,6 +20,10 @@
 
 extern crate alloc;
 
+// The proofs refer to the executable specification, which only the `verify` feature links.
+#[cfg(all(verus_keep_ghost, not(feature = "verify")))]
+compile_error!("verify bc_core with `cargo verus verify -p bc_core --features verify`");
+
 #[cfg(test)]
 extern crate std;
 
@@ -38,7 +42,7 @@ mod mathlib;
 #[cfg(not(verus_keep_ghost))]
 pub mod parser;
 #[cfg(verus_keep_ghost)]
-pub mod spec_num;
+pub use bc_spec::spec_num;
 pub mod verified_kernels;
 #[cfg(verus_keep_ghost)]
 pub mod verus_proofs;

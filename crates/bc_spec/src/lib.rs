@@ -42,6 +42,5 @@ pub mod num;
 pub mod output;
 pub mod parser;
 pub mod power;
-#[path = "../../bc_core/src/spec_num.rs"]
 pub mod spec_num;
 pub mod top;

@@ -11,9 +11,7 @@ echo "=== Running Verus Formal Verification on bc_core (verus_proofs) ==="
 echo "Using Verus binary: $VERUS_BIN"
 "$VERUS_BIN" --version
 
-"$VERUS_BIN" \
-    --crate-type=lib \
-    crates/bc_core/src/lib.rs
+cargo verus verify -p bc_core --features verify
 
 echo ""
 echo "=== Running Verus Formal Verification on the executable specification (bc_spec) ==="

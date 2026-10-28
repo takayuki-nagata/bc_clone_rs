@@ -15,6 +15,9 @@
 - `crates/bc_spec` is a Cargo package (library and the `bc_spec_oracle` binary) in the workspace,
   outside `default-members`. It is verified with `cargo verus verify -p bc_spec`, and the oracle
   is compiled with a normal `cargo build`.
+- `bc_core` is verified with `cargo verus verify -p bc_core --features verify`. The `verify`
+  feature links `vstd` and the executable specification (for the refinement proofs); production
+  builds link neither. The L0 number model `spec_num.rs` moved into `crates/bc_spec`.
 
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval
