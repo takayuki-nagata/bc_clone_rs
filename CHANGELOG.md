@@ -46,6 +46,11 @@
 - Statement execution is proved to refine the specification as well: expression statements
   (printing the value unless it is an assignment), strings, blocks, `if`, `while`, `for`,
   `break`, `return` and function definitions. `try_execute` now runs the verified executor.
+- Function calls are proved to refine the specification too: argument evaluation (including
+  copies of array arguments and parameter type errors), the parameter and `auto` frames, the
+  invocation `ibase`, the body, restoring the caller's state on every return path, and the
+  attribution of errors to the function. Every expression and statement the parser builds is
+  now covered when `-l` is not in effect; only `-l`'s functions remain outside the proof.
 
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval
@@ -112,6 +117,7 @@
   `Evaluator::new`, with `write_fmt` and `flush`, so `writeln!` works as before), and array
   frames are `BTreeMap<usize, BCNum>` instead of `BTreeMap<BigInt, BCNum>` (subscripts are below
   `BC_DIM_MAX`).
+- `BcError::in_function` takes the function name as `&String`.
 
 ## v0.4.0 — 2026-10-26
 

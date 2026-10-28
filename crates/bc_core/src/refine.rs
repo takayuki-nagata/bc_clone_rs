@@ -137,16 +137,15 @@ pub open spec fn r_expr(e: Expr, nodes: Seq<Node>, n: usize) -> bool
             _ => false,
         },
         Expr::Update(inc, prefix, t) => match nodes[n as int] {
-            Node::Update(i2, p2, j) => i2 == inc && p2 == prefix && r_expr(*t, nodes, j),
+            Node::Update(i2, p2, j) => named(*t) && i2 == inc && p2 == prefix && r_expr(*t, nodes, j),
             _ => false,
         },
         Expr::AssignOp(op, t, v) => match nodes[n as int] {
-            Node::Assign(c, a, b) => c == assign_code(op) && r_expr(*t, nodes, a) && r_expr(*v, nodes, b),
+            Node::Assign(c, a, b) => named(*t) && c == assign_code(op) && r_expr(*t, nodes, a) && r_expr(*v, nodes, b),
             _ => false,
         },
         Expr::Call(name, args) => match nodes[n as int] {
-            Node::Call(m, sargs) => m == text_view(name) && args.len() == sargs.len()
-                && forall|i: int| 0 <= i < args.len() ==> #[trigger] r_arg(args[i], nodes, sargs[i]),
+            Node::Call(m, sargs) => m == text_view(name) && r_args(args@, nodes, sargs),
             _ => false,
         },
         Expr::LengthCall(a) => match nodes[n as int] {
@@ -166,6 +165,15 @@ pub open spec fn r_expr(e: Expr, nodes: Seq<Node>, n: usize) -> bool
             _ => false,
         },
     }
+}
+
+/// The arguments of a call, in order (by `drop_first`, so that Verus can unfold it; see
+/// `lemma_r_args_index`).
+pub open spec fn r_args(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs: Seq<Arg>) -> bool
+    decreases args,
+{
+    args.len() == sargs.len() && (args.len() == 0
+        || (r_arg(args[0], nodes, sargs[0]) && r_args(args.drop_first(), nodes, sargs.drop_first())))
 }
 
 /// A call argument: an expression, or a whole array `name[]`.
@@ -363,8 +371,8 @@ pub open spec fn r_err(e: BcError, x: RErr) -> bool {
     }
 }
 
-/// The expressions whose evaluation is proved to refine the specification so far;
-/// the others are evaluated by trusted code that only keeps `Evaluator::inv`.
+/// The expressions whose evaluation is proved to refine the specification: every expression
+/// whose assignment targets are named (`lemma_r_expr_in_fragment`: every related expression).
 pub open spec fn in_fragment(e: Expr) -> bool
     decreases e,
 {
@@ -382,7 +390,88 @@ pub open spec fn in_fragment(e: Expr) -> bool
         Expr::SqrtCall(a) => in_fragment(*a),
         Expr::BinaryOp(_, l, r) => in_fragment(*l) && in_fragment(*r),
         Expr::RelationalOp(_, l, r) => in_fragment(*l) && in_fragment(*r),
-        _ => false,
+        Expr::Call(_, args) => in_fragment_args(args@),
+    }
+}
+
+pub open spec fn in_fragment_args(args: Seq<ExprOrArray>) -> bool
+    decreases args,
+{
+    args.len() == 0 || (in_fragment_arg(args[0]) && in_fragment_args(args.drop_first()))
+}
+
+pub open spec fn in_fragment_arg(a: ExprOrArray) -> bool
+    decreases a,
+{
+    match a {
+        ExprOrArray::Expr(e) => in_fragment(e),
+        ExprOrArray::ArrayArg(_) => true,
+    }
+}
+
+/// Every expression related to an arena subtree is in the fragment.
+pub proof fn lemma_r_expr_in_fragment(e: Expr, nodes: Seq<Node>, n: usize)
+    requires
+        r_expr(e, nodes, n),
+    ensures
+        in_fragment(e),
+    decreases e,
+{
+    match e {
+        Expr::ArrayAccess(_, i) => match nodes[n as int] {
+            Node::Array(_, j) => lemma_r_expr_in_fragment(*i, nodes, j),
+            _ => {},
+        },
+        Expr::Negate(a) => match nodes[n as int] {
+            Node::Neg(j) => lemma_r_expr_in_fragment(*a, nodes, j),
+            _ => {},
+        },
+        Expr::BinaryOp(_, l, r) => match nodes[n as int] {
+            Node::Binary(_, a, b) => {
+                lemma_r_expr_in_fragment(*l, nodes, a);
+                lemma_r_expr_in_fragment(*r, nodes, b);
+            },
+            _ => {},
+        },
+        Expr::RelationalOp(_, l, r) => match nodes[n as int] {
+            Node::Rel(_, a, b) => {
+                lemma_r_expr_in_fragment(*l, nodes, a);
+                lemma_r_expr_in_fragment(*r, nodes, b);
+            },
+            _ => {},
+        },
+        Expr::Update(_, _, t) => match nodes[n as int] {
+            Node::Update(_, _, j) => lemma_r_expr_in_fragment(*t, nodes, j),
+            _ => {},
+        },
+        Expr::AssignOp(_, t, v) => match nodes[n as int] {
+            Node::Assign(_, a, b) => {
+                lemma_r_expr_in_fragment(*t, nodes, a);
+                lemma_r_expr_in_fragment(*v, nodes, b);
+            },
+            _ => {},
+        },
+        Expr::Call(_, args) => match nodes[n as int] {
+            Node::Call(_, sargs) => lemma_r_args_in_fragment(args@, nodes, sargs),
+            _ => {},
+        },
+        Expr::LengthCall(a) => match nodes[n as int] {
+            Node::Length(j) => lemma_r_expr_in_fragment(*a, nodes, j),
+            _ => {},
+        },
+        Expr::SqrtCall(a) => match nodes[n as int] {
+            Node::Sqrt(j) => lemma_r_expr_in_fragment(*a, nodes, j),
+            _ => {},
+        },
+        Expr::ScaleCall(a) => match nodes[n as int] {
+            Node::ScaleOf(j) => lemma_r_expr_in_fragment(*a, nodes, j),
+            _ => {},
+        },
+        Expr::Paren(a) => match nodes[n as int] {
+            Node::Paren(j) => lemma_r_expr_in_fragment(*a, nodes, j),
+            _ => {},
+        },
+        _ => {},
     }
 }
 
@@ -1015,6 +1104,106 @@ pub open spec fn in_fragment_stmts(list: Seq<Stmt>) -> bool
     list.len() == 0 || (in_fragment_stmt(list[0]) && in_fragment_stmts(list.drop_first()))
 }
 
+pub proof fn lemma_r_args_in_fragment(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs: Seq<Arg>)
+    requires
+        r_args(args, nodes, sargs),
+    ensures
+        in_fragment_args(args),
+    decreases args,
+{
+    if args.len() > 0 {
+        assert(r_arg(args[0], nodes, sargs[0]));
+        match args[0] {
+            ExprOrArray::Expr(x) => {
+                lemma_r_expr_in_fragment(x, nodes, sargs[0].expr);
+                assert(in_fragment_arg(ExprOrArray::Expr(x)));
+            },
+            ExprOrArray::ArrayArg(y) => assert(in_fragment_arg(ExprOrArray::ArrayArg(y))),
+        }
+        lemma_r_args_in_fragment(args.drop_first(), nodes, sargs.drop_first());
+    }
+}
+
+/// An argument of a related call is related, and in the fragment if the call is.
+pub proof fn lemma_r_args_index(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs: Seq<Arg>, i: int)
+    requires
+        r_args(args, nodes, sargs),
+        0 <= i < args.len(),
+    ensures
+        sargs.len() == args.len(),
+        r_arg(args[i], nodes, sargs[i]),
+        in_fragment_args(args) ==> in_fragment_arg(args[i]),
+    decreases i,
+{
+    if i > 0 {
+        lemma_r_args_index(args.drop_first(), nodes, sargs.drop_first(), i - 1);
+    }
+}
+
+/// Every statement related to an arena subtree is in the fragment.
+pub proof fn lemma_r_stmt_in_fragment(s: Stmt, nodes: Seq<Node>, n: usize)
+    requires
+        r_stmt(s, nodes, n),
+    ensures
+        in_fragment_stmt(s),
+    decreases s,
+{
+    match s {
+        Stmt::Block(list) => match nodes[n as int] {
+            Node::Block(ns) => lemma_r_stmts_in_fragment(list@, nodes, ns),
+            _ => {},
+        },
+        Stmt::Expr(e) => match nodes[n as int] {
+            Node::ExprStmt(j) => lemma_r_expr_in_fragment(e, nodes, j),
+            _ => {},
+        },
+        Stmt::Return(v) => match nodes[n as int] {
+            Node::Return(_, j) => match v {
+                Some(e) => lemma_r_expr_in_fragment(e, nodes, j),
+                None => {},
+            },
+            _ => {},
+        },
+        Stmt::If(c, b) => match nodes[n as int] {
+            Node::If(i, j) => {
+                lemma_r_expr_in_fragment(c, nodes, i);
+                lemma_r_stmt_in_fragment(*b, nodes, j);
+            },
+            _ => {},
+        },
+        Stmt::While(c, b) => match nodes[n as int] {
+            Node::While(i, j) => {
+                lemma_r_expr_in_fragment(c, nodes, i);
+                lemma_r_stmt_in_fragment(*b, nodes, j);
+            },
+            _ => {},
+        },
+        Stmt::For(i, c, p, b) => match nodes[n as int] {
+            Node::For(a, d, e, f) => {
+                lemma_r_expr_in_fragment(i, nodes, a);
+                lemma_r_expr_in_fragment(c, nodes, d);
+                lemma_r_expr_in_fragment(p, nodes, e);
+                lemma_r_stmt_in_fragment(*b, nodes, f);
+            },
+            _ => {},
+        },
+        _ => {},
+    }
+}
+
+pub proof fn lemma_r_stmts_in_fragment(list: Seq<Stmt>, nodes: Seq<Node>, ns: Seq<usize>)
+    requires
+        r_stmts(list, nodes, ns),
+    ensures
+        in_fragment_stmts(list),
+    decreases list,
+{
+    if list.len() > 0 {
+        lemma_r_stmt_in_fragment(list[0], nodes, ns[0]);
+        lemma_r_stmts_in_fragment(list.drop_first(), nodes, ns.drop_first());
+    }
+}
+
 /// `Evaluator::is_assignment_ref`: an assignment, possibly under unary minus.
 pub open spec fn prod_is_assignment(e: Expr) -> bool
     decreases e,
@@ -1169,6 +1358,92 @@ pub proof fn lemma_r_funcs_define(m: Map<String, FunctionDef>, funcs: Seq<Func>,
             assert(m2.contains_key(k));
         }
     }
+}
+
+/// A name production has not defined is not defined in the specification either.
+pub proof fn lemma_func_absent(m: Map<String, FunctionDef>, funcs: Seq<Func>, name: String)
+    requires
+        r_funcs(m, funcs),
+        !m.contains_key(name),
+    ensures
+        find_func(funcs, text_view(name)) is None,
+{
+    if find_func(funcs, text_view(name)) is Some {
+        lemma_find_func_index(funcs, text_view(name));
+        let i = choose|i: int| 0 <= i < funcs.len() && #[trigger] funcs[i].name == text_view(name);
+        let k = choose|k: String| #[trigger] m.contains_key(k) && text_view(k) == funcs[i].name;
+        lemma_text_view_injective(k, name);
+    }
+}
+
+/// `push_args` changes only the variables and arrays.
+pub proof fn lemma_push_args_keeps(st: EState, vals: Seq<ArgVal>)
+    ensures
+        ({
+            let r = push_args(st, vals);
+            &&& r.ret == st.ret && r.ret_val == st.ret_val && r.brk == st.brk
+            &&& r.has_inv == st.has_inv && r.inv_ibase == st.inv_ibase && r.calls == st.calls
+        }),
+    decreases vals.len(),
+{
+    if vals.len() > 0 {
+        let v = vals[0];
+        let st2 = if v.is_array { with_arrays(st, arr_update(st.arrays, v.name, 1u8, v.frame, seq![])) }
+            else { with_vars(st, var_update(st.vars, v.name, 1u8, v.val, seq![])) };
+        lemma_push_args_keeps(st2, vals.drop_first());
+    }
+}
+
+/// `push_autos` changes only the variables and arrays.
+pub proof fn lemma_push_autos_keeps(st: EState, autos: Seq<bc_spec::parser::Param>)
+    ensures
+        ({
+            let r = push_autos(st, autos);
+            &&& r.ret == st.ret && r.ret_val == st.ret_val && r.brk == st.brk
+            &&& r.has_inv == st.has_inv && r.inv_ibase == st.inv_ibase && r.calls == st.calls
+        }),
+    decreases autos.len(),
+{
+    if autos.len() > 0 {
+        let a = autos[0];
+        let st2 = if a.is_array { with_arrays(st, arr_update(st.arrays, a.name, 1u8, empty_frame(), seq![])) }
+            else { with_vars(st, var_update(st.vars, a.name, 1u8, zero_num(), seq![])) };
+        lemma_push_autos_keeps(st2, autos.drop_first());
+    }
+}
+
+/// `pop_frames` does not look at the depth.
+pub proof fn lemma_pop_frames_depth(st: EState, ps: Seq<bc_spec::parser::Param>, d: u64)
+    ensures
+        pop_frames(with_depth(st, d), ps) == with_depth(pop_frames(st, ps), d),
+    decreases ps.len(),
+{
+    if ps.len() > 0 {
+        let p = ps[ps.len() - 1];
+        let st2 = if p.is_array { with_arrays(st, arr_update(st.arrays, p.name, 2u8, empty_frame(), seq![])) }
+            else { with_vars(st, var_update(st.vars, p.name, 2u8, zero_num(), seq![])) };
+        let sd = with_depth(st, d);
+        let sd2 = if p.is_array { with_arrays(sd, arr_update(sd.arrays, p.name, 2u8, empty_frame(), seq![])) }
+            else { with_vars(sd, var_update(sd.vars, p.name, 2u8, zero_num(), seq![])) };
+        assert(sd2 == with_depth(st2, d));
+        lemma_pop_frames_depth(st2, ps.drop_last(), d);
+    }
+}
+
+/// `leave_call` does not look at the depth.
+pub proof fn lemma_leave_call_depth(st: EState, f: Func, s: Saved, d: u64)
+    ensures
+        leave_call(with_depth(st, d), f, s) == with_depth(leave_call(st, f, s), d),
+{
+    let calls = if st.calls.len() > 0 { st.calls.drop_last() } else { st.calls };
+    let st1 = with_call(st, calls, s.has_inv, s.inv_ibase);
+    let st2 = with_flags(st1, st1.brk, s.ret, s.ret_val);
+    let sd = with_depth(st, d);
+    let sd1 = with_call(sd, calls, s.has_inv, s.inv_ibase);
+    let sd2 = with_flags(sd1, sd1.brk, s.ret, s.ret_val);
+    assert(sd2 == with_depth(st2, d));
+    lemma_pop_frames_depth(st2, f.autos, d);
+    lemma_pop_frames_depth(pop_frames(st2, f.autos), f.params, d);
 }
 
 /// An element of a related statement list is related.

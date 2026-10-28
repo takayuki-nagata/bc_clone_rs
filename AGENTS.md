@@ -113,8 +113,9 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   locals push a new entry on entry. `BTreeMap` keeps the storage `no_std`-friendly and deterministic.
 - `Evaluator::leave_call` pops the parameter and `auto` frames and restores the caller's
   control-flow flags and invocation `ibase` on every return path of a call, including `Err`
-  returns. It is called explicitly (there is no RAII guard, which Verus cannot reason about), so
-  a panic inside a call would leave the frames pushed; `bc_core` must not panic.
+  returns (`run_call_ref`). It is called explicitly (there is no RAII guard, which Verus cannot
+  reason about), so a panic inside a call would leave the frames pushed; `bc_core` must not
+  panic.
 - Output goes through the `BcWriter` trait. `WrappedStdout` wraps long numbers at 70 columns with
   `\` + newline, as POSIX requires. The wrapping itself is `format::wrap_output`, verified against
   the specification's `write_wrapped`; `write_str` passes its result to the writer in one call.
@@ -176,7 +177,7 @@ invariant (an internal error) instead of truncating it. Review any new code that
 
 | Layer | Tool / script | What it actually establishes |
 |---|---|---|
-| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `format.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`, `cmp_val` and `from_digit_values` compute the L0 operations exactly, and `format_bytes` writes `l0_format` of the value, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. The math library's certified-truncation decision is proved over the integers (`lemma_certified_truncation`). `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
+| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `format.rs`, `eval.rs`, `refine.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`, `cmp_val` and `from_digit_values` compute the L0 operations exactly, and `format_bytes` writes `l0_format` of the value, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. Without `-l`, `try_evaluate` and `try_execute` refine the specification's `ev` and `exec` (every finishing fuel gives a corresponding result and state, including output, diagnostics and runtime errors), assuming in addition the axioms of `trusted_std.rs` and the output-stream wrappers (`WrappedStdout::write_bytes` and `flush_out`, `ErrWriter::write_bytes`); this is partial correctness, relative to the syntax-tree relation `r_stmt` (the parser is not proved). The math library's certified-truncation decision is proved over the integers (`lemma_certified_truncation`). `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
 | Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only; the 32-bit targets are exercised by the QEMU and Zephyr self-tests). The production C-FFI output helper `write_c_string` never writes at or beyond `buf_size` and always NUL-terminates. C-API NULL and zero-size guards hold. The CLI brace scanner is consistent. |
 | UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, and `bc_cli` (strict provenance, symbolic alignment, Stacked Borrows), and `bc_c_api` again under Tree Borrows. |
 | Executable specification | Verus — `crates/bc_spec`, `scripts/build_spec_oracle.sh`; `crates/bc_cli/tests/spec_differential.rs` | `bc_spec` defines the observable behavior of `bc_clone` without `-l` (decoding, units, tokens, parsing, evaluation, output, diagnostics, exit status), mirroring the production structure. `exec_spec_verified!` proves that the compiled oracle equals the `spec fn`s, except for `vstd`'s unverified `Seq` translations; lemmas prove that its arithmetic (`+ - * / % ^ sqrt`, comparison, `length`, constants under `ibase`) computes the integer definitions of `spec_num.rs` exactly. The differential tests then show that `bc_clone` matches the specification **on the generated inputs only**: there is no proof that `bc_clone` refines the specification, and the specification itself is checked against POSIX only by review, the POSIX suite, and GNU bc. The oracle is slow for deep nesting (its state is copied at every step), so the tests stay a few hundred levels deep. |
@@ -264,13 +265,13 @@ as possible and state the reason next to it.
 - The refinement theorem of expression evaluation is the postcondition of `Evaluator::eval_ref`
   (behind `try_evaluate`): if the state corresponds to the specification's (`r_state`) and the
   expression to an arena subtree (`r_expr`), then for every fuel with which the specification's
-  `ev` finishes, the result and the new state correspond to it (`r_result`). It covers the
-  expressions of `refine::in_fragment` (every expression except a function call); calls go
-  through `eval_other`, a trusted boundary whose specification only keeps `Evaluator::inv`, until
-  they are proved too. Statement execution has the same theorem in
-  `Evaluator::exec_ref` (behind `try_execute`) against the specification's `exec`, with `r_unit`,
-  for the statements of `refine::in_fragment_stmt` (all but `quit`, which the specification
-  handles while parsing).
+  `ev` finishes, the result and the new state correspond to it (`r_result`). Statement execution
+  has the same theorem in `Evaluator::exec_ref` (behind `try_execute`) against the
+  specification's `exec`, with `r_unit`. Both cover every expression and statement that the
+  syntax-tree relation relates (`lemma_r_expr_in_fragment`, `lemma_r_stmt_in_fragment`: the
+  parser builds assignments only to named expressions and never builds `quit`), including
+  function calls (`eval_call`, `run_call_ref`). The functions of `-l` go through `eval_math`, a
+  trusted boundary whose specification only keeps `Evaluator::inv`; `r_state` excludes `-l`.
 - Trusted assumptions about `BigInt` go only in `trusted_bigint.rs`, as `#[verifier::external_body]`
   one-line wrappers with a test each. Name a function there rather than using an operator on
   `BigInt` in verified code.

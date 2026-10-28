@@ -91,18 +91,28 @@ impl BcError {
             detail,
         }
     }
+}
 
+verus! {
+
+impl BcError {
     /// Attributes a runtime error to function `name` unless an inner call already claimed it.
-    pub fn in_function(self, name: &str) -> Self {
-        match self {
-            Self::Runtime { kind, func: None } => Self::Runtime {
-                kind,
-                func: Some(String::from(name)),
+    #[allow(clippy::ptr_arg, reason = "the specification relates the attributed name to the String")]
+    pub fn in_function(self, name: &String) -> (r: Self)
+        ensures
+            r == match self {
+                BcError::Runtime { kind, func: None } => BcError::Runtime { kind, func: Some(*name) },
+                _ => self,
             },
+    {
+        match self {
+            Self::Runtime { kind, func: None } => Self::Runtime { kind, func: Some(name.clone()) },
             other => other,
         }
     }
 }
+
+} // verus!
 
 impl From<RuntimeError> for BcError {
     fn from(kind: RuntimeError) -> Self {
@@ -143,9 +153,11 @@ mod tests {
             "Runtime error (func=(main)): Parameter type mismatch parameter a."
         );
         assert_eq!(
-            err.in_function("f").in_function("g").to_string(),
+            err.in_function(&"f".to_string())
+                .in_function(&"g".to_string())
+                .to_string(),
             "Runtime error (func=f): Parameter type mismatch parameter a."
         );
-        assert_eq!(BcError::Quit.in_function("f"), BcError::Quit);
+        assert_eq!(BcError::Quit.in_function(&"f".to_string()), BcError::Quit);
     }
 }
