@@ -45,6 +45,8 @@ use crate::verified_kernels::{
     verified_should_abort_execution,
 };
 #[cfg(verus_keep_ghost)]
+use bc_spec::convert::{lemma_num_from_digits, num_from_digits};
+#[cfg(verus_keep_ghost)]
 use bc_spec::convert::{lemma_num_length, lemma_num_scale, num_length, num_scale};
 #[cfg(verus_keep_ghost)]
 use bc_spec::eval::{
@@ -224,6 +226,68 @@ pub(crate) open spec fn frame_ok(f: Map<usize, BCNum>) -> bool {
 
 pub(crate) open spec fn frames_ok(s: Seq<BTreeMap<usize, BCNum>>) -> bool {
     forall|i: int| 0 <= i < s.len() ==> frame_ok((#[trigger] s[i])@)
+}
+
+/// The digit value of a constant's character, as the specification's `digit_val`.
+#[allow(
+    clippy::manual_range_contains,
+    clippy::implicit_saturating_sub,
+    reason = "written as the specification's digit_val, which Verus compares directly"
+)]
+fn digit_val_of(c: u8) -> (r: u8)
+    ensures
+        r == bc_spec::eval::digit_val(c),
+{
+    if c <= 57 {
+        if c >= 48 { c - 48 } else { 0 }
+    } else if c >= 65 {
+        c - 55
+    } else {
+        0
+    }
+}
+
+/// The integer and fraction digit values of a constant's text (the specification's
+/// `literal_digits`): characters before the first `.` and after it; any `.` is skipped.
+fn literal_digit_values(t: &[u8]) -> (r: (Vec<u8>, Vec<u8>))
+    ensures
+        r.0@ == bc_spec::eval::literal_digits(t@, true, false, Seq::empty()),
+        r.1@ == bc_spec::eval::literal_digits(t@, false, false, Seq::empty()),
+{
+    let mut ds: Vec<u8> = Vec::new();
+    let mut fs: Vec<u8> = Vec::new();
+    let mut seen = false;
+    let mut i: usize = 0;
+    proof {
+        assert(t@.skip(0) =~= t@);
+    }
+    while i < t.len()
+        invariant
+            i <= t.len(),
+            bc_spec::eval::literal_digits(t@, true, false, Seq::empty())
+                == bc_spec::eval::literal_digits(t@.skip(i as int), true, seen, ds@),
+            bc_spec::eval::literal_digits(t@, false, false, Seq::empty())
+                == bc_spec::eval::literal_digits(t@.skip(i as int), false, seen, fs@),
+        decreases t.len() - i,
+    {
+        let c = t[i];
+        proof {
+            assert(t@.skip(i as int)[0] == c);
+            assert(t@.skip(i as int).drop_first() =~= t@.skip(i as int + 1));
+        }
+        if c == 46 {
+            seen = true;
+        } else if seen {
+            fs.push(digit_val_of(c));
+        } else {
+            ds.push(digit_val_of(c));
+        }
+        i += 1;
+    }
+    proof {
+        assert(t@.skip(i as int) =~= Seq::<u8>::empty());
+    }
+    (ds, fs)
 }
 
 impl Evaluator {
@@ -678,6 +742,7 @@ impl Evaluator {
     {
         match node {
             Expr::RegisterAccess(reg) => self.eval_register(*reg, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::Number(t) => self.eval_number(t, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Variable(name) => self.eval_variable(name, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::ArrayAccess(name, index) => self.eval_array(Ghost(*node), name, index, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Paren(inner) => self.eval_paren(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
@@ -1427,6 +1492,54 @@ impl Evaluator {
             }
         }
         res
+    }
+
+    /// A numeric constant in the `ibase` of the current invocation (the specification's
+    /// `literal`): its text split into digit values by `literal_digit_values`, and converted by
+    /// the verified `BCNum::from_digit_values`.
+    #[allow(clippy::ptr_arg, reason = "the specification relates the constant's String")]
+    fn literal_ref(&self, t: &String, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            self.inv(),
+        ensures
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            r_state(*self, st) ==> r_result(r, *self, bc_spec::eval::literal(st, text_view(*t)), self.eval_depth),
+    {
+        let ib = match self.invocation_ibase {
+            Some(b) => b,
+            None => self.ibase,
+        };
+        let (ds, fs) = literal_digit_values(t.as_str().as_bytes());
+        if fs.len() > BC_SCALE_MAX {
+            let r = Err(BcError::Runtime { kind: RuntimeError::ScaleTooLarge, func: None });
+            proof {
+                if r_state(*self, st) {
+                    assert(with_depth(st, self.eval_depth as u64) == st);
+                }
+            }
+            return r;
+        }
+        let v = BCNum::from_digit_values(&ds, &fs, ib);
+        proof {
+            if r_state(*self, st) {
+                lemma_num_from_digits(ds@, fs@, ib as u8);
+                assert(r_num(v, num_from_digits(ds@, fs@, ib as u8)));
+            }
+        }
+        Ok(v)
+    }
+
+    /// The value of a numeric constant (the specification's `ev_node` for `Node::Number`).
+    fn eval_number(&mut self, t: &String, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+        ensures
+            *final(self) == *old(self),
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(Expr::Number(*t), nodes, n)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        self.literal_ref(t, Ghost(st))
     }
 
     /// The trusted boundary of the expressions not proved yet: `evaluate_node`'s code for them,

@@ -369,6 +369,7 @@ pub open spec fn in_fragment(e: Expr) -> bool
 {
     match e {
         Expr::RegisterAccess(_) => true,
+        Expr::Number(_) => true,
         Expr::Variable(_) => true,
         Expr::ArrayAccess(_, i) => in_fragment(*i),
         Expr::Paren(a) => in_fragment(*a),
