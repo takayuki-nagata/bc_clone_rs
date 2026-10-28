@@ -26,7 +26,13 @@ use crate::parser::{
 #[cfg(verus_keep_ghost)]
 use crate::refine::*;
 #[cfg(verus_keep_ghost)]
+use crate::spec_num;
+#[cfg(verus_keep_ghost)]
 use crate::spec_num::SpecBCNum;
+#[cfg(verus_keep_ghost)]
+use crate::spec_num::lemma_pow10_pos;
+#[cfg(verus_keep_ghost)]
+use crate::trusted_bigint::{axiom_bigint_size, big_view};
 use crate::trusted_bigint::{big_from_usize, big_neg};
 #[cfg(verus_keep_ghost)]
 use crate::trusted_std::axiom_string_obeys_cmp;
@@ -36,17 +42,32 @@ use crate::verified_kernels::{
     verified_should_abort_execution,
 };
 #[cfg(verus_keep_ghost)]
+use bc_spec::convert::{lemma_num_length, lemma_num_scale, num_length, num_scale};
+#[cfg(verus_keep_ghost)]
 use bc_spec::eval::{
     ER, EState, er_ok, ev, ev_node, ev_unary, negate, num_u64, reg_get, with_depth,
 };
 #[cfg(verus_keep_ghost)]
+use bc_spec::eval::{arith as spec_arith, rel_holds};
+#[cfg(verus_keep_ghost)]
 use bc_spec::fuel::done;
+#[cfg(verus_keep_ghost)]
+use bc_spec::fuel::lemma_ev_mono;
 #[cfg(verus_keep_ghost)]
 use bc_spec::num::lemma_is_zero_mag;
 #[cfg(verus_keep_ghost)]
+use bc_spec::num::{
+    lemma_mag_bounds, lemma_num_add, lemma_num_cmp, lemma_num_div, lemma_num_mod, lemma_num_mul,
+    lemma_num_sub, mag_val, num_cmp, num_coeff,
+};
+#[cfg(verus_keep_ghost)]
 use bc_spec::parser::Node;
 #[cfg(verus_keep_ghost)]
+use bc_spec::power::lemma_one_mag;
+#[cfg(verus_keep_ghost)]
 use bc_spec::power::lemma_u64_mag;
+#[cfg(verus_keep_ghost)]
+use bc_spec::power::{NumRes, lemma_num_sqrt, num_sqrt};
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin::Ghost;
 #[cfg(not(verus_keep_ghost))]
@@ -475,6 +496,10 @@ pub(crate) type SpecNodes = Seq<bc_spec::parser::Node>;
 pub(crate) type SpecNodes = ();
 #[cfg(verus_keep_ghost)]
 pub(crate) type SpecState = EState;
+#[cfg(verus_keep_ghost)]
+pub(crate) type SpecNum = bc_spec::num::Num;
+#[cfg(not(verus_keep_ghost))]
+pub(crate) type SpecNum = ();
 #[cfg(not(verus_keep_ghost))]
 pub(crate) type SpecState = ();
 
@@ -615,6 +640,11 @@ impl Evaluator {
             Expr::RegisterAccess(reg) => self.eval_register(*reg, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Paren(inner) => self.eval_paren(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Negate(inner) => self.eval_negate(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::LengthCall(inner) => self.eval_length(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::ScaleCall(inner) => self.eval_scale_of(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::SqrtCall(inner) => self.eval_sqrt(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::BinaryOp(op, left, right) => self.eval_binary(Ghost(*node), *op, left, right, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::RelationalOp(op, left, right) => self.eval_rel(Ghost(*node), *op, left, right, Ghost(nodes), Ghost(n), Ghost(st)),
             _ => self.eval_other(node),
         }
     }
@@ -712,6 +742,427 @@ impl Evaluator {
             }
         }
         Ok(w)
+    }
+
+    #[verifier::exec_allows_no_decreases_clause]
+    fn eval_length(&mut self, Ghost(node): Ghost<Expr>, inner: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            node == Expr::LengthCall(Box::new(*inner)),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(node, nodes, n) && in_fragment(node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n) && in_fragment(node);
+        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Length(j) => j, _ => 0usize } } else { 0usize };
+        let r0 = self.eval_ref(inner, Ghost(nodes), Ghost(j), Ghost(st));
+        let v = match r0 {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            let x = ev(nodes, j, st, (f - 2) as u64);
+                            assert(f >= 2);
+                            assert(done(x));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let w = v.length();
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Ok(w), *self, ev_node(nodes, n, st, f), d) by {
+                    let x = ev(nodes, j, st, (f - 2) as u64);
+                    assert(f >= 2);
+                    assert(done(x));
+                    let a = x.val;
+                    axiom_bigint_size(&v.coeff);
+                    lemma_mag_bounds(a.mag);
+                    lemma_num_length(a);
+                    let lr = num_length(a);
+                    lemma_pow10_pos(a.scale as nat);
+                    let ip = mag_val(a.mag) / spec_num::pow10(a.scale as nat);
+                    if ip > 0 {
+                        lemma_digit_count_unique(ip, (big_view(&w.coeff) - a.scale) as nat, (mag_val(lr.mag) - a.scale) as nat);
+                    }
+                    assert(r_num(w, lr));
+                }
+            }
+        }
+        Ok(w)
+    }
+
+    #[verifier::exec_allows_no_decreases_clause]
+    fn eval_scale_of(&mut self, Ghost(node): Ghost<Expr>, inner: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            node == Expr::ScaleCall(Box::new(*inner)),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(node, nodes, n) && in_fragment(node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n) && in_fragment(node);
+        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::ScaleOf(j) => j, _ => 0usize } } else { 0usize };
+        let r0 = self.eval_ref(inner, Ghost(nodes), Ghost(j), Ghost(st));
+        let v = match r0 {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            let x = ev(nodes, j, st, (f - 2) as u64);
+                            assert(f >= 2);
+                            assert(done(x));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let w = v.scale_func();
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Ok(w), *self, ev_node(nodes, n, st, f), d) by {
+                    let x = ev(nodes, j, st, (f - 2) as u64);
+                    assert(f >= 2);
+                    assert(done(x));
+                    lemma_num_scale(x.val);
+                    assert(r_num(w, num_scale(x.val)));
+                }
+            }
+        }
+        Ok(w)
+    }
+
+    #[verifier::exec_allows_no_decreases_clause]
+    fn eval_sqrt(&mut self, Ghost(node): Ghost<Expr>, inner: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            node == Expr::SqrtCall(Box::new(*inner)),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(node, nodes, n) && in_fragment(node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n) && in_fragment(node);
+        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Sqrt(j) => j, _ => 0usize } } else { 0usize };
+        let r0 = self.eval_ref(inner, Ghost(nodes), Ghost(j), Ghost(st));
+        let v = match r0 {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            let x = ev(nodes, j, st, (f - 2) as u64);
+                            assert(f >= 2);
+                            assert(done(x));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let r1 = v.try_sqrt(self.scale);
+        let r = match r1 {
+            Ok(w) => Ok(w),
+            Err(k) => Err(BcError::Runtime { kind: k, func: None }),
+        };
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(r, *self, ev_node(nodes, n, st, f), d) by {
+                    let x = ev(nodes, j, st, (f - 2) as u64);
+                    assert(f >= 2);
+                    assert(done(x));
+                    let a = x.val;
+                    lemma_num_sqrt(a, x.st.scale);
+                    assert(with_depth(x.st, d as u64) == x.st);
+                    match num_sqrt(a, x.st.scale) {
+                        NumRes::Ok(q) => {
+                            let w = r->Ok_0;
+                            let sr = w.scale;
+                            lemma_isqrt_unique(num_coeff(a) * spec_num::pow10((2 * sr - a.scale) as nat), big_view(&w.coeff), num_coeff(q));
+                            assert(r_num(w, q));
+                        },
+                        _ => {},
+                    }
+                }
+            }
+        }
+        r
+    }
+
+    /// `l <op> r` at the current `scale` (the specification's `arith`), for the specification
+    /// numbers `a`, `b` and state `st` that `l`, `r` and the evaluator correspond to. `^` goes
+    /// through `power_other` (not proved yet).
+    fn arith_ref(&mut self, op: BinOp, l: &BCNum, r: &BCNum, Ghost(a): Ghost<SpecNum>, Ghost(b): Ghost<SpecNum>, Ghost(st): Ghost<SpecState>) -> (res: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            l.scale <= BC_SCALE_MAX,
+            r.scale <= BC_SCALE_MAX,
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            res is Ok ==> res->Ok_0.scale <= BC_SCALE_MAX,
+            (op != BinOp::Pow && r_state(*old(self), st) && r_num(*l, a) && r_num(*r, b)) ==>
+                r_result(res, *final(self), spec_arith(st, bin_code(op), a, b), old(self).eval_depth),
+    {
+        let ghost hyp = op != BinOp::Pow && r_state(*self, st) && r_num(*l, a) && r_num(*r, b);
+        proof {
+            if hyp {
+                assert(with_depth(st, self.eval_depth as u64) == st);
+                lemma_is_zero_mag(b.mag);
+                lemma_mag_bounds(b.mag);
+            }
+        }
+        match op {
+            BinOp::Add => {
+                let v = l.add(r);
+                proof { if hyp { lemma_num_add(a, b); } }
+                Ok(v)
+            },
+            BinOp::Sub => {
+                let v = l.sub(r);
+                proof { if hyp { lemma_num_sub(a, b); } }
+                Ok(v)
+            },
+            BinOp::Mul => {
+                let v = l.mul(r, self.scale);
+                proof { if hyp { lemma_num_mul(a, b, st.scale); } }
+                Ok(v)
+            },
+            BinOp::Div => {
+                let q = l.try_div(r, self.scale);
+                proof { if hyp && mag_val(b.mag) > 0 { lemma_num_div(a, b, st.scale); } }
+                match q {
+                    Ok(v) => Ok(v),
+                    Err(k) => Err(BcError::Runtime { kind: k, func: None }),
+                }
+            },
+            BinOp::Mod => {
+                let q = l.try_mod_op(r, self.scale);
+                proof { if hyp && mag_val(b.mag) > 0 && st.scale + b.scale <= 1_000_000_000 { lemma_num_mod(a, b, st.scale); } }
+                match q {
+                    Ok(v) => Ok(v),
+                    Err(k) => Err(BcError::Runtime { kind: k, func: None }),
+                }
+            },
+            BinOp::Pow => self.power_other(l, r),
+        }
+    }
+
+    /// The trusted boundary of `^` (not proved yet): `power`, assumed to keep the invariant.
+    #[verifier::external_body]
+    fn power_other(&mut self, l: &BCNum, r: &BCNum) -> (res: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            res is Ok ==> res->Ok_0.scale <= BC_SCALE_MAX,
+    {
+        self.power(l, r)
+    }
+
+    /// `l <op> r` (the specification's `ev_binary`): both operands are evaluated, left first,
+    /// before the operator applies.
+    #[verifier::exec_allows_no_decreases_clause]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "three of them are the Ghost arguments of the refinement proof"
+    )]
+    fn eval_binary(&mut self, Ghost(node): Ghost<Expr>, op: BinOp, left: &Expr, right: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            node == Expr::BinaryOp(op, Box::new(*left), Box::new(*right)),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(node, nodes, n) && in_fragment(node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n) && in_fragment(node);
+        let ghost (ja, jb) = if n < nodes.len() {
+            match nodes[n as int] {
+                Node::Binary(_, a, b) => (a, b),
+                Node::Rel(_, a, b) => (a, b),
+                _ => (0usize, 0usize),
+            }
+        } else {
+            (0usize, 0usize)
+        };
+        let ra = self.eval_ref(left, Ghost(nodes), Ghost(ja), Ghost(st));
+        let ghost fa = choose|f: u64| done(#[trigger] ev(nodes, ja, st, f));
+        let ghost xa = ev(nodes, ja, st, fa);
+        let l = match ra {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            assert(f >= 2);
+                            assert(done(ev(nodes, ja, st, (f - 2) as u64)));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let rb = self.eval_ref(right, Ghost(nodes), Ghost(jb), Ghost(xa.st));
+        let ghost fb = choose|f: u64| done(#[trigger] ev(nodes, jb, xa.st, f));
+        let ghost xb = ev(nodes, jb, xa.st, fb);
+        // Whatever fuel finishes, the operands' results are xa and xb.
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev(nodes, ja, st, f)) implies ev(nodes, ja, st, f) == xa by {
+                    if fa <= f { lemma_ev_mono(nodes, ja, st, fa, f); } else { lemma_ev_mono(nodes, ja, st, f, fa); }
+                }
+                assert forall|f: u64| done(#[trigger] ev(nodes, jb, xa.st, f)) implies ev(nodes, jb, xa.st, f) == xb by {
+                    if fb <= f { lemma_ev_mono(nodes, jb, xa.st, fb, f); } else { lemma_ev_mono(nodes, jb, xa.st, f, fb); }
+                }
+            }
+        }
+        let r = match rb {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            assert(f >= 2);
+                            assert(done(ev(nodes, ja, st, (f - 2) as u64)));
+                            assert(done(ev(nodes, jb, xa.st, (f - 2) as u64)));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let res = self.arith_ref(op, &l, &r, Ghost(xa.val), Ghost(xb.val), Ghost(xb.st));
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(res, *self, ev_node(nodes, n, st, f), d) by {
+                    assert(f >= 2);
+                    assert(done(ev(nodes, ja, st, (f - 2) as u64)));
+                    assert(done(ev(nodes, jb, xa.st, (f - 2) as u64)));
+                }
+            }
+        }
+        res
+    }
+
+    /// A relational expression (the specification's `ev_rel`): 1 if it holds, else 0.
+    #[verifier::exec_allows_no_decreases_clause]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "three of them are the Ghost arguments of the refinement proof"
+    )]
+    fn eval_rel(&mut self, Ghost(node): Ghost<Expr>, op: RelOp, left: &Expr, right: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            node == Expr::RelationalOp(op, Box::new(*left), Box::new(*right)),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(node, nodes, n) && in_fragment(node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n) && in_fragment(node);
+        let ghost (ja, jb) = if n < nodes.len() {
+            match nodes[n as int] {
+                Node::Binary(_, a, b) => (a, b),
+                Node::Rel(_, a, b) => (a, b),
+                _ => (0usize, 0usize),
+            }
+        } else {
+            (0usize, 0usize)
+        };
+        let ra = self.eval_ref(left, Ghost(nodes), Ghost(ja), Ghost(st));
+        let ghost fa = choose|f: u64| done(#[trigger] ev(nodes, ja, st, f));
+        let ghost xa = ev(nodes, ja, st, fa);
+        let l = match ra {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            assert(f >= 2);
+                            assert(done(ev(nodes, ja, st, (f - 2) as u64)));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let rb = self.eval_ref(right, Ghost(nodes), Ghost(jb), Ghost(xa.st));
+        let ghost fb = choose|f: u64| done(#[trigger] ev(nodes, jb, xa.st, f));
+        let ghost xb = ev(nodes, jb, xa.st, fb);
+        // Whatever fuel finishes, the operands' results are xa and xb.
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev(nodes, ja, st, f)) implies ev(nodes, ja, st, f) == xa by {
+                    if fa <= f { lemma_ev_mono(nodes, ja, st, fa, f); } else { lemma_ev_mono(nodes, ja, st, f, fa); }
+                }
+                assert forall|f: u64| done(#[trigger] ev(nodes, jb, xa.st, f)) implies ev(nodes, jb, xa.st, f) == xb by {
+                    if fb <= f { lemma_ev_mono(nodes, jb, xa.st, fb, f); } else { lemma_ev_mono(nodes, jb, xa.st, f, fb); }
+                }
+            }
+        }
+        let r = match rb {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            assert(f >= 2);
+                            assert(done(ev(nodes, ja, st, (f - 2) as u64)));
+                            assert(done(ev(nodes, jb, xa.st, (f - 2) as u64)));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let ord = l.cmp_val(&r);
+        let holds = match op {
+            RelOp::Eq => matches!(ord, Ordering::Equal),
+            RelOp::Ne => !matches!(ord, Ordering::Equal),
+            RelOp::Lt => matches!(ord, Ordering::Less),
+            RelOp::Le => !matches!(ord, Ordering::Greater),
+            RelOp::Gt => matches!(ord, Ordering::Greater),
+            RelOp::Ge => !matches!(ord, Ordering::Less),
+        };
+        let v = BCNum::new(big_from_usize(if holds { 1 } else { 0 }), 0);
+        proof {
+            if hyp {
+                lemma_one_mag();
+                lemma_u64_mag(0);
+                assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Ok(v), *self, ev_node(nodes, n, st, f), d) by {
+                    assert(f >= 2);
+                    assert(done(ev(nodes, ja, st, (f - 2) as u64)));
+                    assert(done(ev(nodes, jb, xa.st, (f - 2) as u64)));
+                    lemma_num_cmp(xa.val, xb.val);
+                    assert(holds == rel_holds(rel_code(op), num_cmp(xa.val, xb.val)));
+                }
+            }
+        }
+        Ok(v)
     }
 
     /// The trusted boundary of the expressions not proved yet: `evaluate_node`'s code for them,

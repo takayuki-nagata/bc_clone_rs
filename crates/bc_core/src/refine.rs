@@ -371,6 +371,11 @@ pub open spec fn in_fragment(e: Expr) -> bool
         Expr::RegisterAccess(_) => true,
         Expr::Paren(a) => in_fragment(*a),
         Expr::Negate(a) => in_fragment(*a),
+        Expr::LengthCall(a) => in_fragment(*a),
+        Expr::ScaleCall(a) => in_fragment(*a),
+        Expr::SqrtCall(a) => in_fragment(*a),
+        Expr::BinaryOp(op, l, r) => op != BinOp::Pow && in_fragment(*l) && in_fragment(*r),
+        Expr::RelationalOp(_, l, r) => in_fragment(*l) && in_fragment(*r),
         _ => false,
     }
 }
