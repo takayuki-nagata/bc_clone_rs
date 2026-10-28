@@ -18,6 +18,9 @@
 - `bc_core` is verified with `cargo verus verify -p bc_core --features verify`. The `verify`
   feature links `vstd` and the executable specification (for the refinement proofs); production
   builds link neither. The L0 number model `spec_num.rs` moved into `crates/bc_spec`.
+- Lemmas for the refinement proofs, in `crates/bc_spec`: an evaluation that did not run out of
+  fuel gives the same result with more fuel (`fuel.rs`), and array subscripts and register
+  stores depend only on the value of a number, not on its digit sequence (`values.rs`).
 
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval

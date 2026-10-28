@@ -17,13 +17,19 @@
 //! The executable layer (L1) stores them as decimal digit sequences, because `exec_spec` cannot
 //! compile `int`; each L1 operation carries a lemma that it computes the L0 operation.
 //!
+//! **For the refinement proofs** of `bc_core`: `fuel` proves that a result
+//! that did not run out of fuel stays the same with more fuel, and `values` that the evaluator
+//! uses numbers only through their L0 values.
+//!
 //! **Writing rules** (forced by `exec_spec_verified!`):
 //! - recurse on `drop_first`, not on an index `i + 1`;
 //! - no `*` on machine integers (the generated code cannot carry `nonlinear_arith` hints);
 //!   multiply digit sequences by repeated addition;
 //! - no recursive types: the syntax tree is an arena (`Seq<Node>` with `usize` children);
 //! - no `Map` fields: environments are association lists;
-//! - no typed `let`, no `&` expressions.
+//! - no typed `let`, no `&` expressions;
+//! - keep functions small: a large one can exceed the resource limit in its generated
+//!   equivalence proof, which `#[verifier::rlimit]` does not reach (split it, as `p_reg`).
 //!
 //! Functions that are compiled with `exec_spec_unverified!` because their equivalence proof
 //! does not go through are listed here: (none yet).
@@ -37,6 +43,7 @@
 
 pub mod convert;
 pub mod eval;
+pub mod fuel;
 pub mod lexer;
 pub mod num;
 pub mod output;
@@ -44,3 +51,4 @@ pub mod parser;
 pub mod power;
 pub mod spec_num;
 pub mod top;
+pub mod values;
