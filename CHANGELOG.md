@@ -22,8 +22,9 @@
   fuel gives the same result with more fuel (`fuel.rs`), and array subscripts and register
   stores depend only on the value of a number, not on its digit sequence (`values.rs`).
 - `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`,
-  `scale_func` and the comparison used by `==`, `<`, … (`cmp_val`) are verified with Verus: they compute the integer (L0) definitions of the POSIX operations
-  exactly, assuming only the `num-bigint` operations listed in
+  `scale_func`, the comparison used by `==`, `<`, … (`cmp_val`) and the value of a constant
+  (`from_digit_values`) are verified with Verus: they compute the integer (L0) definitions of
+  the POSIX operations exactly, assuming only the `num-bigint` operations listed in
   `crates/bc_core/src/trusted_bigint.rs`.
 
 ### Math library
@@ -79,6 +80,9 @@
   `Result<BCNum, RuntimeError>`; the new `RuntimeError::MathArgumentTooLarge` is reported as
   `argument too large`.
 - `bc_core` denies `unwrap`, `expect`, `panic!`, and lossy integer casts outside tests.
+- `BCNum::from_string` is replaced by `BCNum::try_from_string`, which returns `ScaleTooLarge`
+  for a constant with more than `BC_SCALE_MAX` fraction digits before converting it; the
+  panicking `from_string` remains for tests only.
 
 ## v0.4.0 — 2026-10-26
 

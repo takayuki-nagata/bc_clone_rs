@@ -355,11 +355,10 @@ impl Evaluator {
     /// in the `ibase` in effect when the function was invoked (POSIX). A literal with more than
     /// `BC_SCALE_MAX` fractional digits is rejected to keep the scale invariant.
     fn literal(&self, digits: &str) -> Result<BCNum, BcError> {
-        let num = BCNum::from_string(digits, self.invocation_ibase.unwrap_or(self.ibase));
-        if num.scale > BC_SCALE_MAX {
-            return Err(RuntimeError::ScaleTooLarge.into());
-        }
-        Ok(num)
+        Ok(BCNum::try_from_string(
+            digits,
+            self.invocation_ibase.unwrap_or(self.ibase),
+        )?)
     }
 
     /// Computes `base ^ exp`, warning when the exponent has a fractional part.

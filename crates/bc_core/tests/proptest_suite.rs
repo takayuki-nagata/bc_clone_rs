@@ -188,7 +188,7 @@ proptest! {
             Some(rest) => (true, rest),
             None => (false, formatted.as_str()),
         };
-        let parsed = BCNum::from_string(digits, base);
+        let parsed = BCNum::try_from_string(digits, base).expect("at most BC_SCALE_MAX fraction digits");
         let parsed = if negative { BCNum::new(-parsed.coeff, parsed.scale) } else { parsed };
         prop_assert!(same(&parsed, &n));
     }

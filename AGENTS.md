@@ -66,14 +66,15 @@ graph TD
 - `BCNum { coeff: BigInt, scale: usize }` represents `coeff × 10^-scale`. Arithmetic follows the
   POSIX scale rules. The scale and shift computations are delegated to kernels in
   `verified_kernels.rs`.
-- `add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func` and
-  `cmp_val` (comparison) are written inside `verus!` and proved to compute the L0 operations of `spec_num` (`spec_add`, …,
-  `spec_mod`, `is_isqrt`, `is_digit_count`, through `BCNum::val`), given scales of at most
-  `BC_SCALE_MAX`. They use `BigInt` only through `trusted_bigint.rs`, whose
-  one-line wrappers Verus assumes correct (each is checked by a test). The other `BCNum`
-  functions are still outside `verus!`.
-- Fallible API: `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`. The panicking wrappers (`div`,
-  `pow`, …) are compiled only under `cfg(test)`, as are `Lexer::get_next_token`,
+- `add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`,
+  `cmp_val` (comparison) and `from_digit_values` (the value of a constant) are written inside
+  `verus!` and proved to compute the L0 operations of `spec_num` and `bc_spec` (`spec_add`, …,
+  `spec_pow`, `is_isqrt`, `is_digit_count`, `spec_horner`, through `BCNum::val`), given scales of
+  at most `BC_SCALE_MAX`. They use `BigInt` only through `trusted_bigint.rs`, whose one-line
+  wrappers Verus assumes correct (each is checked by a test). Still outside `verus!`:
+  `digit_values` (constant text to digit values) and `format_obase`.
+- Fallible API: `try_from_string`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`. The panicking
+  wrappers (`from_string`, `div`, `pow`, …) are compiled only under `cfg(test)`, as are `Lexer::get_next_token`,
   `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`, `Evaluator::evaluate`, and
   `Evaluator::execute`.
 - Output for `obase != 10` uses exact `BigInt` arithmetic. The number of fractional digits is the
@@ -169,7 +170,7 @@ invariant (an internal error) instead of truncating it. Review any new code that
 
 | Layer | Tool / script | What it actually establishes |
 |---|---|---|
-| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func` and `cmp_val` compute the L0 operations exactly, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. The math library's certified-truncation decision is proved over the integers (`lemma_certified_truncation`). `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
+| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`, `cmp_val` and `from_digit_values` compute the L0 operations exactly, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. The math library's certified-truncation decision is proved over the integers (`lemma_certified_truncation`). `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
 | Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only; the 32-bit targets are exercised by the QEMU and Zephyr self-tests). The production C-FFI output helper `write_c_string` never writes at or beyond `buf_size` and always NUL-terminates. C-API NULL and zero-size guards hold. The CLI brace scanner is consistent. |
 | UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, and `bc_cli` (strict provenance, symbolic alignment, Stacked Borrows), and `bc_c_api` again under Tree Borrows. |
 | Executable specification | Verus — `crates/bc_spec`, `scripts/build_spec_oracle.sh`; `crates/bc_cli/tests/spec_differential.rs` | `bc_spec` defines the observable behavior of `bc_clone` without `-l` (decoding, units, tokens, parsing, evaluation, output, diagnostics, exit status), mirroring the production structure. `exec_spec_verified!` proves that the compiled oracle equals the `spec fn`s, except for `vstd`'s unverified `Seq` translations; lemmas prove that its arithmetic (`+ - * / % ^ sqrt`, comparison, `length`, constants under `ibase`) computes the integer definitions of `spec_num.rs` exactly. The differential tests then show that `bc_clone` matches the specification **on the generated inputs only**: there is no proof that `bc_clone` refines the specification, and the specification itself is checked against POSIX only by review, the POSIX suite, and GNU bc. The oracle is slow for deep nesting (its state is copied at every step), so the tests stay a few hundred levels deep. |

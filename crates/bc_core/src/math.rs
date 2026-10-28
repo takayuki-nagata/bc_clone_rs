@@ -15,7 +15,8 @@ use crate::spec_num::*;
 use crate::trusted_bigint::big_view;
 use crate::trusted_bigint::{
     big_abs, big_add, big_clone, big_cmp, big_decimal_digits, big_from_usize, big_is_negative,
-    big_is_zero, big_isqrt, big_mul, big_pow10, big_sub, big_tdiv, big_to_i64, big_zero,
+    big_is_zero, big_isqrt, big_mul, big_mul_add_small, big_pow_usize, big_pow10, big_sub,
+    big_tdiv, big_to_i64, big_zero,
 };
 use crate::verified_kernels::{BC_SCALE_MAX, MAX_VERIFIED_SCALE};
 use crate::verified_kernels::{
@@ -27,6 +28,10 @@ use crate::verified_kernels::{
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+#[cfg(verus_keep_ghost)]
+use bc_spec::convert::{clamp_digits, lemma_horner_nonneg};
+#[cfg(verus_keep_ghost)]
+use bc_spec::power::lemma_pow_positive;
 use core::cmp::Ordering;
 use num_bigint::BigInt;
 use num_traits::{Signed, Zero};
@@ -71,6 +76,72 @@ fn pow10_within(n: usize) -> (r: BigInt)
         big_view(&r) == spec_num::pow10(n as nat),
 {
     big_pow10(n as u32)
+}
+
+/// The value of the digits `ds` in base `ibase` after the `ibase` rule (`clamp_digits`).
+fn horner_digits(ds: &[u8], ibase: usize, multi: bool) -> (r: BigInt)
+    requires
+        2 <= ibase <= 16,
+    ensures
+        big_view(&r) == spec_horner(0, clamp_digits(ds@, ibase as u8, multi), ibase as int),
+{
+    let ghost cd = clamp_digits(ds@, ibase as u8, multi);
+    proof {
+        lemma_clamp_digits(ds@, ibase as u8, multi);
+        assert(cd.skip(0) =~= cd);
+    }
+    let mut acc = big_zero();
+    let mut i: usize = 0;
+    while i < ds.len()
+        invariant
+            0 <= i <= ds.len(),
+            2 <= ibase <= 16,
+            cd == clamp_digits(ds@, ibase as u8, multi),
+            cd.len() == ds.len(),
+            forall|j: int| 0 <= j < ds.len() ==> #[trigger] cd[j] == (if multi && ds@[j] >= ibase as u8 { (ibase - 1) as u8 } else { ds@[j] }),
+            spec_horner(big_view(&acc), cd.skip(i as int), ibase as int) == spec_horner(0, cd, ibase as int),
+        decreases ds.len() - i,
+    {
+        let v = ds[i] as usize;
+        let d = if multi && v >= ibase { ibase - 1 } else { v };
+        proof {
+            let rest = cd.skip(i as int);
+            assert(rest[0] == cd[i as int]);
+            assert(rest.drop_first() =~= cd.skip(i as int + 1));
+            assert(d as u8 == cd[i as int]);
+        }
+        acc = big_mul_add_small(acc, ibase, d);
+        i += 1;
+    }
+    proof {
+        assert(cd.skip(i as int) =~= Seq::<u8>::empty());
+    }
+    acc
+}
+
+/// `clamp_digits` keeps the length and clamps each digit on its own.
+proof fn lemma_clamp_digits(ds: Seq<u8>, ib: u8, multi: bool)
+    requires
+        ib >= 2,
+    ensures
+        clamp_digits(ds, ib, multi).len() == ds.len(),
+        forall|j: int| 0 <= j < ds.len() ==> #[trigger] clamp_digits(ds, ib, multi)[j]
+            == (if multi && ds[j] >= ib { (ib - 1) as u8 } else { ds[j] }),
+    decreases ds.len(),
+{
+    if ds.len() > 0 {
+        lemma_clamp_digits(ds.drop_first(), ib, multi);
+        let d = if multi && ds[0] >= ib && ib >= 1 { (ib - 1) as u8 } else { ds[0] };
+        let tail = clamp_digits(ds.drop_first(), ib, multi);
+        assert(clamp_digits(ds, ib, multi) == seq![d].add(tail));
+        assert forall|j: int| 0 <= j < ds.len() implies #[trigger] clamp_digits(ds, ib, multi)[j]
+            == (if multi && ds[j] >= ib { (ib - 1) as u8 } else { ds[j] }) by {
+            if j > 0 {
+                assert(clamp_digits(ds, ib, multi)[j] == tail[j - 1]);
+                assert(ds.drop_first()[j - 1] == ds[j]);
+            }
+        }
+    }
 }
 
 /// A nonzero base has a nonzero power.
@@ -128,6 +199,56 @@ impl BCNum {
             r.val() == (SpecBCNum { coeff: 0, scale: 0 }),
     {
         Self { coeff: big_zero(), scale: 0 }
+    }
+
+    /// The value of a constant from its digit values: integer digits `ds` and fraction digits
+    /// `fs`, most significant first, under `ibase`. As in GNU bc, a single-digit number keeps
+    /// its face value, while in a multi-digit number a digit >= ibase counts as ibase - 1
+    /// (`docs/COMPATIBILITY.md` §3.3). The fraction is converted exactly and truncated to
+    /// `len(fs)` decimal digits.
+    pub fn from_digit_values(ds: &[u8], fs: &[u8], ibase: usize) -> (r: Self)
+        requires
+            2 <= ibase <= 16,
+            fs.len() <= BC_SCALE_MAX,
+        ensures
+            ({
+                let multi = ds.len() + fs.len() > 1;
+                let ib = ibase as u8;
+                let iv = spec_horner(0, clamp_digits(ds@, ib, multi), ibase as int);
+                let fv = spec_horner(0, clamp_digits(fs@, ib, multi), ibase as int);
+                let f = fs.len();
+                let den = spec_pow_int(ibase as int, f as nat);
+                &&& r.scale == f
+                &&& r.val().coeff == if f == 0 { iv } else { (iv * den + fv) * spec_num::pow10(f as nat) / den }
+            }),
+    {
+        let multi = ds.len() > 1 || fs.len() > 1 || (ds.len() == 1 && fs.len() == 1);
+        let int_val = horner_digits(ds, ibase, multi);
+        if fs.is_empty() {
+            return Self::new(int_val, 0);
+        }
+        let frac_numerator = horner_digits(fs, ibase, multi);
+        let frac_denominator = big_pow_usize(ibase, fs.len());
+        let num = big_mul(
+            &big_add(&big_mul(&int_val, &frac_denominator), &frac_numerator),
+            &pow10_within(fs.len()),
+        );
+        proof {
+            lemma_pow_positive(ibase as int, fs.len() as nat);
+            lemma_pow10_pos(fs.len() as nat);
+            let ib = ibase as u8;
+            lemma_horner_nonneg(0, clamp_digits(ds@, ib, multi), ibase as int);
+            lemma_horner_nonneg(0, clamp_digits(fs@, ib, multi), ibase as int);
+            let (iv, fv, den, p) = (big_view(&int_val), big_view(&frac_numerator), big_view(&frac_denominator),
+                spec_num::pow10(fs.len() as nat));
+            assert((iv * den + fv) * p >= 0) by (nonlinear_arith)
+                requires
+                    iv >= 0,
+                    fv >= 0,
+                    den >= 1,
+                    p >= 1;
+        }
+        Self::new(big_tdiv(&num, &frac_denominator), fs.len())
     }
 
     /// Returns true if the number is mathematically zero.
@@ -504,49 +625,41 @@ impl BCNum {
 } // verus!
 
 impl BCNum {
-    /// Parses a numeric constant string under `ibase` into a BCNum.
-    pub fn from_string(num_str: &str, ibase: usize) -> Self {
+    /// The digit values of a numeric constant: its integer digits and its fraction digits, most
+    /// significant first, without backslash-newlines and the radix point. Not verified yet: the
+    /// refinement proof relates it to the specification's literal digits.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "verified_alphanumeric_char_val returns at most 35"
+    )]
+    fn digit_values(num_str: &str) -> (Vec<u8>, Vec<u8>) {
         let num_str = num_str.replace("\\\n", "");
-        let (int_part, frac_part) = if let Some(pos) = num_str.find('.') {
-            (&num_str[..pos], &num_str[pos + 1..])
-        } else {
-            (num_str.as_str(), "")
+        let (int_part, frac_part) = match num_str.find('.') {
+            Some(pos) => (&num_str[..pos], &num_str[pos + 1..]),
+            None => (num_str.as_str(), ""),
         };
+        let value = |b: u8| verified_alphanumeric_char_val(b) as u8;
+        (
+            int_part.bytes().map(value).collect(),
+            frac_part.bytes().map(value).collect(),
+        )
+    }
 
-        // As in GNU bc, a single-digit number keeps its face value, while in a multi-digit
-        // number a digit >= ibase counts as ibase - 1 (`docs/COMPATIBILITY.md` §3.3).
-        let multi_digit = int_part.len() + frac_part.len() > 1;
-        let digit = |b: u8| {
-            let v = verified_alphanumeric_char_val(b);
-            if multi_digit && v >= ibase {
-                ibase - 1
-            } else {
-                v
-            }
-        };
-
-        let mut int_val = BigInt::zero();
-        for b in int_part.bytes() {
-            int_val = int_val * ibase + digit(b);
+    /// Parses a numeric constant string under `ibase` (2 to 16) into a BCNum. A constant with
+    /// more than `BC_SCALE_MAX` fraction digits is `ScaleTooLarge`, rejected before any
+    /// arithmetic, which keeps the scale invariant.
+    pub fn try_from_string(num_str: &str, ibase: usize) -> Result<Self, RuntimeError> {
+        let (ds, fs) = Self::digit_values(num_str);
+        if fs.len() > BC_SCALE_MAX {
+            return Err(RuntimeError::ScaleTooLarge);
         }
+        Ok(Self::from_digit_values(&ds, &fs, ibase))
+    }
 
-        let scale_val = frac_part.len();
-        let coeff = if scale_val > 0 {
-            let mut frac_numerator = BigInt::zero();
-            for b in frac_part.bytes() {
-                frac_numerator = frac_numerator * ibase + digit(b);
-            }
-            let frac_denominator = num_traits::pow(BigInt::from(ibase), scale_val);
-            let num = (int_val * &frac_denominator + frac_numerator) * pow10(scale_val);
-            num / frac_denominator
-        } else {
-            int_val
-        };
-
-        Self {
-            coeff,
-            scale: scale_val,
-        }
+    /// Parses a numeric constant string under `ibase` into a BCNum.
+    #[cfg(test)]
+    pub fn from_string(num_str: &str, ibase: usize) -> Self {
+        Self::try_from_string(num_str, ibase).unwrap_or_else(|msg| panic!("{}", msg))
     }
 
     /// Divides self by other under scale.

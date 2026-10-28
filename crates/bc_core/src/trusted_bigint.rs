@@ -161,6 +161,24 @@ pub fn big_to_i64(a: &BigInt) -> (r: Option<i64>)
     a.to_i64()
 }
 
+/// `a·m + d`, for one step of a base conversion.
+#[verifier::external_body]
+pub fn big_mul_add_small(a: BigInt, m: usize, d: usize) -> (r: BigInt)
+    ensures
+        big_view(&r) == big_view(&a) * m + d,
+{
+    a * m + d
+}
+
+/// `b^e`.
+#[verifier::external_body]
+pub fn big_pow_usize(b: usize, e: usize) -> (r: BigInt)
+    ensures
+        big_view(&r) == spec_pow_int(b as int, e as nat),
+{
+    num_traits::pow(BigInt::from(b), e)
+}
+
 /// `10^n`.
 #[verifier::external_body]
 pub fn big_pow10(n: u32) -> (r: BigInt)
@@ -218,6 +236,12 @@ mod tests {
             prop_assert_eq!(big_to_i64(&big(i128::from(a))), Some(a));
             let fits = i128::from(i64::MIN) <= wide && wide <= i128::from(i64::MAX);
             prop_assert_eq!(big_to_i64(&big(wide)).is_some(), fits);
+        }
+
+        #[test]
+        fn small_steps(a in -(1i128 << 60)..(1i128 << 60), m in 0usize..=36, d in 0usize..=35, e in 0usize..=20) {
+            prop_assert_eq!(big_mul_add_small(big(a), m, d), big(a * m as i128 + d as i128));
+            prop_assert_eq!(big_pow_usize(m, e), BigInt::from(m).pow(e as u32));
         }
 
         #[test]
