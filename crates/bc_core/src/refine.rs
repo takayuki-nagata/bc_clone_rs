@@ -371,6 +371,8 @@ pub open spec fn in_fragment(e: Expr) -> bool
         Expr::RegisterAccess(_) => true,
         Expr::Number(_) => true,
         Expr::Variable(_) => true,
+        Expr::AssignOp(_, t, v) => named(*t) && in_fragment(*t) && in_fragment(*v),
+        Expr::Update(_, _, t) => named(*t) && in_fragment(*t),
         Expr::ArrayAccess(_, i) => in_fragment(*i),
         Expr::Paren(a) => in_fragment(*a),
         Expr::Negate(a) => in_fragment(*a),
@@ -557,6 +559,426 @@ pub proof fn lemma_elem_get(elems: Seq<Elem>, idx: u32)
     if elems.len() > 0 && elems[0].idx != idx {
         lemma_elem_get(elems.drop_first(), idx);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Updates of the association lists
+// ---------------------------------------------------------------------------------------------
+
+/// The stack of a name after `stack_op` (op 0 set, 1 push, 2 pop) on its stack `found`; a new
+/// name starts with its global frame 0 (`var_update`).
+pub open spec fn upd_stack(found: Option<Seq<Num>>, op: u8, v: Num) -> Option<Seq<Num>> {
+    match found {
+        Some(s) => Some(stack_op(s, op, v)),
+        None => if op == 2 { None } else { Some(stack_op(seq![zero_num()], op, v)) },
+    }
+}
+
+pub proof fn lemma_var_lookup_push(acc: Seq<VarBind>, b: VarBind, k: Seq<u8>)
+    ensures
+        var_lookup(acc.push(b), k) == if var_lookup(acc, k) is Some { var_lookup(acc, k) } else if b.name == k { Some(b.stack) } else { None },
+    decreases acc.len(),
+{
+    reveal_with_fuel(var_lookup, 2);
+    if acc.len() > 0 {
+        assert(acc.push(b)[0] == acc[0]);
+        assert(acc.push(b).drop_first() =~= acc.drop_first().push(b));
+        lemma_var_lookup_push(acc.drop_first(), b, k);
+    } else {
+        assert(acc.push(b)[0] == b);
+        assert(acc.push(b).drop_first() =~= Seq::<VarBind>::empty());
+    }
+}
+
+pub proof fn lemma_var_lookup_add(a: Seq<VarBind>, b: Seq<VarBind>, k: Seq<u8>)
+    ensures
+        var_lookup(a.add(b), k) == if var_lookup(a, k) is Some { var_lookup(a, k) } else { var_lookup(b, k) },
+    decreases a.len(),
+{
+    if a.len() > 0 {
+        assert(a.add(b).drop_first() =~= a.drop_first().add(b));
+        lemma_var_lookup_add(a.drop_first(), b, k);
+    } else {
+        assert(a.add(b) =~= b);
+    }
+}
+
+/// The scope stacks after `var_update`: name `nm` gets `upd_stack`, the others keep theirs.
+pub proof fn lemma_var_update(vars: Seq<VarBind>, nm: Seq<u8>, op: u8, v: Num, acc: Seq<VarBind>, k: Seq<u8>)
+    requires
+        var_lookup(acc, nm) is None,
+    ensures
+        var_lookup(var_update(vars, nm, op, v, acc), k) == if var_lookup(acc, k) is Some {
+            var_lookup(acc, k)
+        } else if k == nm {
+            upd_stack(var_lookup(vars, nm), op, v)
+        } else {
+            var_lookup(vars, k)
+        },
+    decreases vars.len(),
+{
+    if vars.len() == 0 {
+        if op != 2 {
+            lemma_var_lookup_push(acc, VarBind { name: nm, stack: stack_op(seq![zero_num()], op, v) }, k);
+        }
+    } else if vars[0].name == nm {
+        let b = VarBind { name: nm, stack: stack_op(vars[0].stack, op, v) };
+        lemma_var_lookup_add(acc.push(b), vars.drop_first(), k);
+        lemma_var_lookup_push(acc, b, k);
+    } else {
+        lemma_var_lookup_push(acc, vars[0], nm);
+        lemma_var_update(vars.drop_first(), nm, op, v, acc.push(vars[0]), k);
+        lemma_var_lookup_push(acc, vars[0], k);
+    }
+}
+
+/// Every binding after `var_update` is named `nm` or as a binding of `acc` or `vars`.
+pub proof fn lemma_var_update_names(vars: Seq<VarBind>, nm: Seq<u8>, op: u8, v: Num, acc: Seq<VarBind>, i: int)
+    requires
+        0 <= i < var_update(vars, nm, op, v, acc).len(),
+    ensures
+        ({
+            let x = var_update(vars, nm, op, v, acc)[i].name;
+            x == nm || (exists|j: int| 0 <= j < acc.len() && #[trigger] acc[j].name == x)
+                || (exists|j: int| 0 <= j < vars.len() && #[trigger] vars[j].name == x)
+        }),
+    decreases vars.len(),
+{
+    let r = var_update(vars, nm, op, v, acc);
+    let x = r[i].name;
+    if vars.len() == 0 {
+        if i < acc.len() {
+            assert(acc[i].name == x);
+        }
+    } else if vars[0].name == nm {
+        let b = VarBind { name: nm, stack: stack_op(vars[0].stack, op, v) };
+        if i < acc.len() {
+            assert(acc[i].name == x);
+        } else if i > acc.len() {
+            assert(vars[i - acc.len()].name == x);
+        }
+    } else {
+        lemma_var_update_names(vars.drop_first(), nm, op, v, acc.push(vars[0]), i);
+        if exists|j: int| 0 <= j < acc.push(vars[0]).len() && #[trigger] acc.push(vars[0])[j].name == x {
+            let j = choose|j: int| 0 <= j < acc.push(vars[0]).len() && #[trigger] acc.push(vars[0])[j].name == x;
+            if j == acc.len() {
+                assert(vars[0].name == x);
+            } else {
+                assert(acc[j].name == x);
+            }
+        }
+        if exists|j: int| 0 <= j < vars.drop_first().len() && #[trigger] vars.drop_first()[j].name == x {
+            let j = choose|j: int| 0 <= j < vars.drop_first().len() && #[trigger] vars.drop_first()[j].name == x;
+            assert(vars[j + 1].name == x);
+        }
+    }
+}
+
+/// A binding makes its name found.
+pub proof fn lemma_var_lookup_some(vars: Seq<VarBind>, i: int)
+    requires
+        0 <= i < vars.len(),
+    ensures
+        var_lookup(vars, vars[i].name) is Some,
+    decreases vars.len(),
+{
+    if i > 0 && vars[0].name != vars[i].name {
+        assert(vars.drop_first()[i - 1] == vars[i]);
+        lemma_var_lookup_some(vars.drop_first(), i - 1);
+    }
+}
+
+/// `r_vars` holds after production updates the stack of `name` as `upd_stack` updates the
+/// specification's (op 0 set, 1 push, 2 pop) and leaves the other names alone.
+pub proof fn lemma_r_vars_update(m: Map<String, Vec<BCNum>>, m2: Map<String, Vec<BCNum>>, vars: Seq<VarBind>, name: String, op: u8, x: Num)
+    requires
+        r_vars(m, vars),
+        forall|k: String| k != name ==> (#[trigger] m2.contains_key(k) == m.contains_key(k)),
+        forall|k: String| k != name && #[trigger] m.contains_key(k) ==> m2[k] == m[k],
+        match upd_stack(var_lookup(vars, text_view(name)), op, x) {
+            Some(ss) => m2.contains_key(name) && r_stack(m2[name]@, ss),
+            None => !m2.contains_key(name),
+        },
+    ensures
+        r_vars(m2, var_update(vars, text_view(name), op, x, Seq::empty())),
+{
+    let nm = text_view(name);
+    let r = var_update(vars, nm, op, x, Seq::empty());
+    assert forall|k: String| #[trigger] m2.contains_key(k) implies var_lookup(r, text_view(k)) is Some
+        && r_stack(m2[k]@, var_lookup(r, text_view(k))->Some_0) by {
+        lemma_var_update(vars, nm, op, x, Seq::empty(), text_view(k));
+        if k != name {
+            if text_view(k) == nm {
+                lemma_text_view_injective(k, name);
+            }
+        }
+    }
+    assert forall|i: int| #![trigger r[i]] 0 <= i < r.len() implies exists|k: String| #[trigger] m2.contains_key(k)
+        && text_view(k) == r[i].name by {
+        let y = r[i].name;
+        lemma_var_lookup_some(r, i);
+        lemma_var_update(vars, nm, op, x, Seq::empty(), y);
+        if y == nm {
+            assert(m2.contains_key(name));
+        } else {
+            lemma_var_lookup_index(vars, y);
+            let j = choose|j: int| 0 <= j < vars.len() && #[trigger] vars[j].name == y;
+            let k = choose|k: String| #[trigger] m.contains_key(k) && text_view(k) == vars[j].name;
+            assert(k != name);
+            assert(m2.contains_key(k));
+        }
+    }
+}
+
+// Arrays: the same lemmas for `arr_update`.
+
+/// The frames of an array after `frame_op` (op 0 set, 1 push, 2 pop) on its stack `found`; a
+/// new name starts with its empty global frame (`arr_update`).
+pub open spec fn upd_frames(found: Option<Seq<ArrFrame>>, op: u8, v: ArrFrame) -> Option<Seq<ArrFrame>> {
+    match found {
+        Some(s) => Some(frame_op(s, op, v)),
+        None => if op == 2 { None } else { Some(frame_op(seq![empty_frame()], op, v)) },
+    }
+}
+
+pub proof fn lemma_arr_lookup_push(acc: Seq<ArrBind>, b: ArrBind, k: Seq<u8>)
+    ensures
+        arr_lookup(acc.push(b), k) == if arr_lookup(acc, k) is Some { arr_lookup(acc, k) } else if b.name == k { Some(b.stack) } else { None },
+    decreases acc.len(),
+{
+    reveal_with_fuel(arr_lookup, 2);
+    if acc.len() > 0 {
+        assert(acc.push(b)[0] == acc[0]);
+        assert(acc.push(b).drop_first() =~= acc.drop_first().push(b));
+        lemma_arr_lookup_push(acc.drop_first(), b, k);
+    } else {
+        assert(acc.push(b)[0] == b);
+        assert(acc.push(b).drop_first() =~= Seq::<ArrBind>::empty());
+    }
+}
+
+pub proof fn lemma_arr_lookup_add(a: Seq<ArrBind>, b: Seq<ArrBind>, k: Seq<u8>)
+    ensures
+        arr_lookup(a.add(b), k) == if arr_lookup(a, k) is Some { arr_lookup(a, k) } else { arr_lookup(b, k) },
+    decreases a.len(),
+{
+    if a.len() > 0 {
+        assert(a.add(b).drop_first() =~= a.drop_first().add(b));
+        lemma_arr_lookup_add(a.drop_first(), b, k);
+    } else {
+        assert(a.add(b) =~= b);
+    }
+}
+
+/// The scope stacks after `arr_update`: name `nm` gets `upd_frames`, the others keep theirs.
+pub proof fn lemma_arr_update(arrays: Seq<ArrBind>, nm: Seq<u8>, op: u8, v: ArrFrame, acc: Seq<ArrBind>, k: Seq<u8>)
+    requires
+        arr_lookup(acc, nm) is None,
+    ensures
+        arr_lookup(arr_update(arrays, nm, op, v, acc), k) == if arr_lookup(acc, k) is Some {
+            arr_lookup(acc, k)
+        } else if k == nm {
+            upd_frames(arr_lookup(arrays, nm), op, v)
+        } else {
+            arr_lookup(arrays, k)
+        },
+    decreases arrays.len(),
+{
+    if arrays.len() == 0 {
+        if op != 2 {
+            lemma_arr_lookup_push(acc, ArrBind { name: nm, stack: frame_op(seq![empty_frame()], op, v) }, k);
+        }
+    } else if arrays[0].name == nm {
+        let b = ArrBind { name: nm, stack: frame_op(arrays[0].stack, op, v) };
+        lemma_arr_lookup_add(acc.push(b), arrays.drop_first(), k);
+        lemma_arr_lookup_push(acc, b, k);
+    } else {
+        lemma_arr_lookup_push(acc, arrays[0], nm);
+        lemma_arr_update(arrays.drop_first(), nm, op, v, acc.push(arrays[0]), k);
+        lemma_arr_lookup_push(acc, arrays[0], k);
+    }
+}
+
+/// Every binding after `arr_update` is named `nm` or as a binding of `acc` or `arrays`.
+pub proof fn lemma_arr_update_names(arrays: Seq<ArrBind>, nm: Seq<u8>, op: u8, v: ArrFrame, acc: Seq<ArrBind>, i: int)
+    requires
+        0 <= i < arr_update(arrays, nm, op, v, acc).len(),
+    ensures
+        ({
+            let x = arr_update(arrays, nm, op, v, acc)[i].name;
+            x == nm || (exists|j: int| 0 <= j < acc.len() && #[trigger] acc[j].name == x)
+                || (exists|j: int| 0 <= j < arrays.len() && #[trigger] arrays[j].name == x)
+        }),
+    decreases arrays.len(),
+{
+    let r = arr_update(arrays, nm, op, v, acc);
+    let x = r[i].name;
+    if arrays.len() == 0 {
+        if i < acc.len() {
+            assert(acc[i].name == x);
+        }
+    } else if arrays[0].name == nm {
+        let b = ArrBind { name: nm, stack: frame_op(arrays[0].stack, op, v) };
+        if i < acc.len() {
+            assert(acc[i].name == x);
+        } else if i > acc.len() {
+            assert(arrays[i - acc.len()].name == x);
+        }
+    } else {
+        lemma_arr_update_names(arrays.drop_first(), nm, op, v, acc.push(arrays[0]), i);
+        if exists|j: int| 0 <= j < acc.push(arrays[0]).len() && #[trigger] acc.push(arrays[0])[j].name == x {
+            let j = choose|j: int| 0 <= j < acc.push(arrays[0]).len() && #[trigger] acc.push(arrays[0])[j].name == x;
+            if j == acc.len() {
+                assert(arrays[0].name == x);
+            } else {
+                assert(acc[j].name == x);
+            }
+        }
+        if exists|j: int| 0 <= j < arrays.drop_first().len() && #[trigger] arrays.drop_first()[j].name == x {
+            let j = choose|j: int| 0 <= j < arrays.drop_first().len() && #[trigger] arrays.drop_first()[j].name == x;
+            assert(arrays[j + 1].name == x);
+        }
+    }
+}
+
+/// A binding makes its name found.
+pub proof fn lemma_arr_lookup_some(arrays: Seq<ArrBind>, i: int)
+    requires
+        0 <= i < arrays.len(),
+    ensures
+        arr_lookup(arrays, arrays[i].name) is Some,
+    decreases arrays.len(),
+{
+    if i > 0 && arrays[0].name != arrays[i].name {
+        assert(arrays.drop_first()[i - 1] == arrays[i]);
+        lemma_arr_lookup_some(arrays.drop_first(), i - 1);
+    }
+}
+
+/// `r_arrays` holds after production updates the stack of `name` as `upd_frames` updates the
+/// specification's (op 0 set, 1 push, 2 pop) and leaves the other names alone.
+pub proof fn lemma_r_arrays_update(m: Map<String, Vec<BTreeMap<usize, BCNum>>>, m2: Map<String, Vec<BTreeMap<usize, BCNum>>>, arrays: Seq<ArrBind>, name: String, op: u8, x: ArrFrame)
+    requires
+        r_arrays(m, arrays),
+        forall|k: String| k != name ==> (#[trigger] m2.contains_key(k) == m.contains_key(k)),
+        forall|k: String| k != name && #[trigger] m.contains_key(k) ==> m2[k] == m[k],
+        match upd_frames(arr_lookup(arrays, text_view(name)), op, x) {
+            Some(ss) => m2.contains_key(name) && r_frames(m2[name]@, ss),
+            None => !m2.contains_key(name),
+        },
+    ensures
+        r_arrays(m2, arr_update(arrays, text_view(name), op, x, Seq::empty())),
+{
+    let nm = text_view(name);
+    let r = arr_update(arrays, nm, op, x, Seq::empty());
+    assert forall|k: String| #[trigger] m2.contains_key(k) implies arr_lookup(r, text_view(k)) is Some
+        && r_frames(m2[k]@, arr_lookup(r, text_view(k))->Some_0) by {
+        lemma_arr_update(arrays, nm, op, x, Seq::empty(), text_view(k));
+        if k != name {
+            if text_view(k) == nm {
+                lemma_text_view_injective(k, name);
+            }
+        }
+    }
+    assert forall|i: int| #![trigger r[i]] 0 <= i < r.len() implies exists|k: String| #[trigger] m2.contains_key(k)
+        && text_view(k) == r[i].name by {
+        let y = r[i].name;
+        lemma_arr_lookup_some(r, i);
+        lemma_arr_update(arrays, nm, op, x, Seq::empty(), y);
+        if y == nm {
+            assert(m2.contains_key(name));
+        } else {
+            lemma_arr_lookup_index(arrays, y);
+            let j = choose|j: int| 0 <= j < arrays.len() && #[trigger] arrays[j].name == y;
+            let k = choose|k: String| #[trigger] m.contains_key(k) && text_view(k) == arrays[j].name;
+            assert(k != name);
+            assert(m2.contains_key(k));
+        }
+    }
+}
+
+/// The element values after `elem_set`.
+pub proof fn lemma_elem_set(elems: Seq<Elem>, idx: u32, v: Num, acc: Seq<Elem>, k: int)
+    requires
+        elem_val(acc, idx as int) is None,
+    ensures
+        elem_val(elem_set(elems, idx, v, acc), k) == if elem_val(acc, k) is Some {
+            elem_val(acc, k)
+        } else if k == idx as int {
+            Some(v)
+        } else {
+            elem_val(elems, k)
+        },
+    decreases elems.len(),
+{
+    if elems.len() == 0 {
+        lemma_elem_val_push(acc, Elem { idx: idx, val: v }, k);
+    } else if elems[0].idx == idx {
+        let e = Elem { idx: idx, val: v };
+        lemma_elem_val_add(acc.push(e), elems.drop_first(), k);
+        lemma_elem_val_push(acc, e, k);
+    } else {
+        lemma_elem_val_push(acc, elems[0], idx as int);
+        lemma_elem_set(elems.drop_first(), idx, v, acc.push(elems[0]), k);
+        lemma_elem_val_push(acc, elems[0], k);
+    }
+}
+
+pub proof fn lemma_elem_val_push(acc: Seq<Elem>, e: Elem, k: int)
+    ensures
+        elem_val(acc.push(e), k) == if elem_val(acc, k) is Some { elem_val(acc, k) } else if e.idx as int == k { Some(e.val) } else { None },
+    decreases acc.len(),
+{
+    reveal_with_fuel(elem_val, 2);
+    if acc.len() > 0 {
+        assert(acc.push(e)[0] == acc[0]);
+        assert(acc.push(e).drop_first() =~= acc.drop_first().push(e));
+        lemma_elem_val_push(acc.drop_first(), e, k);
+    } else {
+        assert(acc.push(e)[0] == e);
+        assert(acc.push(e).drop_first() =~= Seq::<Elem>::empty());
+    }
+}
+
+pub proof fn lemma_elem_val_add(a: Seq<Elem>, b: Seq<Elem>, k: int)
+    ensures
+        elem_val(a.add(b), k) == if elem_val(a, k) is Some { elem_val(a, k) } else { elem_val(b, k) },
+    decreases a.len(),
+{
+    if a.len() > 0 {
+        assert(a.add(b).drop_first() =~= a.drop_first().add(b));
+        lemma_elem_val_add(a.drop_first(), b, k);
+    } else {
+        assert(a.add(b) =~= b);
+    }
+}
+
+/// A frame after setting element `idx` to `v` corresponds to the specification's `elem_set`.
+pub proof fn lemma_r_frame_set(pf: Map<usize, BCNum>, sf: ArrFrame, idx: usize, pv: BCNum, x: Num)
+    requires
+        r_frame(pf, sf),
+        idx < 16777216,
+        r_num(pv, x),
+    ensures
+        r_frame(pf.insert(idx, pv), ArrFrame { elems: elem_set(sf.elems, idx as u32, x, Seq::empty()) }),
+{
+    let e2 = elem_set(sf.elems, idx as u32, x, Seq::empty());
+    assert forall|k: usize| k < 16777216 implies match (#[trigger] pf.insert(idx, pv).contains_key(k), elem_val(e2, k as int)) {
+        (true, Some(y)) => r_num(pf.insert(idx, pv)[k], y),
+        (false, None) => true,
+        _ => false,
+    } by {
+        lemma_elem_set(sf.elems, idx as u32, x, Seq::empty(), k as int);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Assignment targets
+// ---------------------------------------------------------------------------------------------
+
+/// A named expression: what the parser accepts on the left of an assignment and for `++`/`--`.
+pub open spec fn named(e: Expr) -> bool {
+    e is Variable || e is ArrayAccess || e is RegisterAccess
 }
 
 } // verus!

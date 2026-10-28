@@ -47,7 +47,7 @@ pub open spec fn rev_ints(s: Seq<u64>) -> Seq<int> {
 
 /// Appends the decimal digits of `x` (`dec_str`).
 #[allow(clippy::cast_possible_truncation, reason = "a decimal digit is below 10")]
-fn push_dec(out: &mut Vec<u8>, x: u64)
+pub(crate) fn push_dec(out: &mut Vec<u8>, x: u64)
     ensures
         final(out)@ == old(out)@.add(dec_str(x)),
     decreases x,

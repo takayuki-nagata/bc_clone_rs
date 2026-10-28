@@ -241,6 +241,11 @@ impl BCNum {
         Self::new(big_tdiv(&num, &frac_denominator), fs.len())
     }
 
+    /// The value of `BCNum::new(BigInt::from(n), 0)`.
+    pub open spec fn spec_new_usize(n: usize) -> SpecBCNum {
+        SpecBCNum { coeff: n as int, scale: 0 }
+    }
+
     /// The value of `BCNum::zero()`.
     pub open spec fn spec_zero_val() -> SpecBCNum {
         SpecBCNum { coeff: 0, scale: 0 }

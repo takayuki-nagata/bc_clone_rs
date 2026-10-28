@@ -38,9 +38,11 @@
   (`from_digit_values`) are verified with Verus: they compute the integer (L0) definitions of
   the POSIX operations exactly, assuming only the `num-bigint` operations listed in
   `crates/bc_core/src/trusted_bigint.rs`.
-- Expression evaluation is being proved to refine the specification: registers,
-  constants, variables, array elements, parentheses, unary minus, `length`, `scale`, `sqrt`, the arithmetic operators including `^` (and its warning), and
-  the relational operators so far, including the nesting limit and runtime errors.
+- Expression evaluation is proved to refine the specification for every
+  expression except function calls: constants, variables, array elements, registers, all
+  arithmetic and relational operators, `length`, `scale`, `sqrt`, assignments (including
+  compound ones, register clamping with its warnings, and a single hexadecimal digit for
+  `ibase`/`obase`) and `++`/`--`, with runtime errors and the nesting limit.
 
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval

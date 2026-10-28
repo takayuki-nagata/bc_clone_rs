@@ -17,7 +17,7 @@ use num_bigint::BigInt;
 use num_traits::{Signed, ToPrimitive};
 
 use crate::error::{BcError, RuntimeError};
-use crate::format::wrap_output;
+use crate::format::{push_dec, wrap_output};
 use crate::math::pow10_within;
 use crate::math::{BCNum, pow10};
 use crate::parser::{
@@ -33,9 +33,11 @@ use crate::spec_num::SpecBCNum;
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::lemma_pow10_pos;
 #[cfg(verus_keep_ghost)]
+use crate::spec_num::spec_tdiv;
+#[cfg(verus_keep_ghost)]
 use crate::trusted_bigint::{axiom_bigint_size, big_view};
 use crate::trusted_bigint::{
-    big_cmp, big_from_usize, big_is_negative, big_neg, big_tdiv, big_to_u64_small,
+    big_abs, big_cmp, big_from_usize, big_is_negative, big_neg, big_tdiv, big_to_u64_small,
 };
 #[cfg(verus_keep_ghost)]
 use crate::trusted_std::axiom_string_obeys_cmp;
@@ -53,18 +55,27 @@ use bc_spec::eval::{
     ER, EState, er_ok, ev, ev_node, ev_unary, negate, num_u64, reg_get, with_depth,
 };
 #[cfg(verus_keep_ghost)]
-use bc_spec::eval::{arith as spec_arith, arr_top, array_index, elem_get, rel_holds, var_get};
+use bc_spec::eval::{
+    arith as spec_arith, arr_top, array_index, elem_get, hex_val, number_text, one_num, rel_holds,
+    resolve, var_get,
+};
 #[cfg(verus_keep_ghost)]
 use bc_spec::fuel::done;
 #[cfg(verus_keep_ghost)]
 use bc_spec::fuel::lemma_ev_mono;
 #[cfg(verus_keep_ghost)]
+use bc_spec::fuel::lemma_resolve_mono;
+#[cfg(verus_keep_ghost)]
 use bc_spec::num::lemma_is_zero_mag;
 #[cfg(verus_keep_ghost)]
 use bc_spec::num::{
     lemma_mag_bounds, lemma_num_add, lemma_num_cmp, lemma_num_div, lemma_num_mod, lemma_num_mul,
-    lemma_num_sub, mag_val, num_cmp, num_coeff,
+    lemma_num_sub, mag_val, num_add, num_cmp, num_coeff, num_sub,
 };
+#[cfg(verus_keep_ghost)]
+use bc_spec::num::{to_l0, wf_num};
+#[cfg(verus_keep_ghost)]
+use bc_spec::output::dec_str;
 #[cfg(verus_keep_ghost)]
 use bc_spec::parser::Node;
 #[cfg(verus_keep_ghost)]
@@ -74,7 +85,7 @@ use bc_spec::power::lemma_u64_mag;
 #[cfg(verus_keep_ghost)]
 use bc_spec::power::{NumRes, lemma_num_pow, lemma_num_sqrt, num_sqrt};
 #[cfg(verus_keep_ghost)]
-use bc_spec::values::lemma_array_index_value;
+use bc_spec::values::{int_mag, lemma_array_index_value, lemma_register_input, sat_u64};
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin::Ghost;
 #[cfg(not(verus_keep_ghost))]
@@ -344,6 +355,7 @@ impl Evaluator {
             v.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
+            same_but_storage(*old(self), *final(self)),
             ({
                 let m = old(self).variables@;
                 let s = if m.contains_key(name) { m[name]@ } else { Seq::empty() };
@@ -372,6 +384,7 @@ impl Evaluator {
             v.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
+            same_but_storage(*old(self), *final(self)),
             ({
                 let m = old(self).variables@;
                 let t = final(self).variables@[name]@;
@@ -403,6 +416,7 @@ impl Evaluator {
             old(self).inv(),
         ensures
             final(self).inv(),
+            same_but_storage(*old(self), *final(self)),
             ({
                 let m = old(self).variables@;
                 if m.contains_key(*name) {
@@ -435,6 +449,7 @@ impl Evaluator {
             v.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
+            same_but_storage(*old(self), *final(self)),
             ({
                 let m = old(self).arrays@;
                 let s = if m.contains_key(name) { m[name]@ } else { Seq::empty() };
@@ -466,6 +481,7 @@ impl Evaluator {
             frame_ok(frame@),
         ensures
             final(self).inv(),
+            same_but_storage(*old(self), *final(self)),
             ({
                 let m = old(self).arrays@;
                 let t = final(self).arrays@[name]@;
@@ -497,6 +513,7 @@ impl Evaluator {
             old(self).inv(),
         ensures
             final(self).inv(),
+            same_but_storage(*old(self), *final(self)),
             ({
                 let m = old(self).arrays@;
                 if m.contains_key(*name) {
@@ -567,6 +584,10 @@ pub(crate) type SpecNodes = ();
 pub(crate) type SpecState = EState;
 #[cfg(verus_keep_ghost)]
 pub(crate) type SpecNum = bc_spec::num::Num;
+#[cfg(verus_keep_ghost)]
+pub(crate) type SpecPlace = bc_spec::eval::Place;
+#[cfg(not(verus_keep_ghost))]
+pub(crate) type SpecPlace = ();
 #[cfg(not(verus_keep_ghost))]
 pub(crate) type SpecNum = ();
 #[cfg(not(verus_keep_ghost))]
@@ -578,6 +599,62 @@ pub(crate) open spec fn r_result(r: Result<BCNum, BcError>, e: Evaluator, x: ER,
     match r {
         Ok(v) => x.ok && r_num(v, x.val) && r_state(e, x.st),
         Err(err) => !x.ok && r_err(err, x.err) && r_state(e, with_depth(x.st, d as u64)),
+    }
+}
+
+/// The value part of the specification's `ev_assign` (the `x` it stores): a single hexadecimal
+/// digit for `ibase`/`obase`, the value of `=`, or `old <op> value` for `op=`.
+pub(crate) open spec fn assign_x(nodes: Seq<bc_spec::parser::Node>, p: bc_spec::eval::Place, op: u8, v: usize, st: EState, f: u64) -> ER {
+    if bc_spec::eval::single_digit_base(nodes, p, op, v) {
+        let txt = bc_spec::eval::number_text(nodes, v);
+        er_ok(st, num_u64(bc_spec::eval::hex_val(if txt.len() > 0 { txt[0] } else { 0u8 })))
+    } else if op == 0 {
+        ev(nodes, v, st, f)
+    } else {
+        let old = bc_spec::eval::load(st, p);
+        let rhs = ev(nodes, v, st, f);
+        if !rhs.ok { rhs } else { spec_arith(rhs.st, (op - 1) as u8, old, rhs.val) }
+    }
+}
+
+pub(crate) proof fn lemma_assign_x_mono(nodes: Seq<bc_spec::parser::Node>, p: bc_spec::eval::Place, op: u8, v: usize, st: EState, f: u64, g: u64)
+    requires
+        f <= g,
+        done(assign_x(nodes, p, op, v, st, f)),
+    ensures
+        assign_x(nodes, p, op, v, st, g) == assign_x(nodes, p, op, v, st, f),
+{
+    if !bc_spec::eval::single_digit_base(nodes, p, op, v) {
+        lemma_ev_mono(nodes, v, st, f, g);
+    }
+}
+
+/// `e1` and `e2` differ at most in their variables and arrays.
+pub(crate) open spec fn same_but_storage(e1: Evaluator, e2: Evaluator) -> bool {
+    &&& e1.functions == e2.functions
+    &&& e1.scale == e2.scale
+    &&& e1.ibase == e2.ibase
+    &&& e1.obase == e2.obase
+    &&& e1.math_enabled == e2.math_enabled
+    &&& e1.stdout_writer == e2.stdout_writer
+    &&& e1.stderr_writer == e2.stderr_writer
+    &&& e1.break_flag == e2.break_flag
+    &&& e1.return_flag == e2.return_flag
+    &&& e1.return_value == e2.return_value
+    &&& e1.quit_flag == e2.quit_flag
+    &&& e1.extension_policy == e2.extension_policy
+    &&& e1.call_stack == e2.call_stack
+    &&& e1.max_depth == e2.max_depth
+    &&& e1.eval_depth == e2.eval_depth
+    &&& e1.invocation_ibase == e2.invocation_ibase
+}
+
+/// A resolved target corresponds to the specification's `Place`.
+spec fn r_place(p: Place, sp: bc_spec::eval::Place) -> bool {
+    match p {
+        Place::Variable(n) => sp.kind == 0 && sp.name == text_view(n),
+        Place::Element(n, i) => sp.kind == 1 && sp.name == text_view(n) && sp.idx as int == i as int && i < 16777216,
+        Place::Register(r) => sp.kind == 2 && sp.reg == reg_code(r),
     }
 }
 
@@ -744,6 +821,8 @@ impl Evaluator {
             Expr::RegisterAccess(reg) => self.eval_register(*reg, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Number(t) => self.eval_number(t, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Variable(name) => self.eval_variable(name, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::AssignOp(op, target, value) => self.eval_assign(Ghost(*node), *op, target, value, Ghost(nodes), Ghost(n), Ghost(st)),
+            Expr::Update(increment, prefix, target) => self.eval_update(Ghost(*node), *increment, *prefix, target, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::ArrayAccess(name, index) => self.eval_array(Ghost(*node), name, index, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Paren(inner) => self.eval_paren(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
             Expr::Negate(inner) => self.eval_negate(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
@@ -1540,6 +1619,643 @@ impl Evaluator {
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         self.literal_ref(t, Ghost(st))
+    }
+
+    /// The integer part of `|val|`, as `max + 1` if it exceeds `max`, and whether `val` is
+    /// negative: what the specification's `store_register` compares with the register's range.
+    #[allow(clippy::cast_possible_truncation, reason = "a magnitude of at most max <= 2^31")]
+    fn register_magnitude(val: &BCNum, max: usize) -> (r: (usize, bool))
+        requires
+            val.scale <= BC_SCALE_MAX,
+            max <= BC_BASE_MAX,
+        ensures
+            r.0 <= max + 1,
+            forall|x: SpecNum| #[trigger] r_num(*val, x) ==> {
+                let m = bc_spec::power::mag_to_u64(bc_spec::num::drop_mag(x.mag, x.scale));
+                &&& r.1 == (x.neg && !bc_spec::num::is_zero_mag(x.mag))
+                &&& (r.0 > max) == (m > max as u64)
+                &&& r.0 <= max ==> r.0 as u64 == m
+            },
+    {
+        proof {
+            lemma_pow10_pos(val.scale as nat);
+        }
+        let ip = big_abs(&big_tdiv(&val.coeff, &pow10_within(val.scale)));
+        let negative = big_is_negative(&val.coeff);
+        let magnitude = if matches!(big_cmp(&ip, &big_from_usize(max)), Ordering::Greater) {
+            max + 1
+        } else {
+            big_to_u64_small(&ip) as usize
+        };
+        proof {
+            assert forall|x: SpecNum| #[trigger] r_num(*val, x) implies {
+                let m = bc_spec::power::mag_to_u64(bc_spec::num::drop_mag(x.mag, x.scale));
+                &&& negative == (x.neg && !bc_spec::num::is_zero_mag(x.mag))
+                &&& (magnitude > max) == (m > max as u64)
+                &&& magnitude <= max ==> magnitude as u64 == m
+            } by {
+                lemma_register_input(x);
+                lemma_mag_bounds(x.mag);
+                let c = num_coeff(x);
+                let p = spec_num::pow10(x.scale as nat);
+                assert(spec_tdiv(c, p) == (if c >= 0 { c / p } else { -((-c) / p) }));
+                assert(big_view(&ip) == int_mag(x));
+            }
+        }
+        (magnitude, negative)
+    }
+
+    /// The text of a register clamp warning (the specification's `store_register`): `kind` -2
+    /// negative, -1 too small, 1 too large.
+    fn register_message(reg: Register, kind: i8, min: usize, max: usize) -> (msg: Vec<u8>)
+        requires
+            kind == -2 || kind == -1 || kind == 1,
+        ensures
+            msg@ == if kind == -2 {
+                seq![110u8, 101, 103, 97, 116, 105, 118, 101, 32].add(bc_spec::eval::reg_name(reg_code(reg)))
+                    .add(seq![44u8, 32, 115, 101, 116, 32, 116, 111, 32]).add(dec_str(min as u64))
+            } else if kind == -1 {
+                bc_spec::eval::reg_name(reg_code(reg)).add(seq![32u8, 116, 111, 111, 32, 115, 109, 97, 108, 108, 44, 32, 115, 101, 116, 32, 116, 111, 32]).add(dec_str(min as u64))
+            } else {
+                bc_spec::eval::reg_name(reg_code(reg)).add(seq![32u8, 116, 111, 111, 32, 108, 97, 114, 103, 101, 44, 32, 115, 101, 116, 32, 116, 111, 32]).add(dec_str(max as u64))
+            },
+    {
+        let name: [u8; 5] = match reg {
+            Register::Scale => [115, 99, 97, 108, 101],
+            Register::Ibase => [105, 98, 97, 115, 101],
+            Register::Obase => [111, 98, 97, 115, 101],
+        };
+        proof {
+            assert(name@ == bc_spec::eval::reg_name(reg_code(reg)));
+        }
+        let mut msg: Vec<u8> = Vec::new();
+        if kind == -2 {
+            let neg: [u8; 9] = [110, 101, 103, 97, 116, 105, 118, 101, 32];
+            let set: [u8; 9] = [44, 32, 115, 101, 116, 32, 116, 111, 32];
+            msg.extend_from_slice(&neg);
+            msg.extend_from_slice(&name);
+            msg.extend_from_slice(&set);
+            push_dec(&mut msg, min as u64);
+            proof {
+                assert(neg@ == seq![110u8, 101, 103, 97, 116, 105, 118, 101, 32]);
+                assert(set@ == seq![44u8, 32, 115, 101, 116, 32, 116, 111, 32]);
+                assert(msg@ =~= neg@.add(name@).add(set@).add(dec_str(min as u64)));
+            }
+        } else {
+            let small: [u8; 19] = [32, 116, 111, 111, 32, 115, 109, 97, 108, 108, 44, 32, 115, 101, 116, 32, 116, 111, 32];
+            let large: [u8; 19] = [32, 116, 111, 111, 32, 108, 97, 114, 103, 101, 44, 32, 115, 101, 116, 32, 116, 111, 32];
+            msg.extend_from_slice(&name);
+            if kind == -1 {
+                msg.extend_from_slice(&small);
+                push_dec(&mut msg, min as u64);
+                proof {
+                    assert(small@ == seq![32u8, 116, 111, 111, 32, 115, 109, 97, 108, 108, 44, 32, 115, 101, 116, 32, 116, 111, 32]);
+                    assert(msg@ =~= name@.add(small@).add(dec_str(min as u64)));
+                }
+            } else {
+                msg.extend_from_slice(&large);
+                push_dec(&mut msg, max as u64);
+                proof {
+                    assert(large@ == seq![32u8, 116, 111, 111, 32, 108, 97, 114, 103, 101, 44, 32, 115, 101, 116, 32, 116, 111, 32]);
+                    assert(msg@ =~= name@.add(large@).add(dec_str(max as u64)));
+                }
+            }
+        }
+        msg
+    }
+
+    /// Stores `val`, truncated to an integer, into register `reg`, clamping it to the register's
+    /// range with a warning (`docs/COMPATIBILITY.md` §3.3; the specification's
+    /// `store_register`). Returns the stored value.
+    fn store_register_ref(&mut self, reg: Register, val: &BCNum, Ghost(st): Ghost<SpecState>, Ghost(x): Ghost<SpecNum>) -> (r: usize)
+        requires
+            old(self).inv(),
+            val.scale <= BC_SCALE_MAX,
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            (r_state(*old(self), st) && r_num(*val, x)) ==> ({
+                let s = bc_spec::eval::store_register(st, reg_code(reg), x);
+                &&& r_state(*final(self), s.st)
+                &&& to_l0(s.val) == BCNum::spec_new_usize(r) && wf_num(s.val)
+            }),
+            r <= BC_BASE_MAX,
+    {
+        let ghost e0 = *self;
+        let (min, max) = match reg {
+            Register::Scale => (0usize, BC_SCALE_MAX),
+            Register::Ibase => (2usize, IBASE_MAX),
+            Register::Obase => (2usize, BC_BASE_MAX),
+        };
+        let (magnitude, negative) = Self::register_magnitude(val, max);
+        let (v, kind) = verified_clamp_register(magnitude, negative, min, max);
+        let ghost msg_spec: Seq<u8> = Seq::empty();
+        if kind != 0 {
+            let msg = Self::register_message(reg, kind, min, max);
+            proof {
+                msg_spec = msg@;
+            }
+            self.warn_ref(&msg, Ghost(st));
+        }
+        match reg {
+            Register::Scale => self.scale = v,
+            Register::Ibase => self.ibase = v,
+            Register::Obase => self.obase = v,
+        }
+        proof {
+            if r_state(e0, st) && r_num(*val, x) {
+                let r8 = reg_code(reg);
+                assert(min as int == bc_spec::eval::reg_min(r8) as int && max as int == bc_spec::eval::reg_max(r8) as int);
+                lemma_u64_mag(v as u64);
+                let s = bc_spec::eval::store_register(st, r8, x);
+                assert(r_state(*self, s.st));
+            }
+        }
+        v
+    }
+
+    /// Resolves an assignment target (the specification's `resolve`), evaluating an array
+    /// subscript exactly once.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn resolve_ref(&mut self, target: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<Place, BcError>)
+        requires
+            old(self).inv(),
+            named(*target),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            (r_state(*old(self), st) && r_expr(*target, nodes, n) && in_fragment(*target)) ==> forall|f: u64|
+                done(#[trigger] resolve(nodes, n, st, f).r) ==> ({
+                    let pr = resolve(nodes, n, st, f);
+                    match r {
+                        Ok(p) => pr.r.ok && r_place(p, pr.place) && r_state(*final(self), pr.r.st),
+                        Err(e) => !pr.r.ok && r_err(e, pr.r.err) && r_state(*final(self), with_depth(pr.r.st, old(self).eval_depth as u64)),
+                    }
+                }),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(*target, nodes, n) && in_fragment(*target);
+        match target {
+            Expr::Variable(name) => Ok(Place::Variable(name.clone())),
+            Expr::RegisterAccess(reg) => Ok(Place::Register(*reg)),
+            Expr::ArrayAccess(name, index) => {
+                let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Array(_, j) => j, _ => 0usize } } else { 0usize };
+                let v = match self.eval_ref(index, Ghost(nodes), Ghost(j), Ghost(st)) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        proof {
+                            if hyp {
+                                assert forall|f: u64| done(#[trigger] resolve(nodes, n, st, f).r) implies {
+                                    let pr = resolve(nodes, n, st, f);
+                                    !pr.r.ok && r_err(e, pr.r.err) && r_state(*self, with_depth(pr.r.st, d as u64))
+                                } by {
+                                    assert(done(ev(nodes, j, st, (f - 1) as u64)));
+                                }
+                            }
+                        }
+                        return Err(e);
+                    },
+                };
+                let i = match Self::array_index_ref(name, &v) {
+                    Ok(i) => i,
+                    Err(e) => {
+                        proof {
+                            if hyp {
+                                assert forall|f: u64| done(#[trigger] resolve(nodes, n, st, f).r) implies {
+                                    let pr = resolve(nodes, n, st, f);
+                                    !pr.r.ok && r_err(e, pr.r.err) && r_state(*self, with_depth(pr.r.st, d as u64))
+                                } by {
+                                    let x = ev(nodes, j, st, (f - 1) as u64);
+                                    assert(done(x));
+                                    assert(r_num(v, x.val));
+                                    assert(with_depth(x.st, d as u64) == x.st);
+                                }
+                            }
+                        }
+                        return Err(e);
+                    },
+                };
+                let p = Place::Element(name.clone(), i);
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] resolve(nodes, n, st, f).r) implies {
+                            let pr = resolve(nodes, n, st, f);
+                            pr.r.ok && r_place(p, pr.place) && r_state(*self, pr.r.st)
+                        } by {
+                            let x = ev(nodes, j, st, (f - 1) as u64);
+                            assert(done(x));
+                            assert(r_num(v, x.val));
+                            lemma_array_index_value(x.val);
+                        }
+                    }
+                }
+                Ok(p)
+            },
+            _ => Err(BcError::Runtime { kind: RuntimeError::NestingTooDeep, func: None }),
+        }
+    }
+
+    /// Reads the current value of a resolved target (the specification's `load`).
+    fn load_ref(&self, p: &Place, Ghost(sp): Ghost<SpecPlace>, Ghost(st): Ghost<SpecState>) -> (r: BCNum)
+        requires
+            self.inv(),
+        ensures
+            r.scale <= BC_SCALE_MAX,
+            (r_state(*self, st) && r_place(*p, sp)) ==> r_num(r, bc_spec::eval::load(st, sp)),
+    {
+        match p {
+            Place::Variable(name) => {
+                let v = self.var_get(name);
+                proof {
+                    if r_state(*self, st) && r_place(*p, sp) {
+                        let nm = text_view(*name);
+                        lemma_var_get(st.vars, nm);
+                        if self.variables@.contains_key(*name) {
+                            let ss = var_lookup(st.vars, nm)->Some_0;
+                            assert(r_stack(self.variables@[*name]@, ss));
+                            if ss.len() > 0 {
+                                assert(r_num(self.variables@[*name]@[ss.len() - 1], ss[ss.len() - 1]));
+                            }
+                        } else {
+                            lemma_var_absent(self.variables@, st.vars, *name);
+                        }
+                    }
+                }
+                v
+            },
+            Place::Element(name, i) => {
+                let v = self.arr_get(name, *i);
+                proof {
+                    if r_state(*self, st) && r_place(*p, sp) {
+                        let nm = text_view(*name);
+                        lemma_arr_top(st.arrays, nm);
+                        lemma_elem_get(arr_top(st.arrays, nm).elems, sp.idx);
+                        let m = self.arrays@;
+                        if m.contains_key(*name) {
+                            let ss = arr_lookup(st.arrays, nm)->Some_0;
+                            assert(r_frames(m[*name]@, ss));
+                            if ss.len() > 0 {
+                                assert(r_frame(m[*name]@[ss.len() - 1]@, ss[ss.len() - 1]));
+                            }
+                        } else {
+                            lemma_arr_absent(m, st.arrays, *name);
+                        }
+                    }
+                }
+                v
+            },
+            Place::Register(reg) => {
+                let value = match reg {
+                    Register::Scale => self.scale,
+                    Register::Ibase => self.ibase,
+                    Register::Obase => self.obase,
+                };
+                proof {
+                    lemma_u64_mag(value as u64);
+                }
+                BCNum::new(big_from_usize(value), 0)
+            },
+        }
+    }
+
+    /// Writes `val` to a resolved target (the specification's `store`) and returns the value now
+    /// held there (registers clamp it).
+    fn store_ref(&mut self, p: Place, val: BCNum, Ghost(sp): Ghost<SpecPlace>, Ghost(st): Ghost<SpecState>, Ghost(x): Ghost<SpecNum>) -> (r: BCNum)
+        requires
+            old(self).inv(),
+            val.scale <= BC_SCALE_MAX,
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_place(p, sp) && r_num(val, x)) ==> ({
+                let s = bc_spec::eval::store(st, sp, x);
+                r_state(*final(self), s.st) && r_num(r, s.val)
+            }),
+    {
+        let ghost e0 = *self;
+        let ghost hyp = r_state(*self, st) && r_place(p, sp) && r_num(val, x);
+        match p {
+            Place::Variable(name) => {
+                let ghost m = self.variables@;
+                let ghost nm = text_view(name);
+                let ghost nm_name = name;
+                let r = val.copy();
+                self.var_set(name, val);
+                proof {
+                    if hyp {
+                        if !m.contains_key(nm_name) {
+                            lemma_var_absent(m, st.vars, nm_name);
+                        }
+                        let m2 = self.variables@;
+                        let found = var_lookup(st.vars, nm);
+                        assert(r_stack(m2[nm_name]@, upd_stack(found, 0u8, x)->Some_0));
+                        lemma_r_vars_update(m, m2, st.vars, nm_name, 0u8, x);
+                    }
+                }
+                r
+            },
+            Place::Element(name, i) => {
+                let ghost m = self.arrays@;
+                let ghost nm = text_view(name);
+                let ghost nm_name = name;
+                let ghost gval = val;
+                let r = val.copy();
+                self.arr_set(name, i, val);
+                proof {
+                    if hyp {
+                        if !m.contains_key(nm_name) {
+                            lemma_arr_absent(m, st.arrays, nm_name);
+                        }
+                        lemma_arr_top(st.arrays, nm);
+                        let top = arr_top(st.arrays, nm);
+                        let nf = bc_spec::eval::ArrFrame { elems: bc_spec::eval::elem_set(top.elems, i as u32, x, Seq::empty()) };
+                        let m2 = self.arrays@;
+                        let found = arr_lookup(st.arrays, nm);
+                        let t = m2[nm_name]@;
+                        if m.contains_key(nm_name) && m[nm_name]@.len() > 0 {
+                            let ps = m[nm_name]@;
+                            let ss = found->Some_0;
+                            assert(r_frames(ps, ss));
+                            assert(r_frame(ps[ps.len() - 1]@, ss[ss.len() - 1]));
+                            lemma_r_frame_set(ps.last()@, top, i, gval, x);
+                            let sn = bc_spec::eval::frame_op(ss, 0u8, nf);
+                            assert(sn == ss.drop_last().push(nf));
+                            assert forall|j: int| 0 <= j < t.len() implies #[trigger] r_frame(t[j]@, sn[j]) by {
+                                if j < t.len() - 1 {
+                                    assert(t[j] == t.drop_last()[j]);
+                                    assert(t.drop_last()[j] == ps[j]);
+                                }
+                            }
+                        } else {
+                            assert(r_frame(Map::<usize, BCNum>::empty(), bc_spec::eval::ArrFrame { elems: Seq::empty() }));
+                            lemma_r_frame_set(Map::<usize, BCNum>::empty(), top, i, gval, x);
+                            let sn = upd_frames(found, 0u8, nf)->Some_0;
+                            assert(sn.len() == 1 && sn[0] == nf);
+                            assert(r_frame(t[0]@, sn[0]));
+                        }
+                        assert(r_frames(m2[nm_name]@, upd_frames(found, 0u8, nf)->Some_0));
+                        lemma_r_arrays_update(m, m2, st.arrays, nm_name, 0u8, nf);
+                    }
+                }
+                r
+            },
+            Place::Register(reg) => {
+                let v = self.store_register_ref(reg, &val, Ghost(st), Ghost(x));
+                proof {
+                    lemma_u64_mag(v as u64);
+                }
+                BCNum::new(big_from_usize(v), 0)
+            },
+        }
+    }
+
+    /// An assignment (the specification's `ev_assign`): the target is resolved before the value
+    /// is evaluated (as in GNU bc, `a[i++] = i` stores into `a[0]`), and the value of the
+    /// assignment is the value assigned, even when a register clamps it. POSIX: a single digit
+    /// assigned to `ibase` or `obase` is read as hexadecimal.
+    #[verifier::exec_allows_no_decreases_clause]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "three of them are the Ghost arguments of the refinement proof"
+    )]
+    fn eval_assign(&mut self, Ghost(node): Ghost<Expr>, op: AssignOp, target: &Expr, value: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            node == Expr::AssignOp(op, Box::new(*target), Box::new(*value)),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(node, nodes, n) && in_fragment(node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n) && in_fragment(node);
+        if !(matches!(target, Expr::Variable(_)) || matches!(target, Expr::ArrayAccess(..)) || matches!(target, Expr::RegisterAccess(_))) {
+            // Not a named expression: the parser never builds this.
+            return self.eval_other(&Expr::AssignOp(op, Box::new(target.clone()), Box::new(value.clone())));
+        }
+        let ghost (jt, jv) = if n < nodes.len() { match nodes[n as int] { Node::Assign(_, a, b) => (a, b), _ => (0usize, 0usize) } } else { (0usize, 0usize) };
+        let place = match self.resolve_ref(target, Ghost(nodes), Ghost(jt), Ghost(st)) {
+            Ok(p) => p,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            assert(done(resolve(nodes, jt, st, (f - 2) as u64).r));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let ghost fr = choose|f: u64| done(#[trigger] resolve(nodes, jt, st, f).r);
+        let ghost pr = resolve(nodes, jt, st, fr);
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] resolve(nodes, jt, st, f).r) implies resolve(nodes, jt, st, f) == pr by {
+                    if fr <= f { lemma_resolve_mono(nodes, jt, st, fr, f); } else { lemma_resolve_mono(nodes, jt, st, f, fr); }
+                }
+            }
+        }
+        let ghost st1 = pr.r.st;
+        let ghost code = assign_code(op);
+        let val = match self.assign_value(op, &place, value, Ghost(nodes), Ghost(jv), Ghost(pr.place), Ghost(st1)) {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            assert(done(resolve(nodes, jt, st, (f - 2) as u64).r));
+                            assert(done(assign_x(nodes, pr.place, code, jv, st1, (f - 2) as u64)));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let ghost fx = choose|f: u64| done(#[trigger] assign_x(nodes, pr.place, code, jv, st1, f));
+        let ghost x = assign_x(nodes, pr.place, code, jv, st1, fx);
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] assign_x(nodes, pr.place, code, jv, st1, f)) implies assign_x(nodes, pr.place, code, jv, st1, f) == x by {
+                    if fx <= f { lemma_assign_x_mono(nodes, pr.place, code, jv, st1, fx, f); } else { lemma_assign_x_mono(nodes, pr.place, code, jv, st1, f, fx); }
+                }
+            }
+        }
+        let r = val.copy();
+        let _ = self.store_ref(place, val, Ghost(pr.place), Ghost(x.st), Ghost(x.val));
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Ok(r), *self, ev_node(nodes, n, st, f), d) by {
+                    assert(done(resolve(nodes, jt, st, (f - 2) as u64).r));
+                    assert(done(assign_x(nodes, pr.place, code, jv, st1, (f - 2) as u64)));
+                }
+            }
+        }
+        Ok(r)
+    }
+
+    /// The value an assignment stores (`assign_x`): a single hexadecimal digit for `ibase` or
+    /// `obase`, the value of `=`, or the old value combined with the value of `op=`.
+    #[verifier::exec_allows_no_decreases_clause]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "four of them are the Ghost arguments of the refinement proof"
+    )]
+    fn assign_value(&mut self, op: AssignOp, place: &Place, value: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(jv): Ghost<usize>, Ghost(sp): Ghost<SpecPlace>, Ghost(st1): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st1) && r_place(*place, sp) && r_expr(*value, nodes, jv) && in_fragment(*value)) ==> forall|f: u64|
+                done(#[trigger] assign_x(nodes, sp, assign_code(op), jv, st1, f))
+                    ==> r_result(r, *final(self), assign_x(nodes, sp, assign_code(op), jv, st1, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st1) && r_place(*place, sp) && r_expr(*value, nodes, jv) && in_fragment(*value);
+        let ghost code = assign_code(op);
+        let hex = match (place, op, value) {
+            (Place::Register(Register::Ibase), AssignOp::Assign, Expr::Number(digits))
+            | (Place::Register(Register::Obase), AssignOp::Assign, Expr::Number(digits)) => {
+                let b = digits.as_str().as_bytes();
+                if b.len() == 1 { Some(verified_hex_char_val(b[0])) } else { None }
+            },
+            _ => None,
+        };
+        if let Some(h) = hex {
+            let v = BCNum::new(big_from_usize(h), 0);
+            proof {
+                if hyp {
+                    lemma_u64_mag(h as u64);
+                    assert(with_depth(st1, d as u64) == st1);
+                }
+            }
+            return Ok(v);
+        }
+        let ghost fv = choose|f: u64| done(#[trigger] ev(nodes, jv, st1, f));
+        let ghost xv = ev(nodes, jv, st1, fv);
+        let old_val = match op {
+            AssignOp::Assign => None,
+            AssignOp::Compound(_) => Some(self.load_ref(place, Ghost(sp), Ghost(st1))),
+        };
+        let rhs = match self.eval_ref(value, Ghost(nodes), Ghost(jv), Ghost(st1)) {
+            Ok(v) => v,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] assign_x(nodes, sp, code, jv, st1, f)) implies r_result(Err(e), *self, assign_x(nodes, sp, code, jv, st1, f), d) by {
+                            assert(done(ev(nodes, jv, st1, f)));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev(nodes, jv, st1, f)) implies ev(nodes, jv, st1, f) == xv by {
+                    if fv <= f { lemma_ev_mono(nodes, jv, st1, fv, f); } else { lemma_ev_mono(nodes, jv, st1, f, fv); }
+                }
+            }
+        }
+        match (op, old_val) {
+            (AssignOp::Compound(bin), Some(old_v)) => {
+                let res = self.arith_ref(bin, &old_v, &rhs, Ghost(bc_spec::eval::load(st1, sp)), Ghost(xv.val), Ghost(xv.st));
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] assign_x(nodes, sp, code, jv, st1, f)) implies r_result(res, *self, assign_x(nodes, sp, code, jv, st1, f), d) by {
+                            assert(done(ev(nodes, jv, st1, f)));
+                        }
+                    }
+                }
+                res
+            },
+            _ => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] assign_x(nodes, sp, code, jv, st1, f)) implies r_result(Ok(rhs), *self, assign_x(nodes, sp, code, jv, st1, f), d) by {
+                            assert(done(ev(nodes, jv, st1, f)));
+                        }
+                    }
+                }
+                Ok(rhs)
+            },
+        }
+    }
+
+    /// `++` / `--` (the specification's `ev_update`): a prefix form gives the stored value, a
+    /// postfix form the old one.
+    #[verifier::exec_allows_no_decreases_clause]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "three of them are the Ghost arguments of the refinement proof"
+    )]
+    fn eval_update(&mut self, Ghost(node): Ghost<Expr>, increment: bool, prefix: bool, target: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+        requires
+            old(self).inv(),
+            node == Expr::Update(increment, prefix, Box::new(*target)),
+        ensures
+            final(self).inv(),
+            final(self).eval_depth == old(self).eval_depth,
+            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            (r_state(*old(self), st) && r_expr(node, nodes, n) && in_fragment(node)) ==> forall|f: u64|
+                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
+    {
+        let ghost d = self.eval_depth;
+        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n) && in_fragment(node);
+        if !(matches!(target, Expr::Variable(_)) || matches!(target, Expr::ArrayAccess(..)) || matches!(target, Expr::RegisterAccess(_))) {
+            // Not a named expression: the parser never builds this.
+            return self.eval_other(&Expr::Update(increment, prefix, Box::new(target.clone())));
+        }
+        let ghost jt = if n < nodes.len() { match nodes[n as int] { Node::Update(_, _, a) => a, _ => 0usize } } else { 0usize };
+        let place = match self.resolve_ref(target, Ghost(nodes), Ghost(jt), Ghost(st)) {
+            Ok(p) => p,
+            Err(e) => {
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
+                            assert(done(resolve(nodes, jt, st, (f - 2) as u64).r));
+                        }
+                    }
+                }
+                return Err(e);
+            },
+        };
+        let ghost fr = choose|f: u64| done(#[trigger] resolve(nodes, jt, st, f).r);
+        let ghost pr = resolve(nodes, jt, st, fr);
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] resolve(nodes, jt, st, f).r) implies resolve(nodes, jt, st, f) == pr by {
+                    if fr <= f { lemma_resolve_mono(nodes, jt, st, fr, f); } else { lemma_resolve_mono(nodes, jt, st, f, fr); }
+                }
+            }
+        }
+        let ghost st1 = pr.r.st;
+        let ghost sold = bc_spec::eval::load(st1, pr.place);
+        let old_val = self.load_ref(&place, Ghost(pr.place), Ghost(st1));
+        let step = BCNum::new(big_from_usize(1), 0);
+        let new_val = if increment { old_val.add(&step) } else { old_val.sub(&step) };
+        let ghost snew = if increment { num_add(sold, one_num()) } else { num_sub(sold, one_num()) };
+        proof {
+            if hyp && exists|f: u64| done(#[trigger] resolve(nodes, jt, st, f).r) {
+                lemma_one_mag();
+                if increment { lemma_num_add(sold, one_num()); } else { lemma_num_sub(sold, one_num()); }
+            }
+        }
+        let stored = self.store_ref(place, new_val, Ghost(pr.place), Ghost(st1), Ghost(snew));
+        let r = if prefix { stored } else { old_val };
+        proof {
+            if hyp {
+                assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Ok(r), *self, ev_node(nodes, n, st, f), d) by {
+                    assert(done(resolve(nodes, jt, st, (f - 2) as u64).r));
+                }
+            }
+        }
+        Ok(r)
     }
 
     /// The trusted boundary of the expressions not proved yet: `evaluate_node`'s code for them,
