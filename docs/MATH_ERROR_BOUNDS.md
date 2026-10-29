@@ -133,6 +133,13 @@ start at x/2 > 0.4343·x for x > 0 (`bc_exp`).
 Arguments with x <= −2.3026·(scale + 1) give e^x < 10^−(scale+1) (2.3026 > ln 10) and return 0
 without computation. Arguments whose integer part exceeds 2·10^9 are an error.
 
+Verus proves `bc_exp` in place: e^(n·ln 2) = 2^n (`lemma_exp_n_ln2`, from `axiom_exp_ln` and
+`axiom_exp_add`), and any integer n is valid (n = 0 if the midpoint of ln 2 were not positive).
+For the shortcut, `lemma_exp_23026` shows e^2.3026 > 10: with z = 2.3026/4, the tail bound of
+the series after nine terms gives e^z >= 1.778284 (exact rational arithmetic), and
+1.778284^4 > 10; monotonicity and positivity of e^x follow from `axiom_exp_ge` and
+`axiom_exp_add`. `exp_ball` returns `None` if the working precision would exceed `u32::MAX`.
+
 ### `j(n, x)`
 
 J_n(x) = Σ_m (−1)^m (x/2)^(2m+n) / (m!·(m+n)!) for n >= 0; J_−n = (−1)^n J_n. The terms
@@ -150,9 +157,9 @@ integer part exceeds 2·10^9, are errors.
 - Verus proves the truncation decision (§1.3), the retry loop of `certify` (it ends, at
   `MAX_WORKING_PREC` at the latest, and an `Ok` result is the truncation of a value that every
   ball contains), the ball operations (§2), the constants π and ln 2, the summation of every
-  series with its tail, and `s(x)`, `c(x)`, `a(x)` and `l(x)` (§3), over the reals, assuming the
-  facts of `trusted_math.rs` (series tails, periodicity, Machin's formula, the identities of atan
-  and ln). For
+  series with its tail, and `s(x)`, `c(x)`, `a(x)`, `l(x)` and `e(x)` (§3), over the reals,
+  assuming the facts of `trusted_math.rs` (series tails, periodicity, Machin's formula, the
+  identities of atan, ln and exp). For
   these functions this is the end-to-end theorem: an `Ok` result is the exact value truncated toward zero at `scale` digits.
   It is partial correctness: that a series loop ends is argued in §2, not proved.
 - The argument reductions and the assembly of each function (§3) are argued here and tested (`mathlib::tests`,
