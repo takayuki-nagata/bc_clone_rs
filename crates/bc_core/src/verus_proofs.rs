@@ -32,9 +32,8 @@
 //! `bc_cli::run_app`; `verified_c_ffi_copy_nul_terminated` → `bc_c_api::write_c_string`;
 //! `verified_zephyr_repl_edit_step` → `bc_zephyr::run_repl_with`.
 //!
-//! `lemma_certified_truncation` and `lemma_certified_truncation_exact` prove, over the integers,
-//! the decision that `mathlib::certified_trunc` implements with `BigInt`; the property test
-//! `mathlib::tests::certified_trunc_is_sound` checks the production function.
+//! The math library's ball operations, `certified_trunc` and `certify` are verified in place in
+//! `mathlib.rs` (over the reals, with the lemmas of `real_arith.rs`).
 
 use crate::spec_num::*;
 use crate::verified_kernels::*;
@@ -1555,119 +1554,6 @@ pub fn verified_cli_parse_args(args: &[u8]) -> (res: (bool, bool, usize, usize))
 
     let initial_scale: usize = verified_cli_initial_scale(math_enabled);
     (false, math_enabled, initial_scale, file_count)
-}
-
-// ============================================================================
-// Certified truncation of the math library (`mathlib::certified_trunc`)
-// ============================================================================
-
-/// Soundness of `mathlib::certified_trunc`. A ball `[mid - rad, mid + rad]` in units of
-/// `10^-prec` contains the true value `num / den` (a rational model of the real value: any real
-/// in the ball is approximated arbitrarily well by such fractions, and the conclusion holds for
-/// each of them). With `unit = 10^(prec - scale)`, `q = mid / unit` and `r = mid % unit`: if
-/// `rad < r` and `r + rad < unit`, the true value truncated toward zero to `scale` digits is
-/// `q` when `q >= 0` and `q + 1` when `q < 0`, which is what `certified_trunc` returns.
-pub proof fn lemma_certified_truncation(num: int, den: int, mid: int, rad: int, unit: int)
-    requires
-        den > 0,
-        unit > 0,
-        rad >= 0,
-        mid * den - rad * den <= num,
-        num <= mid * den + rad * den,
-        rad < mid % unit,
-        mid % unit + rad < unit,
-    ensures
-        trunc_div(num, den * unit) == (if mid / unit >= 0 {
-            mid / unit
-        } else {
-            mid / unit + 1
-        }),
-{
-    let q = mid / unit;
-    let r = mid % unit;
-    let d = den * unit;
-    assert(mid == q * unit + r && 0 <= r && r < unit) by (nonlinear_arith)
-        requires
-            unit > 0,
-            q == mid / unit,
-            r == mid % unit,
-    ;
-    assert(d > 0) by (nonlinear_arith)
-        requires
-            den > 0,
-            unit > 0,
-            d == den * unit,
-    ;
-    // q·d < num < (q + 1)·d: the ball lies strictly between two multiples of `unit`.
-    assert(q * d < num) by (nonlinear_arith)
-        requires
-            den > 0,
-            d == den * unit,
-            mid == q * unit + r,
-            rad < r,
-            mid * den - rad * den <= num,
-    ;
-    assert(num < q * d + d) by (nonlinear_arith)
-        requires
-            den > 0,
-            d == den * unit,
-            mid == q * unit + r,
-            r + rad < unit,
-            num <= mid * den + rad * den,
-    ;
-    if q >= 0 {
-        assert(q * d >= 0) by (nonlinear_arith)
-            requires
-                q >= 0,
-                d > 0,
-        ;
-        lemma_floor_div_unique(num, d, q);
-    } else {
-        assert(q * d + d <= 0) by (nonlinear_arith)
-            requires
-                q < 0,
-                d > 0,
-        ;
-        // -num lies strictly between (-q - 1)·d and -q·d.
-        assert((-q - 1) * d <= -num && -num < (-q - 1) * d + d) by (nonlinear_arith)
-            requires
-                q * d < num,
-                num < q * d + d,
-        ;
-        lemma_floor_div_unique(-num, d, -q - 1);
-    }
-}
-
-/// The exact case of `mathlib::certified_trunc`: a ball of radius 0 on a multiple of `unit`.
-pub proof fn lemma_certified_truncation_exact(num: int, den: int, mid: int, unit: int)
-    requires
-        den > 0,
-        unit > 0,
-        num == mid * den,
-        mid % unit == 0,
-    ensures
-        trunc_div(num, den * unit) == mid / unit,
-{
-    let q = mid / unit;
-    let d = den * unit;
-    assert(mid == q * unit && d > 0 && num == q * d) by (nonlinear_arith)
-        requires
-            den > 0,
-            unit > 0,
-            q == mid / unit,
-            mid % unit == 0,
-            d == den * unit,
-            num == mid * den,
-    ;
-    if q >= 0 {
-        lemma_floor_div_unique(num, d, q);
-    } else {
-        assert(-num == (-q) * d) by (nonlinear_arith)
-            requires
-                num == q * d,
-        ;
-        lemma_floor_div_unique(-num, d, -q);
-    }
 }
 
 } // verus!

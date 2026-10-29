@@ -227,6 +227,54 @@ pub fn big_pow10(n: u32) -> (r: BigInt)
     BigInt::from(10).pow(n)
 }
 
+#[verifier::external_body]
+pub fn big_from_i64(n: i64) -> (r: BigInt)
+    ensures
+        big_view(&r) == n,
+{
+    BigInt::from(n)
+}
+
+/// `a + d` for a small `d`, reusing `a`'s storage.
+#[verifier::external_body]
+pub fn big_add_i64(a: BigInt, d: i64) -> (r: BigInt)
+    ensures
+        big_view(&r) == big_view(&a) + d,
+{
+    a + d
+}
+
+/// `a·2^n` (`<<`).
+#[verifier::external_body]
+pub fn big_shl(a: &BigInt, n: u64) -> (r: BigInt)
+    ensures
+        big_view(&r) == big_view(a) * spec_pow_int(2, n as nat),
+{
+    a << n
+}
+
+/// `⌊a / 2^n⌋` (`>>`, which rounds toward negative infinity on a `BigInt`).
+#[verifier::external_body]
+pub fn big_shr(a: &BigInt, n: u64) -> (r: BigInt)
+    ensures
+        big_view(&r) == big_view(a) / spec_pow_int(2, n as nat),
+{
+    a >> n
+}
+
+/// The floor quotient and remainder (`Integer::div_mod_floor`) for a positive divisor; Verus's
+/// `/` and `%` are the floor quotient and the nonnegative remainder for a positive divisor.
+#[verifier::external_body]
+pub fn big_div_mod_floor(a: &BigInt, b: &BigInt) -> (r: (BigInt, BigInt))
+    requires
+        big_view(b) > 0,
+    ensures
+        big_view(&r.0) == big_view(a) / big_view(b),
+        big_view(&r.1) == big_view(a) % big_view(b),
+{
+    num_integer::Integer::div_mod_floor(a, b)
+}
+
 } // verus!
 
 #[cfg(test)]
@@ -295,6 +343,23 @@ mod tests {
         #[test]
         fn from_usize(n in any::<usize>()) {
             prop_assert_eq!(big_from_usize(n), BigInt::from(n));
+        }
+    }
+
+    /// Floor division and remainder over `i128`, for a positive divisor.
+    fn floor_div_mod(a: i128, b: i128) -> (i128, i128) {
+        (a.div_euclid(b), a.rem_euclid(b))
+    }
+
+    proptest! {
+        #[test]
+        fn shifts_and_floor_division(a in -(1i128 << 60)..(1i128 << 60), b in 1i128..(1i128 << 60), n in 0u64..60, v in any::<i64>()) {
+            prop_assert_eq!(big_from_i64(v), big(i128::from(v)));
+            prop_assert_eq!(big_add_i64(big(a), v), big(a + i128::from(v)));
+            prop_assert_eq!(big_shl(&big(a), n), big(a * (1i128 << n)));
+            prop_assert_eq!(big_shr(&big(a), n), big(floor_div_mod(a, 1i128 << n).0));
+            let (q, r) = floor_div_mod(a, b);
+            prop_assert_eq!(big_div_mod_floor(&big(a), &big(b)), (big(q), big(r)));
         }
     }
 

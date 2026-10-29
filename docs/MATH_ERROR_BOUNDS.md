@@ -13,9 +13,9 @@ document gives the argument behind that claim for the implementation in
 2. Infinite series are summed until the next term is small, and a bound on the omitted tail is
    added to the radius (§3). So the final ball contains the exact function value.
 3. `certified_trunc` accepts the ball only if every value in it truncates to the same result
-   at `scale` digits. Its soundness is proved in Verus (`lemma_certified_truncation`,
-   `lemma_certified_truncation_exact` in `verus_proofs.rs`) and property-tested
-   (`mathlib::tests::certified_trunc_is_sound`).
+   at `scale` digits. Its soundness is proved in Verus over the reals (in place, with
+   `lemma_certified_trunc_real` and `lemma_certified_trunc_real_exact` in `real_arith.rs`) and
+   property-tested (`mathlib::tests::certified_trunc_is_sound`).
 4. If the ball is rejected, `certify` doubles the guard digits p − scale and recomputes (Ziv's
    strategy). The radii shrink in proportion to 10^−p, so the loop ends unless the exact value is
    itself a truncation boundary k·10^−scale. That happens only for the exact cases handled before
@@ -43,7 +43,10 @@ Let A = a·10^p denote a value in ulps, with ball (MA, RA), so |A − MA| <= RA.
 | A / B (requires \|MB\| > RB) | trunc(MA·10^p / MB) | ⌈10^p·(RA·\|MB\| + \|MA\|·RB) / ((\|MB\| − RB)·\|MB\|)⌉ + 1 | A/B − MA/MB = (δA·MB − MA·δB) / (B·MB) and \|B\| >= \|MB\| − RB |
 | √A (requires MA >= RA, MA·10^p >= 1) | isqrt(MA·10^p) | ⌈RA·10^p / isqrt(MA·10^p)⌉ + 1 | \|√(A·10^p) − √(MA·10^p)\| = \|δA\|·10^p / (√(A·10^p) + √(MA·10^p)) |
 
-`mathlib::tests::ball_operations_contain_exact_results` checks containment for random operands.
+Verus proves each row in place (`Ball` in `mathlib.rs`, lemmas `lemma_ball_*` in
+`real_arith.rs`): for all reals in the operands' balls, the result's ball contains the exact
+result. `mathlib::tests::ball_operations_contain_exact_results` also checks containment for
+random operands.
 
 Series stop when the next term's bound `|mid| + rad` is at most 16 ulps (`TAIL_ULPS`). The radius
 of a term settles below that: each step multiplies the previous radius by a factor below 1/2
@@ -111,7 +114,10 @@ integer part exceeds 2·10^9, are errors.
 
 ## 4. What is and is not machine-checked
 
-- Verus proves the truncation decision (§1.3) over the integers.
-- The ball operations (§2) and the series bounds (§3) are argued here and tested
-  (`mathlib::tests`, the property tests, `test_math_library_against_high_precision_oracle`, which
-  compares with GNU `bc` at `scale + 100`). Machine-checking them is future work.
+- Verus proves the truncation decision (§1.3), the retry loop of `certify` (it ends, at
+  `MAX_WORKING_PREC` at the latest, and an `Ok` result is the truncation of a value that every
+  ball contains), and the ball operations (§2), over the reals.
+- The series bounds and argument reductions (§3) are argued here and tested (`mathlib::tests`,
+  the property tests, `test_math_library_against_high_precision_oracle`, which compares with GNU
+  `bc` at `scale + 100`). Machine-checking them against the facts of real analysis stated in
+  `trusted_math.rs` is in progress.

@@ -59,6 +59,13 @@
 - A syntax error no longer clears the `break` and `return` flags (only a runtime error does, as
   in the specification; no unit leaves them set). A diagnostic's line number above 2³² − 1 is
   replaced by the unit's first line (`docs/COMPATIBILITY.md` §3.2).
+- The math library's interval arithmetic is verified with Verus over the reals:
+  every ball operation (`+`, `−`, integer multiples and quotients, shifts, precision reduction,
+  `×`, `÷`, `√`) contains the exact result for all values in its operands' balls, the truncation
+  decision is proved in place, and the retry loop ends and returns the truncation of any value
+  that all its balls contain. The facts of real analysis that the remaining proofs will assume
+  (series tail bounds, periodicity, Machin's formula, …) are stated as axioms with their sources
+  in `crates/bc_core/src/trusted_math.rs`.
 
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval

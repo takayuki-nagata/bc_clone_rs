@@ -9,8 +9,8 @@
 //! |v·10^p − mid| <= rad. The lemmas take the unit u = 10^p as an integer argument, so that they
 //! do not depend on how u is computed.
 
-use crate::spec_num::trunc_div;
-use crate::trusted_math::abs_r;
+use crate::spec_num::{spec_tdiv, trunc_div};
+use crate::trusted_math::{abs_r, axiom_sqrt, sqrt_r};
 use vstd::prelude::*;
 
 verus! {
@@ -64,6 +64,38 @@ pub proof fn lemma_cast_abs(a: int)
 {
 }
 
+/// |x·y| = |x|·|y|.
+pub proof fn lemma_abs_mul(x: real, y: real)
+    ensures
+        abs_r(x * y) == abs_r(x) * abs_r(y),
+{
+    if x >= 0real && y >= 0real {
+        assert(x * y >= 0real) by (nonlinear_arith)
+            requires
+                x >= 0real,
+                y >= 0real,
+        ;
+    } else if x >= 0real {
+        assert(x * y <= 0real && -(x * y) == x * (-y)) by (nonlinear_arith)
+            requires
+                x >= 0real,
+                y < 0real,
+        ;
+    } else if y >= 0real {
+        assert(x * y <= 0real && -(x * y) == (-x) * y) by (nonlinear_arith)
+            requires
+                x < 0real,
+                y >= 0real,
+        ;
+    } else {
+        assert(x * y > 0real && x * y == (-x) * (-y)) by (nonlinear_arith)
+            requires
+                x < 0real,
+                y < 0real,
+        ;
+    }
+}
+
 /// The truncating quotient is within 1 of the real quotient.
 pub proof fn lemma_trunc_div_close(a: int, b: int)
     requires
@@ -102,6 +134,29 @@ pub proof fn lemma_trunc_div_close(a: int, b: int)
             ar - br < qr * br,
             qr * br < ar + br,
     ;
+}
+
+/// `BigInt`'s truncating quotient (for a divisor of either sign) is within 1 of the real
+/// quotient.
+pub proof fn lemma_spec_tdiv_close(a: int, b: int)
+    requires
+        b != 0,
+    ensures
+        abs_r((a as real) / (b as real) - (spec_tdiv(a, b) as real)) < 1real,
+{
+    if b > 0 {
+        assert(spec_tdiv(a, b) == trunc_div(a, b));
+        lemma_trunc_div_close(a, b);
+    } else {
+        assert(spec_tdiv(a, b) == -trunc_div(a, -b));
+        lemma_trunc_div_close(a, -b);
+        let ar = a as real;
+        let br = b as real;
+        assert(ar / br == -(ar / (-br))) by (nonlinear_arith)
+            requires
+                br < 0real,
+        ;
+    }
 }
 
 /// The floor quotient (Verus's `/` for a positive divisor) is at most the real quotient and
@@ -353,6 +408,231 @@ pub proof fn lemma_ball_mul(ma: int, ra: int, mb: int, rb: int, u: int, va: real
             abs_r(a * b - p) <= sr,
             abs_r(p / ur - m) < 1real,
             c * ur >= sr,
+    ;
+}
+
+/// A / B (|MB| > RB, so B is not 0): with N = RA·|MB| + |MA|·RB and D = (|MB| − RB)·|MB|,
+/// |A/B − MA/MB| = |δA·MB − MA·δB| / (|B|·|MB|) <= N / D since |B| >= |MB| − RB. The
+/// midpoint MA·u / MB is truncated toward zero.
+pub proof fn lemma_ball_div(ma: int, ra: int, mb: int, rb: int, u: int, va: real, vb: real)
+    requires
+        u > 0,
+        ra >= 0,
+        rb >= 0,
+        abs_i(mb) > rb,
+        in_ball(ma, ra, u, va),
+        in_ball(mb, rb, u, vb),
+    ensures
+        vb != 0real,
+        in_ball(
+            spec_tdiv(ma * u, mb),
+            ceil_div_i((ra * abs_i(mb) + abs_i(ma) * rb) * u, (abs_i(mb) - rb) * abs_i(mb)) + 1,
+            u,
+            va / vb,
+        ),
+{
+    let ur = u as real;
+    let a = va * ur;
+    let b = vb * ur;
+    let mar = ma as real;
+    let mbr = mb as real;
+    let rar = ra as real;
+    let rbr = rb as real;
+    let amb = abs_r(mbr);
+    lemma_cast_abs(mb);
+    lemma_cast_abs(ma);
+    // |B| >= |MB| − RB > 0.
+    assert(abs_r(b) >= amb - rbr && amb - rbr > 0real) by (nonlinear_arith)
+        requires
+            abs_r(b - mbr) <= rbr,
+            amb == abs_r(mbr),
+            amb > rbr,
+    ;
+    assert(vb != 0real) by (nonlinear_arith)
+        requires
+            b == vb * ur,
+            abs_r(b) > 0real,
+    ;
+    let n = rar * amb + abs_r(mar) * rbr;
+    let d = (amb - rbr) * amb;
+    // |a·MB − MA·b| <= N.
+    assert(abs_r(a * mbr - mar * b) <= n) by (nonlinear_arith)
+        requires
+            abs_r(a - mar) <= rar,
+            abs_r(b - mbr) <= rbr,
+            rar >= 0real,
+            rbr >= 0real,
+            amb == abs_r(mbr),
+            n == rar * amb + abs_r(mar) * rbr,
+    ;
+    let e = a / b - mar / mbr;
+    assert(e == (a * mbr - mar * b) / (b * mbr)) by (nonlinear_arith)
+        requires
+            b != 0real,
+            mbr != 0real,
+            e == a / b - mar / mbr,
+    ;
+    lemma_abs_mul(b, mbr);
+    assert(abs_r(b * mbr) >= d && d > 0real) by (nonlinear_arith)
+        requires
+            abs_r(b * mbr) == abs_r(b) * amb,
+            abs_r(b) >= amb - rbr,
+            amb - rbr > 0real,
+            rbr >= 0real,
+            amb == abs_r(mbr),
+            d == (amb - rbr) * amb,
+    ;
+    assert(abs_r(e) <= n / d) by (nonlinear_arith)
+        requires
+            e == (a * mbr - mar * b) / (b * mbr),
+            abs_r(a * mbr - mar * b) <= n,
+            abs_r(b * mbr) >= d,
+            d > 0real,
+            n >= 0real,
+    ;
+    // In ulps: (va/vb)·u = (a/b)·u and the midpoint approximates (MA/MB)·u = MA·u / MB.
+    assert(va / vb * ur == (a / b) * ur) by (nonlinear_arith)
+        requires
+            a == va * ur,
+            b == vb * ur,
+            ur > 0real,
+            vb != 0real,
+    ;
+    let ni = (ra * abs_i(mb) + abs_i(ma) * rb) * u;
+    let di = (abs_i(mb) - rb) * abs_i(mb);
+    lemma_cast_mul(ra, abs_i(mb));
+    lemma_cast_mul(abs_i(ma), rb);
+    lemma_cast_mul(ra * abs_i(mb) + abs_i(ma) * rb, u);
+    lemma_cast_mul(abs_i(mb) - rb, abs_i(mb));
+    lemma_cast_mul(ma, u);
+    assert(ni as real == n * ur && di as real == d);
+    assert(ni >= 0 && di > 0) by (nonlinear_arith)
+        requires
+            ra >= 0,
+            rb >= 0,
+            u > 0,
+            abs_i(mb) > rb,
+            abs_i(ma) >= 0,
+            ni == (ra * abs_i(mb) + abs_i(ma) * rb) * u,
+            di == (abs_i(mb) - rb) * abs_i(mb),
+    ;
+    lemma_ceil_div(ni, di);
+    lemma_cast_add(ceil_div_i(ni, di), 1);
+    lemma_spec_tdiv_close(ma * u, mb);
+    let m = spec_tdiv(ma * u, mb) as real;
+    let c = ceil_div_i(ni, di) as real;
+    let p = (ma * u) as real;
+    assert(p / mbr == (mar / mbr) * ur) by (nonlinear_arith)
+        requires
+            p == mar * ur,
+            mbr != 0real,
+    ;
+    assert(abs_r((a / b) * ur - m) <= c + 1real) by (nonlinear_arith)
+        requires
+            ur > 0real,
+            abs_r(a / b - mar / mbr) <= n / d,
+            d > 0real,
+            abs_r(p / mbr - m) < 1real,
+            p / mbr == (mar / mbr) * ur,
+            c * d >= n * ur,
+    ;
+}
+
+/// √A at unit u for MA >= RA and root = isqrt(MA·u) >= 1: |√(A·u) − √(MA·u)| <= RA·u /
+/// √(MA·u) <= RA·u / root, and |√(MA·u) − root| < 1. A ball value va is then >= 0, and
+/// √va·u = √(A·u).
+pub proof fn lemma_ball_sqrt(ma: int, ra: int, u: int, va: real, root: int)
+    requires
+        u > 0,
+        ra >= 0,
+        ma >= ra,
+        root >= 1,
+        root * root <= ma * u,
+        ma * u < (root + 1) * (root + 1),
+        in_ball(ma, ra, u, va),
+    ensures
+        va >= 0real,
+        in_ball(root, ceil_div_i(ra * u, root) + 1, u, sqrt_r(va)),
+{
+    let ur = u as real;
+    let a = va * ur;
+    let mar = ma as real;
+    let rar = ra as real;
+    assert(va >= 0real) by (nonlinear_arith)
+        requires
+            abs_r(a - mar) <= rar,
+            mar >= rar,
+            a == va * ur,
+            ur > 0real,
+    ;
+    axiom_sqrt(va);
+    let s = sqrt_r(va);
+    let sa = s * ur;
+    assert(sa * sa == a * ur) by (nonlinear_arith)
+        requires
+            s * s == va,
+            sa == s * ur,
+            a == va * ur,
+    ;
+    lemma_cast_mul(ma, u);
+    let mu = (ma * u) as real;
+    assert(mu >= 1real) by (nonlinear_arith)
+        requires
+            root >= 1,
+            root * root <= ma * u,
+            mu == (ma * u) as real,
+    ;
+    axiom_sqrt(mu);
+    let t = sqrt_r(mu);
+    let rr = root as real;
+    lemma_cast_mul(root, root);
+    lemma_cast_mul(root + 1, root + 1);
+    lemma_cast_add(root, 1);
+    assert(rr * rr <= mu && mu < (rr + 1real) * (rr + 1real));
+    assert(rr <= t && t < rr + 1real) by (nonlinear_arith)
+        requires
+            t >= 0real,
+            t * t == mu,
+            rr >= 1real,
+            rr * rr <= mu,
+            mu < (rr + 1real) * (rr + 1real),
+    ;
+    assert(sa >= 0real) by (nonlinear_arith)
+        requires
+            s >= 0real,
+            ur > 0real,
+            sa == s * ur,
+    ;
+    assert(a * ur >= 0real) by (nonlinear_arith)
+        requires
+            va >= 0real,
+            ur > 0real,
+            a == va * ur,
+    ;
+    lemma_sqrt_close(a * ur, mu, sa, t);
+    assert(abs_r(a * ur - mu) <= rar * ur) by (nonlinear_arith)
+        requires
+            abs_r(a - mar) <= rar,
+            mu == mar * ur,
+            ur > 0real,
+    ;
+    lemma_cast_mul(ra, u);
+    assert(ra * u >= 0) by (nonlinear_arith)
+        requires
+            ra >= 0,
+            u > 0,
+    ;
+    lemma_ceil_div(ra * u, root);
+    lemma_cast_add(ceil_div_i(ra * u, root), 1);
+    let c = ceil_div_i(ra * u, root) as real;
+    assert(abs_r(sa - rr) <= c + 1real) by (nonlinear_arith)
+        requires
+            abs_r(sa - t) * t <= abs_r(a * ur - mu),
+            abs_r(a * ur - mu) <= rar * ur,
+            rr <= t,
+            t < rr + 1real,
+            rr >= 1real,
+            c * rr >= rar * ur,
     ;
 }
 
