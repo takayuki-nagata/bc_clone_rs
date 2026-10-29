@@ -95,6 +95,11 @@ The argument is reduced to r = x − k·2π, k = round(x / 2π) (any integer k i
 computed with as many extra digits as x has integer digits, so |k|·rad(2π) stays within a few
 ulps. Then |r| <= π + ε < 4 and the Taylor terms r^k/k! decrease once (k+1)(k+2) >= r².
 
+Verus proves `bc_sin` and `bc_cos` in place: `reduce_angle` returns a ball that contains
+x − k·2π for some integer k (it takes k = 0 if the midpoint of 2π were not positive, and returns
+`None` if the working precision would exceed `u32::MAX`), `axiom_sin_cos_periodic` carries the
+series' value back to x, and sin 0 = 0, cos 0 = 1 follow from the series' tail bound.
+
 ### `a(x)`
 
 atan is odd; for |x| > 1, atan|x| = π/2 − atan(1/|x|). Four half-angle steps
@@ -134,10 +139,11 @@ integer part exceeds 2·10^9, are errors.
 
 - Verus proves the truncation decision (§1.3), the retry loop of `certify` (it ends, at
   `MAX_WORKING_PREC` at the latest, and an `Ok` result is the truncation of a value that every
-  ball contains), the ball operations (§2), the constants π and ln 2, and the summation of every
-  series with its tail (§3), over the reals, assuming the facts of `trusted_math.rs` (series
-  tails, Machin's formula). This is partial correctness: that a series loop ends is argued in §2,
-  not proved.
+  ball contains), the ball operations (§2), the constants π and ln 2, the summation of every
+  series with its tail, and `s(x)` and `c(x)` (§3), over the reals, assuming the facts of
+  `trusted_math.rs` (series tails, periodicity, Machin's formula). For `s` and `c` this is the
+  end-to-end theorem: an `Ok` result is the exact value truncated toward zero at `scale` digits.
+  It is partial correctness: that a series loop ends is argued in §2, not proved.
 - The argument reductions and the assembly of each function (§3) are argued here and tested (`mathlib::tests`,
   the property tests, `test_math_library_against_high_precision_oracle`, which compares with GNU
   `bc` at `scale + 100`). Machine-checking them against the facts of real analysis stated in
