@@ -68,7 +68,8 @@
   return a ball containing the series' value; the argument bound that a tail bound needs is now
   checked at run time (it always holds for the library's arguments). For all six functions
   the whole result is proved: an `Ok` result is the exact value truncated toward zero at `scale`
-  digits (partial correctness: that a series loop ends is not proved). The
+  digits (partial correctness: that a series loop ends is not proved). The evaluator's call of
+  these functions (`eval_math`) is verified too: it is no longer a trusted boundary. The
   facts of real analysis that these proofs assume (series tail bounds, periodicity, Machin's
   formula, …) are stated as axioms with their sources in `crates/bc_core/src/trusted_math.rs`.
 

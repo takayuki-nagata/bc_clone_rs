@@ -1592,8 +1592,24 @@ fn sum_series(first: Ball, series: &Series, Ghost(x): Ghost<real>) -> (r: Option
                     tf as int,
                     big_view(&bound),
                 );
+                let (bv, ti) = (big_view(&bound), tf as int);
+                assert(big_view(&tail) == ti * bv) by (nonlinear_arith)
+                    requires
+                        big_view(&tail) == bv * ti,
+                ;
+                assert(bv >= 0 && ti >= 1);
+                assert(ti * bv >= 0) by (nonlinear_arith)
+                    requires
+                        bv >= 0,
+                        ti >= 1,
+                ;
             }
-            return Some(sum.widen(&tail));
+            let r = sum.widen(&tail);
+            proof {
+                assert(r.unit() == sum.unit());
+                assert(r.contains(v));
+            }
+            return Some(r);
         }
         proof {
             assert(partial_sum(t, (k + 1) as nat) == partial_sum(t, k as nat) + t(k as nat));
@@ -2570,6 +2586,15 @@ proof fn lemma_pow_r_gt(a: real, b: real, k: nat)
     if k == 1 {
         assert(pow_r(a, 1) == a * pow_r(a, 0));
         assert(pow_r(b, 1) == b * pow_r(b, 0));
+        let (pa0, pb0) = (pow_r(a, 0), pow_r(b, 0));
+        assert(pa0 == 1real && pb0 == 1real);
+        assert(a * pa0 > b * pb0 && b * pb0 > 0real) by (nonlinear_arith)
+            requires
+                pa0 == 1real,
+                pb0 == 1real,
+                a > b,
+                b > 0real,
+        ;
     } else {
         lemma_pow_r_gt(a, b, (k - 1) as nat);
         let (pa, pb) = (pow_r(a, (k - 1) as nat), pow_r(b, (k - 1) as nat));
@@ -3574,6 +3599,52 @@ proof fn lemma_trunc_small(y: real)
         abs_r(y) < 1real,
     ensures
         trunc_r(y) == 0,
+{
+}
+
+} // verus!
+
+verus! {
+
+/// The result `r` of `-l`'s function `name` (its bytes) is correct for the arguments `a` (and
+/// `b` for `j`): the exact value truncated toward zero at `r.scale` digits (for `l` with
+/// a <= 0, GNU's 1 − 10^scale). This is what `bc_sin`, …, `bc_bessel` ensure.
+pub open spec fn math_result(name: Seq<u8>, a: BCNum, b: BCNum, r: BCNum) -> bool {
+    let p = spec_num::pow10(r.scale as nat);
+    let pr = p as real;
+    let c = big_view(&r.coeff);
+    if name == seq![115u8] {
+        c == trunc_r(sin_r(bcnum_real(&a)) * pr)
+    } else if name == seq![99u8] {
+        c == trunc_r(cos_r(bcnum_real(&a)) * pr)
+    } else if name == seq![97u8] {
+        c == trunc_r(atan_r(bcnum_real(&a)) * pr)
+    } else if name == seq![108u8] {
+        if big_view(&a.coeff) > 0 {
+            c == trunc_r(ln_r(bcnum_real(&a)) * pr)
+        } else {
+            c == (1 - p) * p
+        }
+    } else if name == seq![101u8] {
+        c == trunc_r(exp_r(bcnum_real(&a)) * pr)
+    } else if name == seq![106u8] {
+        c == trunc_r(bessel_int_r(bessel_order(&a), bcnum_real(&b)) * pr)
+    } else {
+        false
+    }
+}
+
+/// `r` is a correct result of `-l`'s function `name` for some argument values.
+pub open spec fn math_ok(name: Seq<u8>, r: BCNum) -> bool {
+    exists|a: BCNum, b: BCNum| #[trigger] math_result(name, a, b, r)
+}
+
+/// A witness for `math_ok`.
+pub proof fn lemma_math_ok(name: Seq<u8>, a: BCNum, b: BCNum, r: BCNum)
+    requires
+        math_result(name, a, b, r),
+    ensures
+        math_ok(name, r),
 {
 }
 

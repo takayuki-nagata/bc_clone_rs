@@ -17,6 +17,9 @@ use crate::error::{BcError, RuntimeError};
 use crate::format::{push_dec, wrap_output};
 use crate::math::BCNum;
 use crate::math::pow10_within;
+use crate::math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
+#[cfg(verus_keep_ghost)]
+use crate::mathlib::{lemma_math_ok, math_ok};
 use crate::parser::{
     AssignOp, BinOp, DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Param,
     Register, RelOp, Stmt,
@@ -4335,11 +4338,16 @@ impl Evaluator {
         }
     }
 
-    /// The trusted boundary of the math library (`-l`): `call_math`, assumed to keep the
-    /// invariant and the depth. The refinement theorem excludes `-l` (`r_state` requires
+    /// `-l`'s functions, for a name that has no definition when the math library is enabled:
+    /// `s`, `c`, `a`, `l`, `e` with one expression argument and `j` with two; any other name or
+    /// argument list is undefined. The arguments are evaluated first, then the function runs at
+    /// the `scale` that the evaluation left. An `Ok` result is the function's exact value at
+    /// some argument values, truncated toward zero at that scale (`mathlib::math_result`); which
+    /// values is not stated, because the refinement theorem excludes `-l` (`r_state` requires
     /// `!math_enabled`).
-    #[verifier::external_body]
+    #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::ptr_arg, reason = "the call's argument list")]
+    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
     fn eval_math(&mut self, name: &String, args: &Vec<ExprOrArray>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
@@ -4347,8 +4355,60 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
+            r is Ok ==> r->Ok_0.scale == final(self).scale,
+            r is Ok ==> math_ok(text_view(*name), r->Ok_0),
     {
-        self.call_math(name, args)
+        let nb = name.as_str().as_bytes();
+        if nb.len() == 1 && args.len() == 1 {
+            let c = nb[0];
+            if let ExprOrArray::Expr(expr) = &args[0] {
+                // s, c, a, l, e
+                if c == 115 || c == 99 || c == 97 || c == 108 || c == 101 {
+                    let x = self.eval_ref(expr, Ghost(arbitrary()), Ghost(0usize), Ghost(arbitrary()))?;
+                    let scale = self.scale;
+                    let res = if c == 115 {
+                        bc_sin(&x, scale)
+                    } else if c == 99 {
+                        bc_cos(&x, scale)
+                    } else if c == 97 {
+                        bc_atan(&x, scale)
+                    } else if c == 108 {
+                        bc_ln(&x, scale)
+                    } else {
+                        bc_exp(&x, scale)
+                    };
+                    return match res {
+                        Ok(v) => {
+                            proof {
+                                assert(nb@ =~= seq![c]);
+                                lemma_math_ok(text_view(*name), x, v, v);
+                            }
+                            Ok(v)
+                        },
+                        Err(kind) => Err(BcError::Runtime { kind, func: None }),
+                    };
+                }
+            }
+        }
+        if nb.len() == 1 && nb[0] == 106 && args.len() == 2 {
+            if let ExprOrArray::Expr(expr_n) = &args[0] {
+                if let ExprOrArray::Expr(expr_x) = &args[1] {
+                    let n_val = self.eval_ref(expr_n, Ghost(arbitrary()), Ghost(0usize), Ghost(arbitrary()))?;
+                    let x_val = self.eval_ref(expr_x, Ghost(arbitrary()), Ghost(0usize), Ghost(arbitrary()))?;
+                    return match bc_bessel(&n_val, &x_val, self.scale) {
+                        Ok(v) => {
+                            proof {
+                                assert(nb@ =~= seq![106u8]);
+                                lemma_math_ok(text_view(*name), n_val, x_val, v);
+                            }
+                            Ok(v)
+                        },
+                        Err(kind) => Err(BcError::Runtime { kind, func: None }),
+                    };
+                }
+            }
+        }
+        Err(BcError::Runtime { kind: RuntimeError::UndefinedFunction(name.clone()), func: None })
     }
 }
 
@@ -4425,40 +4485,6 @@ impl Evaluator {
     /// Sets the `scale` register (e.g. a front end's default scale), clamped to `BC_SCALE_MAX`.
     pub fn set_scale(&mut self, scale: usize) {
         self.scale = verified_clamp_register(scale, false, 0, BC_SCALE_MAX).0;
-    }
-
-    /// `-l`'s functions, called by `eval_math` for a name that has no definition (not verified:
-    /// the refinement theorem excludes `-l`). Any other name is undefined.
-    #[allow(
-        clippy::ptr_arg,
-        reason = "the call's argument list, as `eval_math` passes it"
-    )]
-    fn call_math(&mut self, name: &String, args: &Vec<ExprOrArray>) -> Result<BCNum, BcError> {
-        use crate::math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
-        match (name.as_str(), args.as_slice()) {
-            ("s", [ExprOrArray::Expr(expr)]) => {
-                return Ok(bc_sin(&self.try_evaluate(expr)?, self.scale)?);
-            }
-            ("c", [ExprOrArray::Expr(expr)]) => {
-                return Ok(bc_cos(&self.try_evaluate(expr)?, self.scale)?);
-            }
-            ("a", [ExprOrArray::Expr(expr)]) => {
-                return Ok(bc_atan(&self.try_evaluate(expr)?, self.scale)?);
-            }
-            ("l", [ExprOrArray::Expr(expr)]) => {
-                return Ok(bc_ln(&self.try_evaluate(expr)?, self.scale)?);
-            }
-            ("e", [ExprOrArray::Expr(expr)]) => {
-                return Ok(bc_exp(&self.try_evaluate(expr)?, self.scale)?);
-            }
-            ("j", [ExprOrArray::Expr(expr_n), ExprOrArray::Expr(expr_x)]) => {
-                let n_val = self.try_evaluate(expr_n)?;
-                let x_val = self.try_evaluate(expr_x)?;
-                return Ok(bc_bessel(&n_val, &x_val, self.scale)?);
-            }
-            _ => {}
-        }
-        Err(RuntimeError::UndefinedFunction(name.clone()).into())
     }
 
     /// Evaluates an AST expression node and returns a BCNum.
