@@ -66,8 +66,8 @@
   that all its balls contain. The balls of π and ln 2 are proved to contain them, and the
   summation of each series (sin, cos, atan, artanh, exp, J_n) with its tail bound is proved to
   return a ball containing the series' value; the argument bound that a tail bound needs is now
-  checked at run time (it always holds for the library's arguments). For `s`, `c` and `a` the
-  whole result is proved: an `Ok` result is the exact value truncated toward zero at `scale`
+  checked at run time (it always holds for the library's arguments). For `s`, `c`, `a` and `l`
+  the whole result is proved: an `Ok` result is the exact value truncated toward zero at `scale`
   digits. The
   facts of real analysis that these proofs assume (series tail bounds, periodicity, Machin's
   formula, …) are stated as axioms with their sources in `crates/bc_core/src/trusted_math.rs`.

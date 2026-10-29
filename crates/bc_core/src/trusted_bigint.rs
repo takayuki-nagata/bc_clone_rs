@@ -254,6 +254,13 @@ pub fn big_tdiv_u64(a: &BigInt, d: u64) -> (r: BigInt)
     a / d
 }
 
+/// The number of bits of |a| (`BigInt::bits`). Only a heuristic of `mathlib::ln_ball` uses it,
+/// so nothing is assumed about its value.
+#[verifier::external_body]
+pub fn big_bits(a: &BigInt) -> u64 {
+    a.bits()
+}
+
 /// The sign of `a`: 1, 0 or −1.
 #[verifier::external_body]
 pub fn big_signum(a: &BigInt) -> (r: BigInt)
@@ -392,6 +399,7 @@ mod tests {
             prop_assert_eq!(big_add_i64(big(a), v), big(a + i128::from(v)));
             prop_assert_eq!(big_from_u64(v.unsigned_abs()), big(i128::from(v.unsigned_abs())));
             prop_assert_eq!(big_signum(&big(a)), big(a.signum()));
+            prop_assert_eq!(big_bits(&big(a)), u64::from(128 - a.unsigned_abs().leading_zeros()));
             let d = b.unsigned_abs() as u64;
             prop_assert_eq!(big_tdiv_u64(&big(a), d), big(tdiv(a, i128::from(d))));
             prop_assert_eq!(big_shl(&big(a), n), big(a * (1i128 << n)));

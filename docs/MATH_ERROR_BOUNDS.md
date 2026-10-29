@@ -117,6 +117,12 @@ part of the ball). ln m = 2·artanh(y), y = (m − 1)/(m + 1), |y| < 0.18. The s
 the sign of y, and the tail after the first omitted term t is at most t / (1 − y²) < 2t.
 ln x = ln m + k·ln 2, with ln 2 carrying as many extra digits as k.
 
+Verus proves `bc_ln` in place: the search for k keeps a ball of x·2^−k (any k is valid,
+`lemma_ln_scaled`, from `axiom_ln_mul`); 2·artanh((m − 1)/(m + 1)) = ln m follows from the
+definition of artanh (`lemma_artanh_of_cayley`); and ln 1 = 0 from `axiom_ln_mul`. For x <= 0
+the result is the documented 1 − 10^scale. The search returns `None` if k would leave the range
+of `i64`, and so does `ln_ball` if the working precision of ln 2 would exceed `u32::MAX`.
+
 ### `e(x)`
 
 e^x = e^r·2^n with n = floor(x / ln 2) and r = x − n·ln 2, so |r| < 1 (any integer n is
@@ -144,8 +150,9 @@ integer part exceeds 2·10^9, are errors.
 - Verus proves the truncation decision (§1.3), the retry loop of `certify` (it ends, at
   `MAX_WORKING_PREC` at the latest, and an `Ok` result is the truncation of a value that every
   ball contains), the ball operations (§2), the constants π and ln 2, the summation of every
-  series with its tail, and `s(x)`, `c(x)` and `a(x)` (§3), over the reals, assuming the facts of
-  `trusted_math.rs` (series tails, periodicity, Machin's formula, the identities of atan). For
+  series with its tail, and `s(x)`, `c(x)`, `a(x)` and `l(x)` (§3), over the reals, assuming the
+  facts of `trusted_math.rs` (series tails, periodicity, Machin's formula, the identities of atan
+  and ln). For
   these functions this is the end-to-end theorem: an `Ok` result is the exact value truncated toward zero at `scale` digits.
   It is partial correctness: that a series loop ends is argued in §2, not proved.
 - The argument reductions and the assembly of each function (§3) are argued here and tested (`mathlib::tests`,
