@@ -254,6 +254,21 @@ pub fn big_tdiv_u64(a: &BigInt, d: u64) -> (r: BigInt)
     a / d
 }
 
+/// The sign of `a`: 1, 0 or −1.
+#[verifier::external_body]
+pub fn big_signum(a: &BigInt) -> (r: BigInt)
+    ensures
+        big_view(&r) == (if big_view(a) > 0 {
+            1int
+        } else if big_view(a) < 0 {
+            -1int
+        } else {
+            0int
+        }),
+{
+    a.signum()
+}
+
 /// `a + d` for a small `d`, reusing `a`'s storage.
 #[verifier::external_body]
 pub fn big_add_i64(a: BigInt, d: i64) -> (r: BigInt)
@@ -376,6 +391,7 @@ mod tests {
             prop_assert_eq!(big_from_i64(v), big(i128::from(v)));
             prop_assert_eq!(big_add_i64(big(a), v), big(a + i128::from(v)));
             prop_assert_eq!(big_from_u64(v.unsigned_abs()), big(i128::from(v.unsigned_abs())));
+            prop_assert_eq!(big_signum(&big(a)), big(a.signum()));
             let d = b.unsigned_abs() as u64;
             prop_assert_eq!(big_tdiv_u64(&big(a), d), big(tdiv(a, i128::from(d))));
             prop_assert_eq!(big_shl(&big(a), n), big(a * (1i128 << n)));

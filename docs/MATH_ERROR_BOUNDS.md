@@ -106,6 +106,10 @@ atan is odd; for |x| > 1, atan|x| = π/2 − atan(1/|x|). Four half-angle steps
 y → y / (1 + √(1 + y²)) (each halves the angle) give |y| <= tan(π/64) < 0.05, then
 atan y = y − y³/3 + … (alternating, decreasing), and the result is 16·atan y.
 
+Verus proves `bc_atan` in place: the loop invariant is atan y₀ = 2^i·atan yᵢ
+(`axiom_atan_half`), the inversion uses `axiom_atan_inverse`, the sign `axiom_atan_odd`, and
+atan 0 = 0 follows from oddness.
+
 ### `l(x)`
 
 x = m·2^k with m in [0.7, 1.43) (k chosen from bit lengths; any k is valid since the shift is
@@ -140,9 +144,9 @@ integer part exceeds 2·10^9, are errors.
 - Verus proves the truncation decision (§1.3), the retry loop of `certify` (it ends, at
   `MAX_WORKING_PREC` at the latest, and an `Ok` result is the truncation of a value that every
   ball contains), the ball operations (§2), the constants π and ln 2, the summation of every
-  series with its tail, and `s(x)` and `c(x)` (§3), over the reals, assuming the facts of
-  `trusted_math.rs` (series tails, periodicity, Machin's formula). For `s` and `c` this is the
-  end-to-end theorem: an `Ok` result is the exact value truncated toward zero at `scale` digits.
+  series with its tail, and `s(x)`, `c(x)` and `a(x)` (§3), over the reals, assuming the facts of
+  `trusted_math.rs` (series tails, periodicity, Machin's formula, the identities of atan). For
+  these functions this is the end-to-end theorem: an `Ok` result is the exact value truncated toward zero at `scale` digits.
   It is partial correctness: that a series loop ends is argued in §2, not proved.
 - The argument reductions and the assembly of each function (§3) are argued here and tested (`mathlib::tests`,
   the property tests, `test_math_library_against_high_precision_oracle`, which compares with GNU
