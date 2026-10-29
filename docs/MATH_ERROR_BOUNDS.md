@@ -65,6 +65,12 @@ radius is therefore 2 ulps per term plus 2.
 - π = 16·atan(1/5) − 4·atan(1/239) (Machin).
 - ln 2 = 2·artanh(1/3).
 
+Verus proves this in place (`arc_inv`, `pi`, `ln2`): the loop invariant is `power_k =
+⌊10^p / n^(2k+1)⌋` and |10^p·S_k − sum| <= 2k for the true partial sum S_k; each term is within
+2 ulps (`lemma_arc_term`); the loop ends because `power` decreases, and k <= 4p because
+n^(2k+1) <= 10^p <= 2^(4p). The tail is bounded by `axiom_atan_series` and
+`axiom_artanh_series` (with 1 − 1/n² >= 8/9).
+
 ### Alternating series
 
 For an alternating series whose term magnitudes decrease from term K on, the tail from term K is
@@ -116,8 +122,9 @@ integer part exceeds 2·10^9, are errors.
 
 - Verus proves the truncation decision (§1.3), the retry loop of `certify` (it ends, at
   `MAX_WORKING_PREC` at the latest, and an `Ok` result is the truncation of a value that every
-  ball contains), and the ball operations (§2), over the reals.
-- The series bounds and argument reductions (§3) are argued here and tested (`mathlib::tests`,
+  ball contains), the ball operations (§2), and the constants π and ln 2 (§3), over the reals.
+  The constants assume the facts of `trusted_math.rs` (series tails, Machin's formula).
+- The other series bounds and argument reductions (§3) are argued here and tested (`mathlib::tests`,
   the property tests, `test_math_library_against_high_precision_oracle`, which compares with GNU
   `bc` at `scale + 100`). Machine-checking them against the facts of real analysis stated in
   `trusted_math.rs` is in progress.

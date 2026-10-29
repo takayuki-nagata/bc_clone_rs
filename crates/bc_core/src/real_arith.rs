@@ -9,8 +9,8 @@
 //! |v·10^p − mid| <= rad. The lemmas take the unit u = 10^p as an integer argument, so that they
 //! do not depend on how u is computed.
 
-use crate::spec_num::{spec_tdiv, trunc_div};
-use crate::trusted_math::{abs_r, axiom_sqrt, sqrt_r};
+use crate::spec_num::{pow10, spec_pow_int, spec_tdiv, trunc_div};
+use crate::trusted_math::{abs_r, axiom_sqrt, partial_sum, pow_r, sqrt_r};
 use vstd::prelude::*;
 
 verus! {
@@ -663,6 +663,160 @@ pub proof fn lemma_sqrt_close(a: real, ma: real, sa: real, sma: real)
             (sa - sma) * (sa + sma) == a - ma,
             sa >= 0real,
             sma > 0real,
+    ;
+}
+
+// --- Powers and series (`mathlib::arc_inv` and the series) ---
+
+/// (1/n)^m = 1/n^m for n > 0.
+pub proof fn lemma_pow_r_inv(n: int, m: nat)
+    requires
+        n > 0,
+    ensures
+        spec_pow_int(n, m) > 0,
+        pow_r(1real / (n as real), m) == 1real / (spec_pow_int(n, m) as real),
+    decreases m,
+{
+    if m > 0 {
+        lemma_pow_r_inv(n, (m - 1) as nat);
+        let q = spec_pow_int(n, (m - 1) as nat);
+        assert(n * q > 0) by (nonlinear_arith)
+            requires
+                n > 0,
+                q > 0,
+        ;
+        lemma_cast_mul(n, q);
+        let nr = n as real;
+        let qr = q as real;
+        assert((1real / nr) * (1real / qr) == 1real / (nr * qr)) by (nonlinear_arith)
+            requires
+                nr > 0real,
+                qr > 0real,
+        ;
+        assert(pow_r(1real / nr, m) == (1real / nr) * pow_r(1real / nr, (m - 1) as nat));
+        assert(spec_pow_int(n, m) == n * q);
+        assert((spec_pow_int(n, m) as real) == nr * qr);
+    } else {
+        assert(pow_r(1real / (n as real), 0) == 1real);
+        assert(spec_pow_int(n, 0) == 1);
+        assert(1real / (1int as real) == 1real);
+    }
+}
+
+/// n^m >= 2^m for n >= 2.
+pub proof fn lemma_pow_ge_pow2(n: int, m: nat)
+    requires
+        n >= 2,
+    ensures
+        spec_pow_int(n, m) >= spec_pow_int(2, m),
+        spec_pow_int(2, m) >= 1,
+    decreases m,
+{
+    if m > 0 {
+        lemma_pow_ge_pow2(n, (m - 1) as nat);
+        let a = spec_pow_int(n, (m - 1) as nat);
+        let b = spec_pow_int(2, (m - 1) as nat);
+        assert(n * a >= 2 * b && 2 * b >= 1) by (nonlinear_arith)
+            requires
+                n >= 2,
+                a >= b,
+                b >= 1,
+        ;
+    }
+}
+
+/// 10^p <= 2^(4p).
+pub proof fn lemma_pow10_le_pow2(p: nat)
+    ensures
+        pow10(p) <= spec_pow_int(2, 4 * p),
+    decreases p,
+{
+    if p > 0 {
+        lemma_pow10_le_pow2((p - 1) as nat);
+        let m = (4 * (p - 1)) as nat;
+        assert(4 * p == m + 4);
+        let b = spec_pow_int(2, m);
+        assert(spec_pow_int(2, m + 4) == 2 * spec_pow_int(2, (m + 3) as nat));
+        assert(spec_pow_int(2, (m + 3) as nat) == 2 * spec_pow_int(2, (m + 2) as nat));
+        assert(spec_pow_int(2, (m + 2) as nat) == 2 * spec_pow_int(2, (m + 1) as nat));
+        assert(spec_pow_int(2, (m + 1) as nat) == 2 * b);
+        lemma_pow_ge_pow2(2, m);
+    }
+}
+
+/// 2^a < 2^c for a < c.
+pub proof fn lemma_pow2_strict(a: nat, c: nat)
+    requires
+        a < c,
+    ensures
+        spec_pow_int(2, a) < spec_pow_int(2, c),
+    decreases c,
+{
+    lemma_pow_ge_pow2(2, (c - 1) as nat);
+    if a < c - 1 {
+        lemma_pow2_strict(a, (c - 1) as nat);
+    }
+}
+
+/// Partial sums depend only on the terms they add.
+pub proof fn lemma_partial_sum_ext(t1: spec_fn(nat) -> real, t2: spec_fn(nat) -> real, k: nat)
+    requires
+        forall|j: nat| j < k ==> #[trigger] t1(j) == t2(j),
+    ensures
+        partial_sum(t1, k) == partial_sum(t2, k),
+    decreases k,
+{
+    if k > 0 {
+        lemma_partial_sum_ext(t1, t2, (k - 1) as nat);
+    }
+}
+
+/// One term of `arc_inv`: with p = ⌊u / nn⌋ and term = ⌊p / d⌋, the true term
+/// x = u / (nn·d) satisfies term <= x < term + 2.
+pub proof fn lemma_arc_term(u: int, nn: int, d: int)
+    requires
+        u >= 0,
+        nn > 0,
+        d > 0,
+    ensures
+        nn * d > 0,
+        ((u / nn / d) as real) <= (u as real) / ((nn * d) as real),
+        (u as real) / ((nn * d) as real) < ((u / nn / d) as real) + 2real,
+{
+    let p = u / nn;
+    assert(p >= 0) by (nonlinear_arith)
+        requires
+            u >= 0,
+            nn > 0,
+            p == u / nn,
+    ;
+    lemma_floor_div_close(u, nn);
+    lemma_floor_div_close(p, d);
+    lemma_cast_mul(nn, d);
+    lemma_cast_add(p, 1);
+    let ur = u as real;
+    let nr = nn as real;
+    let dr = d as real;
+    let pr = p as real;
+    let tr = (p / d) as real;
+    assert(nn * d > 0) by (nonlinear_arith)
+        requires
+            nn > 0,
+            d > 0,
+    ;
+    assert(ur / (nr * dr) == (ur / nr) / dr) by (nonlinear_arith)
+        requires
+            nr > 0real,
+            dr > 0real,
+    ;
+    assert(tr <= (ur / nr) / dr && (ur / nr) / dr < tr + 2real) by (nonlinear_arith)
+        requires
+            nr > 0real,
+            dr >= 1real,
+            pr <= ur / nr,
+            ur / nr < pr + 1real,
+            tr <= pr / dr,
+            pr / dr < tr + 1real,
     ;
 }
 

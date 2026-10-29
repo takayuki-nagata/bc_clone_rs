@@ -235,6 +235,25 @@ pub fn big_from_i64(n: i64) -> (r: BigInt)
     BigInt::from(n)
 }
 
+#[verifier::external_body]
+pub fn big_from_u64(n: u64) -> (r: BigInt)
+    ensures
+        big_view(&r) == n,
+{
+    BigInt::from(n)
+}
+
+/// `a / d`, truncated toward zero, for a machine-word divisor.
+#[verifier::external_body]
+pub fn big_tdiv_u64(a: &BigInt, d: u64) -> (r: BigInt)
+    requires
+        d > 0,
+    ensures
+        big_view(&r) == spec_tdiv(big_view(a), d as int),
+{
+    a / d
+}
+
 /// `a + d` for a small `d`, reusing `a`'s storage.
 #[verifier::external_body]
 pub fn big_add_i64(a: BigInt, d: i64) -> (r: BigInt)
@@ -356,6 +375,9 @@ mod tests {
         fn shifts_and_floor_division(a in -(1i128 << 60)..(1i128 << 60), b in 1i128..(1i128 << 60), n in 0u64..60, v in any::<i64>()) {
             prop_assert_eq!(big_from_i64(v), big(i128::from(v)));
             prop_assert_eq!(big_add_i64(big(a), v), big(a + i128::from(v)));
+            prop_assert_eq!(big_from_u64(v.unsigned_abs()), big(i128::from(v.unsigned_abs())));
+            let d = b.unsigned_abs() as u64;
+            prop_assert_eq!(big_tdiv_u64(&big(a), d), big(tdiv(a, i128::from(d))));
             prop_assert_eq!(big_shl(&big(a), n), big(a * (1i128 << n)));
             prop_assert_eq!(big_shr(&big(a), n), big(floor_div_mod(a, 1i128 << n).0));
             let (q, r) = floor_div_mod(a, b);
