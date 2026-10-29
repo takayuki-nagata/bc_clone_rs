@@ -148,21 +148,31 @@ The terms first grow to about e^|x|, and their radii with them, so the guard dig
 |x|/2.
 
 For |n| >= 3·⌈|x|⌉ and |n| >= 4·(scale + 1), |J_n(x)| <= (|x|/2)^|n| / |n|! <=
-(e·|x| / (2|n|))^|n| <= 2^−|n| < 10^−scale (using |n|! >= (|n|/e)^|n|), so the result is 0
+(3·|x| / |n|)^|n|·2^−|n| <= 2^−|n| < 10^−(scale+1) (using |n|! >= (|n|/3)^|n|), so the result is 0
 without computation. Orders outside the 64-bit range that are not provably 0, and arguments whose
 integer part exceeds 2·10^9, are errors.
 
+Verus proves `bc_bessel` in place. The shortcut uses `axiom_bessel_bound` and
+`lemma_fact_lower` (n^n <= 3^n·n!, by induction: (1 + 1/n)^n <= (e^(1/n))^n = e <= 2.75, from
+`axiom_exp_ge` and the tail bound of the exponential series), and 2^−4K·10^K <= 5/8
+(`lemma_half_pow`). J_n(0) (1 for n = 0, else 0) follows from the series' tail bound. Negative
+orders use the definition J_−n = (−1)^n J_n (`bessel_int_r`), and the first term
+(x/2)^n / n! is built by a loop with that invariant.
+
 ## 4. What is and is not machine-checked
 
-- Verus proves the truncation decision (§1.3), the retry loop of `certify` (it ends, at
-  `MAX_WORKING_PREC` at the latest, and an `Ok` result is the truncation of a value that every
-  ball contains), the ball operations (§2), the constants π and ln 2, the summation of every
-  series with its tail, and `s(x)`, `c(x)`, `a(x)`, `l(x)` and `e(x)` (§3), over the reals,
-  assuming the facts of `trusted_math.rs` (series tails, periodicity, Machin's formula, the
-  identities of atan, ln and exp). For
-  these functions this is the end-to-end theorem: an `Ok` result is the exact value truncated toward zero at `scale` digits.
-  It is partial correctness: that a series loop ends is argued in §2, not proved.
-- The argument reductions and the assembly of each function (§3) are argued here and tested (`mathlib::tests`,
-  the property tests, `test_math_library_against_high_precision_oracle`, which compares with GNU
-  `bc` at `scale + 100`). Machine-checking them against the facts of real analysis stated in
-  `trusted_math.rs` is in progress.
+- Verus proves, in place and over the reals, the end-to-end theorem for each of `s`, `c`, `a`,
+  `l`, `e` and `j`: an `Ok` result has the caller's scale and is the exact value truncated toward
+  zero at that scale (`l(x)` for x <= 0 is the documented 1 − 10^scale). This covers §1 (the
+  truncation decision and the retry loop of `certify`, which ends at `MAX_WORKING_PREC` at the
+  latest), §2 (every ball operation), and §3 (the constants, every series with its tail bound,
+  and every argument reduction).
+- The proofs assume the facts of real analysis stated as axioms in
+  `crates/bc_core/src/trusted_math.rs` (each with its DLMF section), the `num-bigint` wrappers in
+  `trusted_bigint.rs`, and Verus, Z3 and rustc.
+- They are partial correctness: that a series loop (and the search for k in `l(x)`) ends is argued
+  in §2, not proved. The math library is not part of the refinement theorem of the evaluator:
+  `Evaluator::eval_math` is a trusted boundary, and its caller `call_math` is not verified.
+- The tests remain (`mathlib::tests`, the property tests, and
+  `test_math_library_against_high_precision_oracle`, which compares with GNU `bc` at
+  `scale + 100`).

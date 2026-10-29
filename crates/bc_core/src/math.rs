@@ -36,20 +36,6 @@ use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
-/// Returns 10^n.
-///
-/// Every `BCNum` scale is at most `BC_SCALE_MAX` (10^9), so the decimal shifts derived from
-/// scales stay below `u32::MAX`. A larger `n` means that invariant was broken, which is a bug.
-#[allow(
-    clippy::expect_used,
-    reason = "a shift above u32::MAX means the BC_SCALE_MAX invariant is broken (a bug), \
-              which must not be computed with a truncated exponent"
-)]
-pub(crate) fn pow10(n: usize) -> BigInt {
-    let exp = u32::try_from(n).expect("decimal shift exceeds u32: BCNum scale invariant violated");
-    BigInt::from(10).pow(exp)
-}
-
 verus! {
 
 /// `10^n` for a decimal shift derived from scales. Every scale is at most `BC_SCALE_MAX`, so the

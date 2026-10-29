@@ -102,16 +102,15 @@ returned directly; every other result is transcendental, so the loop ends.
 | `j(n,x)` | Power series of `J_n`; for negative orders, `J_{-n} = (-1)^n J_n`. Orders large enough that the result truncates to 0 return 0 without computation |
 
 Accuracy contract: every result is the exact value truncated toward zero
-(`docs/COMPATIBILITY.md` §3.4). Verus proves, in place over the reals, that every `Ball`
-operation contains the exact result of its operation, that `certified_trunc` returns the common
-truncation of every value in the ball, and that `certify` returns it when every ball contains the
-exact value (lemmas in `real_arith.rs`), that the balls of π and ln 2 contain them, and that
-`sum_series` returns a ball containing the value of its series (partial correctness), given the
-axioms of `trusted_math.rs`; for `bc_sin`, `bc_cos`, `bc_atan`, `bc_ln` and `bc_exp` the whole theorem is proved
-(an `Ok` result is the exact value truncated toward zero at `scale` digits). The argument reductions are argued in `docs/MATH_ERROR_BOUNDS.md`
-and tested (`mathlib::tests`, and
-`test_math_library_against_high_precision_oracle`, which compares with GNU bc at `scale + 100`);
-proving them against the axioms of `trusted_math.rs` remains to be done.
+(`docs/COMPATIBILITY.md` §3.4). Verus proves this in place for all six functions (`bc_sin`,
+`bc_cos`, `bc_atan`, `bc_ln`, `bc_exp`, `bc_bessel`): an `Ok` result has the caller's scale and is
+the exact value truncated toward zero at that scale. The proof covers the ball operations, the
+truncation decision and the retry loop (`certify`), the constants, every series with its tail
+bound, and every argument reduction (lemmas in `real_arith.rs` and `mathlib.rs`). It assumes the
+facts of real analysis stated as axioms in `trusted_math.rs`, and it is partial correctness (that
+a series loop ends is argued in `docs/MATH_ERROR_BOUNDS.md`, not proved). The tests remain
+(`mathlib::tests`, and `test_math_library_against_high_precision_oracle`, which compares with GNU
+bc at `scale + 100`).
 GNU's own results are *not* exact at the requested scale. When you change a function, keep its
 section of `docs/MATH_ERROR_BOUNDS.md` in sync.
 
@@ -133,8 +132,7 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   reachable as an `Err` from the `try_*` APIs.
 - `lib.rs` denies `clippy::unwrap_used`, `expect_used`, `panic`, and the lossy-cast lints outside
   tests. Every remaining exception is an `#[allow(..., reason = "...")]` that names the invariant
-  justifying it (`pow10`, the bit-length estimate in `decimal_ln`, and the Verus-proved casts in
-  `verified_kernels.rs` and `math.rs`). Do not replace an `unwrap` with a silent default (`unwrap_or(0)`):
+  justifying it (the Verus-proved casts in `verified_kernels.rs`, `math.rs` and `mathlib.rs`). Do not replace an `unwrap` with a silent default (`unwrap_or(0)`):
   return an error or derive the value so that no default is needed.
 - Front ends must not rely on unwinding: `catch_unwind` does not work under `panic = "abort"` or on
   `wasm32-unknown-unknown`.
@@ -177,15 +175,17 @@ at most `BC_SCALE_MAX` (= `MAX_VERIFIED_SCALE`)":
 - `%` and `^` return `scale too large` instead of producing a larger scale;
 - numeric literals with more fractional digits are rejected.
 
-Decimal shifts go through `math::pow10`, which treats a shift above `u32::MAX` as a broken
-invariant (an internal error) instead of truncating it. Review any new code that creates a
-`BCNum` scale against this invariant.
+Decimal shifts go through `math::pow10_within`, whose precondition `n <= u32::MAX` Verus checks
+at every call in verified code (all of `math.rs`, `format.rs`, `eval.rs` and `mathlib.rs`). The
+`-l` functions require scales of at most `MAX_VERIFIED_SCALE`; their caller `call_math` is not
+verified and relies on `Evaluator::inv`. Review any new code that creates a `BCNum` scale against
+this invariant.
 
 ## Verification Stack — What Is and Is Not Covered
 
 | Layer | Tool / script | What it actually establishes |
 |---|---|---|
-| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `format.rs`, `eval.rs`, `refine.rs`, `mathlib.rs`, `real_arith.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`, `cmp_val` and `from_digit_values` compute the L0 operations exactly, and `format_bytes` writes `l0_format` of the value, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. Without `-l`, `try_evaluate` and `try_execute` refine the specification's `ev` and `exec` (every finishing fuel gives a corresponding result and state, including output, diagnostics and runtime errors), assuming in addition the axioms of `trusted_std.rs` and the output-stream wrappers (`WrappedStdout::write_bytes` and `flush_out`, `ErrWriter::write_bytes` and `flush_err`); this is partial correctness, relative to the syntax-tree relation `r_stmt` (the parser is not proved). `Evaluator::run_parsed` refines the specification's `run_unit` (diagnostics, `quit`, the failure count) given that the parser's output corresponds to the specification's (`driver::r_parsed`). In the math library, the `Ball` operations, `certified_trunc` and `certify` are proved over the reals (`real_arith.rs`), the balls of π and ln 2 (`arc_inv`, `pi`, `ln2`) contain them, and `sum_series` returns a ball containing the value of its series (partial correctness), assuming the facts of real analysis in `trusted_math.rs`; `bc_sin`, `bc_cos`, `bc_atan`, `bc_ln` and `bc_exp` return the exact value truncated toward zero at `scale` digits (`j` remains). `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
+| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `format.rs`, `eval.rs`, `refine.rs`, `mathlib.rs`, `real_arith.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`, `cmp_val` and `from_digit_values` compute the L0 operations exactly, and `format_bytes` writes `l0_format` of the value, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. Without `-l`, `try_evaluate` and `try_execute` refine the specification's `ev` and `exec` (every finishing fuel gives a corresponding result and state, including output, diagnostics and runtime errors), assuming in addition the axioms of `trusted_std.rs` and the output-stream wrappers (`WrappedStdout::write_bytes` and `flush_out`, `ErrWriter::write_bytes` and `flush_err`); this is partial correctness, relative to the syntax-tree relation `r_stmt` (the parser is not proved). `Evaluator::run_parsed` refines the specification's `run_unit` (diagnostics, `quit`, the failure count) given that the parser's output corresponds to the specification's (`driver::r_parsed`). The six functions of the math library (`mathlib.rs`) return the exact value truncated toward zero at `scale` digits (partial correctness over the reals, assuming the facts of real analysis stated as axioms in `trusted_math.rs`); the evaluator reaches them through the trusted boundary `eval_math`. `verus_proofs.rs` also proves lemmas about ghost models (`SpecBCNum`, …) and **design models that production code does not call**; its module documentation maps each model to its production counterpart and to the tests that cover that counterpart. |
 | Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only; the 32-bit targets are exercised by the QEMU and Zephyr self-tests). The production C-FFI output helper `write_c_string` never writes at or beyond `buf_size` and always NUL-terminates. C-API NULL and zero-size guards hold. The CLI brace scanner is consistent. |
 | UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, and `bc_cli` (strict provenance, symbolic alignment, Stacked Borrows), and `bc_c_api` again under Tree Borrows. |
 | Executable specification | Verus — `crates/bc_spec`, `scripts/build_spec_oracle.sh`; `crates/bc_cli/tests/spec_differential.rs` | `bc_spec` defines the observable behavior of `bc_clone` without `-l` (decoding, units, tokens, parsing, evaluation, output, diagnostics, exit status), mirroring the production structure. `exec_spec_verified!` proves that the compiled oracle equals the `spec fn`s, except for `vstd`'s unverified `Seq` translations; lemmas prove that its arithmetic (`+ - * / % ^ sqrt`, comparison, `length`, constants under `ibase`) computes the integer definitions of `spec_num.rs` exactly. The differential tests then show that `bc_clone` matches the specification **on the generated inputs only**. Deductively, the execution of a unit after parsing refines the specification (the Verus row above), but the unit splitting, lexer and parser do not: their correspondence `driver::r_parsed` is checked on generated inputs by `prop_parser_output_corresponds_to_*`. The specification itself is checked against POSIX only by review, the POSIX suite, and GNU bc. The oracle is slow for deep nesting (its state is copied at every step), so the tests stay a few hundred levels deep. |
@@ -289,6 +289,12 @@ as possible and state the reason next to it.
   (`driver::r_parsed`), `UnitAccumulator` and the front ends' loops over units
   (unit splitting, error count, exit status), and `Evaluator::new` (its correspondence with the
   specification's `initial` is not stated).
+- The trusted base of the math-library theorems (`bc_sin`, …, `bc_bessel` in `mathlib.rs`) is:
+  Verus, Z3, rustc and `vstd`; the `num-bigint` wrappers in `trusted_bigint.rs`; and the facts of
+  real analysis in `trusted_math.rs`. Facts about the real functions go only in
+  `trusted_math.rs`, as one-statement `axiom fn`s that name their DLMF section; derive anything
+  else (ln 2 = 2·artanh(1/3), sin 0 = 0, e^2.3026 > 10, n! >= (n/3)^n, …) instead of assuming
+  it. After adding an axiom, check that calling it does not make `assert(false)` provable.
 - Trusted assumptions about `BigInt` go only in `trusted_bigint.rs`, as `#[verifier::external_body]`
   one-line wrappers with a test each. Name a function there rather than using an operator on
   `BigInt` in verified code.
