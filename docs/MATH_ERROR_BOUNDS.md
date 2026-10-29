@@ -50,7 +50,8 @@ random operands.
 
 Series stop when the next term's bound `|mid| + rad` is at most 16 ulps (`TAIL_ULPS`). The radius
 of a term settles below that: each step multiplies the previous radius by a factor below 1/2
-(once the terms decrease) and adds at most 3 ulps.
+(once the terms decrease) and adds at most 3 ulps. (This is why the loop ends; the proofs do not
+depend on it, see §4.)
 
 ## 3. Functions
 
@@ -71,11 +72,22 @@ Verus proves this in place (`arc_inv`, `pi`, `ln2`): the loop invariant is `powe
 n^(2k+1) <= 10^p <= 2^(4p). The tail is bounded by `axiom_atan_series` and
 `axiom_artanh_series` (with 1 − 1/n² >= 8/9).
 
-### Alternating series
+### Series
 
 For an alternating series whose term magnitudes decrease from term K on, the tail from term K is
-at most |term K|. `sum_series` stops only where the caller's `decreasing` condition guarantees
-this, and adds |term K|'s bound.
+at most |term K|. `sum_series` stops only where `Series::decreasing` guarantees this, and adds
+|term K|'s bound times the tail factor: 1 for the alternating series (sin, cos, atan, J_n), 2 for
+the geometric tails of artanh (y² <= 1/2) and exp (|r| <= 1).
+
+Verus proves `sum_series` in place: each step (`Series::next`) builds a ball that contains the
+next true term, from the identities between consecutive terms (`lemma_sin_cos_term_step`,
+`lemma_exp_term_step`, `lemma_bessel_term_step`, `lemma_atan_power_step`); the partial sum's ball
+contains the true partial sum; and at the stopping point the tail axiom of the series
+(`lemma_series_tail`) widens it to contain the series' value. The tail axioms of atan, artanh and
+exp need a bound on the argument; `Series::tail_applies` checks it on the ball before summing
+(and returns `None`, so that `certify` retries, if it fails; the library's arguments are far
+inside the bounds). The decrease condition is checked on the ball of r² or h²
+(`Series::decreasing`, through `bounded`).
 
 ### `s(x)`, `c(x)`
 
@@ -122,9 +134,11 @@ integer part exceeds 2·10^9, are errors.
 
 - Verus proves the truncation decision (§1.3), the retry loop of `certify` (it ends, at
   `MAX_WORKING_PREC` at the latest, and an `Ok` result is the truncation of a value that every
-  ball contains), the ball operations (§2), and the constants π and ln 2 (§3), over the reals.
-  The constants assume the facts of `trusted_math.rs` (series tails, Machin's formula).
-- The other series bounds and argument reductions (§3) are argued here and tested (`mathlib::tests`,
+  ball contains), the ball operations (§2), the constants π and ln 2, and the summation of every
+  series with its tail (§3), over the reals, assuming the facts of `trusted_math.rs` (series
+  tails, Machin's formula). This is partial correctness: that a series loop ends is argued in §2,
+  not proved.
+- The argument reductions and the assembly of each function (§3) are argued here and tested (`mathlib::tests`,
   the property tests, `test_math_library_against_high_precision_oracle`, which compares with GNU
   `bc` at `scale + 100`). Machine-checking them against the facts of real analysis stated in
   `trusted_math.rs` is in progress.

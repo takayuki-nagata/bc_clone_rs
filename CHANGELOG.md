@@ -63,7 +63,10 @@
   every ball operation (`+`, `−`, integer multiples and quotients, shifts, precision reduction,
   `×`, `÷`, `√`) contains the exact result for all values in its operands' balls, the truncation
   decision is proved in place, and the retry loop ends and returns the truncation of any value
-  that all its balls contain. The balls of π and ln 2 are proved to contain them. The facts of
+  that all its balls contain. The balls of π and ln 2 are proved to contain them, and the
+  summation of each series (sin, cos, atan, artanh, exp, J_n) with its tail bound is proved to
+  return a ball containing the series' value; the argument bound that a tail bound needs is now
+  checked at run time (it always holds for the library's arguments). The facts of
   real analysis that these proofs assume (series tail bounds, periodicity, Machin's formula, …)
   are stated as axioms with their sources in `crates/bc_core/src/trusted_math.rs`.
 

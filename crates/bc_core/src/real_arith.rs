@@ -10,7 +10,10 @@
 //! do not depend on how u is computed.
 
 use crate::spec_num::{pow10, spec_pow_int, spec_tdiv, trunc_div};
-use crate::trusted_math::{abs_r, axiom_sqrt, partial_sum, pow_r, sqrt_r};
+use crate::trusted_math::{
+    abs_r, artanh_term, atan_term, axiom_sqrt, bessel_term, exp_term, fact, partial_sum, pow_r,
+    sign_r, sin_cos_term, sqrt_r,
+};
 use vstd::prelude::*;
 
 verus! {
@@ -818,6 +821,222 @@ pub proof fn lemma_arc_term(u: int, nn: int, d: int)
             tr <= pr / dr,
             pr / dr < tr + 1real,
     ;
+}
+
+// --- Series terms (`mathlib::Series`) ---
+
+/// k! >= 1.
+pub proof fn lemma_fact_pos(k: nat)
+    ensures
+        fact(k) >= 1,
+    decreases k,
+{
+    if k > 0 {
+        lemma_fact_pos((k - 1) as nat);
+        assert(k * fact((k - 1) as nat) >= 1) by (nonlinear_arith)
+            requires
+                k >= 1,
+                fact((k - 1) as nat) >= 1,
+        ;
+    }
+}
+
+/// x^(m+2) = x^m·(x·x).
+pub proof fn lemma_pow_r_step2(x: real, m: nat)
+    ensures
+        pow_r(x, m + 2) == pow_r(x, m) * (x * x),
+{
+    assert(pow_r(x, m + 2) == x * pow_r(x, m + 1));
+    assert(pow_r(x, m + 1) == x * pow_r(x, m));
+    assert(x * (x * pow_r(x, m)) == pow_r(x, m) * (x * x)) by (nonlinear_arith);
+}
+
+/// The ratio of consecutive Taylor terms of sin and cos: term k+1 = −term k·r² / ((m+1)(m+2))
+/// with m = 2k + odd.
+pub proof fn lemma_sin_cos_term_step(r: real, odd: nat, k: nat)
+    ensures
+        sin_cos_term(r, odd, k + 1) == -((sin_cos_term(r, odd, k) * (r * r)) / (((2 * k + odd
+            + 1) * (2 * k + odd + 2)) as real)),
+{
+    let m = 2 * k + odd;
+    assert(2 * (k + 1) + odd == m + 2);
+    lemma_pow_r_step2(r, m);
+    lemma_fact_pos(m);
+    assert(fact(m + 2) == (m + 2) * fact(m + 1));
+    assert(fact(m + 1) == (m + 1) * fact(m));
+    lemma_cast_mul((m + 2) as int, (m + 1) as int);
+    lemma_cast_mul(((m + 2) * (m + 1)) as int, fact(m) as int);
+    lemma_cast_mul((m + 1) as int, (m + 2) as int);
+    assert(fact(m + 2) == ((m + 2) * (m + 1)) * fact(m)) by (nonlinear_arith)
+        requires
+            fact(m + 2) == (m + 2) * fact(m + 1),
+            fact(m + 1) == (m + 1) * fact(m),
+    ;
+    let s = sign_r(k);
+    assert(sign_r(k + 1) == -s);
+    let p = pow_r(r, m);
+    let f = fact(m) as real;
+    let a = (m + 1) as real;
+    let b = (m + 2) as real;
+    assert(fact(m + 2) as real == b * a * f);
+    assert((((m + 1) * (m + 2)) as int) as real == a * b);
+    assert((-s) * (p * (r * r)) / (b * a * f) == -((s * p / f) * (r * r) / (a * b)))
+        by (nonlinear_arith)
+        requires
+            f >= 1real,
+            a >= 1real,
+            b >= 1real,
+    ;
+}
+
+/// term k of the exponential series = term k−1·r / k.
+pub proof fn lemma_exp_term_step(r: real, k: nat)
+    requires
+        k >= 1,
+    ensures
+        exp_term(r, k) == exp_term(r, (k - 1) as nat) * r / (k as real),
+{
+    let j = (k - 1) as nat;
+    lemma_fact_pos(j);
+    assert(pow_r(r, k) == r * pow_r(r, j));
+    assert(fact(k) == k * fact(j));
+    lemma_cast_mul(k as int, fact(j) as int);
+    let p = pow_r(r, j);
+    let f = fact(j) as real;
+    let kr = k as real;
+    assert(fact(k) as real == kr * f);
+    assert((r * p) / (kr * f) == (p / f) * r / kr) by (nonlinear_arith)
+        requires
+            f >= 1real,
+            kr >= 1real,
+    ;
+}
+
+/// term m of the Bessel series = −term m−1·h² / (m·(m+n)).
+pub proof fn lemma_bessel_term_step(n: nat, h: real, m: nat)
+    requires
+        m >= 1,
+    ensures
+        bessel_term(n, h, m) == -((bessel_term(n, h, (m - 1) as nat) * (h * h)) / ((m * (m
+            + n)) as real)),
+{
+    let j = (m - 1) as nat;
+    assert(2 * m + n == (2 * j + n) + 2);
+    lemma_pow_r_step2(h, 2 * j + n);
+    lemma_fact_pos(j);
+    lemma_fact_pos(j + n);
+    assert(fact(m) == m * fact(j));
+    assert(m + n == (j + n) + 1);
+    assert(fact(m + n) == (m + n) * fact(j + n));
+    let fj = fact(j) as real;
+    let fjn = fact(j + n) as real;
+    let mr = m as real;
+    let mnr = (m + n) as real;
+    lemma_cast_mul(m as int, fact(j) as int);
+    lemma_cast_mul((m + n) as int, fact(j + n) as int);
+    lemma_cast_mul(fact(m) as int, fact(m + n) as int);
+    lemma_cast_mul(fact(j) as int, fact(j + n) as int);
+    lemma_cast_mul(m as int, (m + n) as int);
+    assert((fact(m) * fact(m + n)) as real == (mr * fj) * (mnr * fjn));
+    assert((fact(j) * fact(j + n)) as real == fj * fjn);
+    assert((m * (m + n)) as real == mr * mnr);
+    let s = sign_r(j);
+    assert(sign_r(m) == -s);
+    let p = pow_r(h, 2 * j + n);
+    assert((-s) * (p * (h * h)) / ((mr * fj) * (mnr * fjn)) == -((s * p / (fj * fjn)) * (h * h)
+        / (mr * mnr))) by (nonlinear_arith)
+        requires
+            fj >= 1real,
+            fjn >= 1real,
+            mr >= 1real,
+            mnr >= 1real,
+    ;
+}
+
+/// The atan series' `power` (−1)^k·y^(2k+1) after one more factor −y².
+pub proof fn lemma_atan_power_step(y: real, k: nat)
+    requires
+        k >= 1,
+    ensures
+        sign_r(k) * pow_r(y, 2 * k + 1) == -((sign_r((k - 1) as nat) * pow_r(
+            y,
+            2 * ((k - 1) as nat) + 1,
+        )) * (y * y)),
+        pow_r(y, 2 * k + 1) == pow_r(y, 2 * ((k - 1) as nat) + 1) * (y * y),
+        atan_term(y, k) == (sign_r(k) * pow_r(y, 2 * k + 1)) / ((2 * k + 1) as real),
+        artanh_term(y, k) == pow_r(y, 2 * k + 1) / ((2 * k + 1) as real),
+{
+    let j = (k - 1) as nat;
+    assert(2 * k + 1 == (2 * j + 1) + 2);
+    lemma_pow_r_step2(y, 2 * j + 1);
+    assert(sign_r(k) == -sign_r(j));
+    let p = pow_r(y, 2 * j + 1);
+    assert((-sign_r(j)) * (p * (y * y)) == -((sign_r(j) * p) * (y * y))) by (nonlinear_arith);
+}
+
+/// The ball of a partial sum, widened by a bound on the tail, contains the series' value: if
+/// the ball contains s, |v − s| <= c·|t|, and |t|·u <= bound, the ball widened by c·bound
+/// contains v.
+pub proof fn lemma_widen_tail(mid: int, rad: int, u: int, s: real, v: real, t: real, c: int, bound: int)
+    requires
+        u > 0,
+        c >= 0,
+        in_ball(mid, rad, u, s),
+        abs_r(v - s) <= (c as real) * abs_r(t),
+        abs_r(t * (u as real)) <= bound as real,
+    ensures
+        in_ball(mid, rad + c * bound, u, v),
+{
+    let ur = u as real;
+    let cr = c as real;
+    lemma_cast_mul(c, bound);
+    lemma_cast_add(rad, c * bound);
+    lemma_abs_mul(t, ur);
+    assert(abs_r(v * ur - s * ur) <= cr * abs_r(t) * ur) by (nonlinear_arith)
+        requires
+            abs_r(v - s) <= cr * abs_r(t),
+            ur > 0real,
+    ;
+    assert(cr * abs_r(t) * ur <= cr * (bound as real)) by (nonlinear_arith)
+        requires
+            abs_r(t * ur) == abs_r(t) * abs_r(ur),
+            abs_r(ur) == ur,
+            abs_r(t * ur) <= bound as real,
+            cr >= 0real,
+    ;
+}
+
+/// Every value in a ball is at most its `upper` bound in magnitude: |v·u| <= |mid| + rad.
+pub proof fn lemma_in_ball_upper(mid: int, rad: int, u: int, v: real)
+    requires
+        in_ball(mid, rad, u, v),
+    ensures
+        abs_r(v * (u as real)) <= (abs_i(mid) + rad) as real,
+{
+    lemma_cast_add(abs_i(mid), rad);
+    lemma_cast_abs(mid);
+}
+
+/// x² <= c implies |x| <= 1 when c <= 1, and 1 − x² >= 1/2 when c <= 1/2.
+pub proof fn lemma_square_bound(x: real)
+    ensures
+        x * x <= 1real ==> abs_r(x) <= 1real,
+        x * x <= 1real / 2real ==> abs_r(x) < 1real,
+{
+    if x * x <= 1real && abs_r(x) > 1real {
+        assert(x * x > 1real) by (nonlinear_arith)
+            requires
+                abs_r(x) > 1real,
+                abs_r(x) == x || abs_r(x) == -x,
+        ;
+    }
+    if x * x <= 1real / 2real && abs_r(x) >= 1real {
+        assert(x * x >= 1real) by (nonlinear_arith)
+            requires
+                abs_r(x) >= 1real,
+                abs_r(x) == x || abs_r(x) == -x,
+        ;
+    }
 }
 
 // --- Certified truncation (`mathlib::certified_trunc`) ---
