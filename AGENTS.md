@@ -276,8 +276,8 @@ as possible and state the reason next to it.
   `ev` finishes, the result and the new state correspond to it (`r_result`). Statement execution
   has the same theorem in `Evaluator::exec_ref` (behind `try_execute`) against the
   specification's `exec`, with `r_unit`. Both cover every expression and statement that the
-  syntax-tree relation relates (`lemma_r_expr_in_fragment`, `lemma_r_stmt_in_fragment`: the
-  parser builds assignments only to named expressions and never builds `quit`), including
+  syntax-tree relation relates (it relates assignments only to named expressions and never
+  relates `quit`, as the parser builds neither), including
   function calls (`eval_call`, `run_call_ref`). The functions of `-l` go through `eval_math`, which is
   verified (it keeps `Evaluator::inv` and the depth, and its result satisfies `mathlib::math_ok`)
   but is outside the refinement theorem: `r_state` excludes `-l`.

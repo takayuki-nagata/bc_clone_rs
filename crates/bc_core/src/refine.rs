@@ -372,110 +372,6 @@ pub open spec fn r_err(e: BcError, x: RErr) -> bool {
     }
 }
 
-/// The expressions whose evaluation is proved to refine the specification: every expression
-/// whose assignment targets are named (`lemma_r_expr_in_fragment`: every related expression).
-pub open spec fn in_fragment(e: Expr) -> bool
-    decreases e,
-{
-    match e {
-        Expr::RegisterAccess(_) => true,
-        Expr::Number(_) => true,
-        Expr::Variable(_) => true,
-        Expr::AssignOp(_, t, v) => named(*t) && in_fragment(*t) && in_fragment(*v),
-        Expr::Update(_, _, t) => named(*t) && in_fragment(*t),
-        Expr::ArrayAccess(_, i) => in_fragment(*i),
-        Expr::Paren(a) => in_fragment(*a),
-        Expr::Negate(a) => in_fragment(*a),
-        Expr::LengthCall(a) => in_fragment(*a),
-        Expr::ScaleCall(a) => in_fragment(*a),
-        Expr::SqrtCall(a) => in_fragment(*a),
-        Expr::BinaryOp(_, l, r) => in_fragment(*l) && in_fragment(*r),
-        Expr::RelationalOp(_, l, r) => in_fragment(*l) && in_fragment(*r),
-        Expr::Call(_, args) => in_fragment_args(args@),
-    }
-}
-
-pub open spec fn in_fragment_args(args: Seq<ExprOrArray>) -> bool
-    decreases args,
-{
-    args.len() == 0 || (in_fragment_arg(args[0]) && in_fragment_args(args.drop_first()))
-}
-
-pub open spec fn in_fragment_arg(a: ExprOrArray) -> bool
-    decreases a,
-{
-    match a {
-        ExprOrArray::Expr(e) => in_fragment(e),
-        ExprOrArray::ArrayArg(_) => true,
-    }
-}
-
-/// Every expression related to an arena subtree is in the fragment.
-pub proof fn lemma_r_expr_in_fragment(e: Expr, nodes: Seq<Node>, n: usize)
-    requires
-        r_expr(e, nodes, n),
-    ensures
-        in_fragment(e),
-    decreases e,
-{
-    match e {
-        Expr::ArrayAccess(_, i) => match nodes[n as int] {
-            Node::Array(_, j) => lemma_r_expr_in_fragment(*i, nodes, j),
-            _ => {},
-        },
-        Expr::Negate(a) => match nodes[n as int] {
-            Node::Neg(j) => lemma_r_expr_in_fragment(*a, nodes, j),
-            _ => {},
-        },
-        Expr::BinaryOp(_, l, r) => match nodes[n as int] {
-            Node::Binary(_, a, b) => {
-                lemma_r_expr_in_fragment(*l, nodes, a);
-                lemma_r_expr_in_fragment(*r, nodes, b);
-            },
-            _ => {},
-        },
-        Expr::RelationalOp(_, l, r) => match nodes[n as int] {
-            Node::Rel(_, a, b) => {
-                lemma_r_expr_in_fragment(*l, nodes, a);
-                lemma_r_expr_in_fragment(*r, nodes, b);
-            },
-            _ => {},
-        },
-        Expr::Update(_, _, t) => match nodes[n as int] {
-            Node::Update(_, _, j) => lemma_r_expr_in_fragment(*t, nodes, j),
-            _ => {},
-        },
-        Expr::AssignOp(_, t, v) => match nodes[n as int] {
-            Node::Assign(_, a, b) => {
-                lemma_r_expr_in_fragment(*t, nodes, a);
-                lemma_r_expr_in_fragment(*v, nodes, b);
-            },
-            _ => {},
-        },
-        Expr::Call(_, args) => match nodes[n as int] {
-            Node::Call(_, sargs) => lemma_r_args_in_fragment(args@, nodes, sargs),
-            _ => {},
-        },
-        Expr::LengthCall(a) => match nodes[n as int] {
-            Node::Length(j) => lemma_r_expr_in_fragment(*a, nodes, j),
-            _ => {},
-        },
-        Expr::SqrtCall(a) => match nodes[n as int] {
-            Node::Sqrt(j) => lemma_r_expr_in_fragment(*a, nodes, j),
-            _ => {},
-        },
-        Expr::ScaleCall(a) => match nodes[n as int] {
-            Node::ScaleOf(j) => lemma_r_expr_in_fragment(*a, nodes, j),
-            _ => {},
-        },
-        Expr::Paren(a) => match nodes[n as int] {
-            Node::Paren(j) => lemma_r_expr_in_fragment(*a, nodes, j),
-            _ => {},
-        },
-        _ => {},
-    }
-}
-
 // ---------------------------------------------------------------------------------------------
 // Uniqueness of the L0 characterizations
 // ---------------------------------------------------------------------------------------------
@@ -1076,56 +972,7 @@ pub open spec fn named(e: Expr) -> bool {
 // Statements and functions
 // ---------------------------------------------------------------------------------------------
 
-/// The statements whose execution is proved to refine the specification so far: all except
-/// `quit` (never built), with their expressions in `in_fragment`.
-pub open spec fn in_fragment_stmt(s: Stmt) -> bool
-    decreases s,
-{
-    match s {
-        Stmt::Block(list) => in_fragment_stmts(list@),
-        Stmt::Expr(e) => in_fragment(e),
-        Stmt::StringLiteral(_) => true,
-        Stmt::Break => true,
-        Stmt::Quit => false,
-        Stmt::Return(v) => match v {
-            Some(e) => in_fragment(e),
-            None => true,
-        },
-        Stmt::If(c, b) => in_fragment(c) && in_fragment_stmt(*b),
-        Stmt::While(c, b) => in_fragment(c) && in_fragment_stmt(*b),
-        Stmt::For(i, c, p, b) => in_fragment(i) && in_fragment(c) && in_fragment(p) && in_fragment_stmt(*b),
-        Stmt::FunctionDef(_) => true,
-    }
-}
-
-/// Every statement of `list` is in `in_fragment_stmt`.
-pub open spec fn in_fragment_stmts(list: Seq<Stmt>) -> bool
-    decreases list,
-{
-    list.len() == 0 || (in_fragment_stmt(list[0]) && in_fragment_stmts(list.drop_first()))
-}
-
-pub proof fn lemma_r_args_in_fragment(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs: Seq<Arg>)
-    requires
-        r_args(args, nodes, sargs),
-    ensures
-        in_fragment_args(args),
-    decreases args,
-{
-    if args.len() > 0 {
-        assert(r_arg(args[0], nodes, sargs[0]));
-        match args[0] {
-            ExprOrArray::Expr(x) => {
-                lemma_r_expr_in_fragment(x, nodes, sargs[0].expr);
-                assert(in_fragment_arg(ExprOrArray::Expr(x)));
-            },
-            ExprOrArray::ArrayArg(y) => assert(in_fragment_arg(ExprOrArray::ArrayArg(y))),
-        }
-        lemma_r_args_in_fragment(args.drop_first(), nodes, sargs.drop_first());
-    }
-}
-
-/// An argument of a related call is related, and in the fragment if the call is.
+/// An argument of a related call is related.
 pub proof fn lemma_r_args_index(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs: Seq<Arg>, i: int)
     requires
         r_args(args, nodes, sargs),
@@ -1133,75 +980,10 @@ pub proof fn lemma_r_args_index(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs:
     ensures
         sargs.len() == args.len(),
         r_arg(args[i], nodes, sargs[i]),
-        in_fragment_args(args) ==> in_fragment_arg(args[i]),
     decreases i,
 {
     if i > 0 {
         lemma_r_args_index(args.drop_first(), nodes, sargs.drop_first(), i - 1);
-    }
-}
-
-/// Every statement related to an arena subtree is in the fragment.
-pub proof fn lemma_r_stmt_in_fragment(s: Stmt, nodes: Seq<Node>, n: usize)
-    requires
-        r_stmt(s, nodes, n),
-    ensures
-        in_fragment_stmt(s),
-    decreases s,
-{
-    match s {
-        Stmt::Block(list) => match nodes[n as int] {
-            Node::Block(ns) => lemma_r_stmts_in_fragment(list@, nodes, ns),
-            _ => {},
-        },
-        Stmt::Expr(e) => match nodes[n as int] {
-            Node::ExprStmt(j) => lemma_r_expr_in_fragment(e, nodes, j),
-            _ => {},
-        },
-        Stmt::Return(v) => match nodes[n as int] {
-            Node::Return(_, j) => match v {
-                Some(e) => lemma_r_expr_in_fragment(e, nodes, j),
-                None => {},
-            },
-            _ => {},
-        },
-        Stmt::If(c, b) => match nodes[n as int] {
-            Node::If(i, j) => {
-                lemma_r_expr_in_fragment(c, nodes, i);
-                lemma_r_stmt_in_fragment(*b, nodes, j);
-            },
-            _ => {},
-        },
-        Stmt::While(c, b) => match nodes[n as int] {
-            Node::While(i, j) => {
-                lemma_r_expr_in_fragment(c, nodes, i);
-                lemma_r_stmt_in_fragment(*b, nodes, j);
-            },
-            _ => {},
-        },
-        Stmt::For(i, c, p, b) => match nodes[n as int] {
-            Node::For(a, d, e, f) => {
-                lemma_r_expr_in_fragment(i, nodes, a);
-                lemma_r_expr_in_fragment(c, nodes, d);
-                lemma_r_expr_in_fragment(p, nodes, e);
-                lemma_r_stmt_in_fragment(*b, nodes, f);
-            },
-            _ => {},
-        },
-        _ => {},
-    }
-}
-
-pub proof fn lemma_r_stmts_in_fragment(list: Seq<Stmt>, nodes: Seq<Node>, ns: Seq<usize>)
-    requires
-        r_stmts(list, nodes, ns),
-    ensures
-        in_fragment_stmts(list),
-    decreases list,
-{
-    if list.len() > 0 {
-        lemma_r_stmt_in_fragment(list[0], nodes, ns[0]);
-        lemma_r_stmts_in_fragment(list.drop_first(), nodes, ns.drop_first());
     }
 }
 
@@ -1459,20 +1241,6 @@ pub proof fn lemma_r_stmts_index(list: Seq<Stmt>, nodes: Seq<Node>, ns: Seq<usiz
 {
     if i > 0 {
         lemma_r_stmts_index(list.drop_first(), nodes, ns.drop_first(), i - 1);
-    }
-}
-
-/// An element of a statement list in the fragment is in the fragment.
-pub proof fn lemma_in_fragment_stmts_index(list: Seq<Stmt>, i: int)
-    requires
-        in_fragment_stmts(list),
-        0 <= i < list.len(),
-    ensures
-        in_fragment_stmt(list[i]),
-    decreases i,
-{
-    if i > 0 {
-        lemma_in_fragment_stmts_index(list.drop_first(), i - 1);
     }
 }
 
