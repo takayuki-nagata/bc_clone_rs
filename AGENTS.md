@@ -34,7 +34,7 @@ graph TD
     QEMU[crates/bc_qemu_riscv32: bare-metal self-test] --> Core
     Wasm[examples/wasm_web_app/crate: wasm-bindgen] --> Core
     Core --> Parser[parser.rs: Lexer + Pratt parser]
-    Core --> Eval[eval.rs: Evaluator]
+    Core --> Eval[eval/: Evaluator]
     Core --> Math[math.rs: BCNum]
     Core --> MathLib[mathlib/: certified -l library]
     Core --> Kernels[verified_kernels.rs: dual-mode kernels]
@@ -114,7 +114,7 @@ bc at `scale + 100`).
 GNU's own results are *not* exact at the requested scale. When you change a function, keep its
 section of `docs/MATH_ERROR_BOUNDS.md` in sync.
 
-### Evaluator (`src/eval.rs`)
+### Evaluator (`src/eval/`)
 - Dynamic scoping: each variable or array name maps to a stack. Function parameters and `auto`
   locals push a new entry on entry. `BTreeMap` keeps the storage `no_std`-friendly and deterministic.
 - `Evaluator::leave_call` pops the parameter and `auto` frames and restores the caller's
@@ -176,7 +176,7 @@ at most `BC_SCALE_MAX` (= `MAX_VERIFIED_SCALE`)":
 - numeric literals with more fractional digits are rejected.
 
 Decimal shifts go through `math::pow10_within`, whose precondition `n <= u32::MAX` Verus checks
-at every call in verified code (all of `math.rs`, `format.rs`, `eval.rs` and `mathlib/`). The
+at every call in verified code (all of `math.rs`, `format.rs`, `eval/` and `mathlib/`). The
 `-l` functions require scales of at most `MAX_VERIFIED_SCALE`, which their verified caller
 `Evaluator::eval_math` establishes from `Evaluator::inv`. Review any new code that creates a `BCNum` scale against
 this invariant.
@@ -185,7 +185,7 @@ this invariant.
 
 | Layer | Tool / script | What it actually establishes |
 |---|---|---|
-| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `format.rs`, `eval.rs`, `driver.rs`, `refine.rs`, `mathlib/`, `real_arith.rs`, the trusted `trusted_bigint.rs`, `trusted_std.rs` and `trusted_math.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`, `cmp_val` and `from_digit_values` compute the L0 operations exactly, and `format_bytes` writes `l0_format` of the value, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. Without `-l`, `try_evaluate` and `try_execute` refine the specification's `ev` and `exec` (every finishing fuel gives a corresponding result and state, including output, diagnostics and runtime errors), assuming in addition the axioms of `trusted_std.rs` and the output-stream wrappers (`WrappedStdout::write_bytes` and `flush_out`, `ErrWriter::write_bytes` and `flush_err`); this is partial correctness, relative to the syntax-tree relation `r_stmt` (the parser is not proved). `Evaluator::run_parsed` refines the specification's `run_unit` (diagnostics, `quit`, the failure count) given that the parser's output corresponds to the specification's (`driver::r_parsed`). The six functions of the math library (`mathlib/`) return the exact value truncated toward zero at `scale` digits (partial correctness over the reals, assuming the facts of real analysis stated as axioms in `trusted_math.rs`); the evaluator calls them from the verified `eval_math`, which ensures that an `Ok` result is the function's exact value at some argument values (`mathlib::math_ok`); which argument values is not stated, because the refinement theorem excludes `-l`. `verus_proofs.rs` keeps **design models that production code does not call** (the lexer's bounds, the C-FFI copy, the Zephyr line editor, CLI option parsing); its module documentation maps each model to its production counterpart. |
+| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `format.rs`, `eval/`, `driver.rs`, `refine.rs`, `mathlib/`, `real_arith.rs`, the trusted `trusted_bigint.rs`, `trusted_std.rs` and `trusted_math.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`, `cmp_val` and `from_digit_values` compute the L0 operations exactly, and `format_bytes` writes `l0_format` of the value, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. Without `-l`, `try_evaluate` and `try_execute` refine the specification's `ev` and `exec` (every finishing fuel gives a corresponding result and state, including output, diagnostics and runtime errors), assuming in addition the axioms of `trusted_std.rs` and the output-stream wrappers (`WrappedStdout::write_bytes` and `flush_out`, `ErrWriter::write_bytes` and `flush_err`); this is partial correctness, relative to the syntax-tree relation `r_stmt` (the parser is not proved). `Evaluator::run_parsed` refines the specification's `run_unit` (diagnostics, `quit`, the failure count) given that the parser's output corresponds to the specification's (`driver::r_parsed`). The six functions of the math library (`mathlib/`) return the exact value truncated toward zero at `scale` digits (partial correctness over the reals, assuming the facts of real analysis stated as axioms in `trusted_math.rs`); the evaluator calls them from the verified `eval_math`, which ensures that an `Ok` result is the function's exact value at some argument values (`mathlib::math_ok`); which argument values is not stated, because the refinement theorem excludes `-l`. `verus_proofs.rs` keeps **design models that production code does not call** (the lexer's bounds, the C-FFI copy, the Zephyr line editor, CLI option parsing); its module documentation maps each model to its production counterpart. |
 | Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only; the 32-bit targets are exercised by the QEMU and Zephyr self-tests). The production C-FFI output helper `write_c_string` never writes at or beyond `buf_size` and always NUL-terminates. C-API NULL and zero-size guards hold. The CLI brace scanner is consistent. |
 | UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, and `bc_cli` (strict provenance, symbolic alignment, Stacked Borrows), and `bc_c_api` again under Tree Borrows. |
 | Executable specification | Verus — `crates/bc_spec`, `scripts/build_spec_oracle.sh`; `crates/bc_cli/tests/spec_differential.rs` | `bc_spec` defines the observable behavior of `bc_clone` without `-l` (decoding, units, tokens, parsing, evaluation, output, diagnostics, exit status), mirroring the production structure. `exec_spec_verified!` proves that the compiled oracle equals the `spec fn`s, except for `vstd`'s unverified `Seq` translations; lemmas prove that its arithmetic (`+ - * / % ^ sqrt`, comparison, `length`, constants under `ibase`) computes the integer definitions of `spec_num.rs` exactly. The differential tests then show that `bc_clone` matches the specification **on the generated inputs only**. Deductively, the execution of a unit after parsing refines the specification (the Verus row above), but the unit splitting, lexer and parser do not: their correspondence `driver::r_parsed` is checked on generated inputs by `prop_parser_output_corresponds_to_*`. The specification itself is checked against POSIX only by review, the POSIX suite, and GNU bc. The oracle is slow for deep nesting (its state is copied at every step), so the tests stay a few hundred levels deep. |
@@ -257,7 +257,7 @@ as possible and state the reason next to it.
   `cfg(verus_keep_ghost)`. A `Ghost<T>` parameter stays in the signature after erasure, so its
   type must exist without `vstd` and `bc_spec`.
 - The refinement relations between `bc_core` and `bc_spec` are in `src/refine.rs` (syntax trees,
-  numbers, variables, arrays, functions) and `Evaluator::r_state` in `src/eval.rs` (the whole
+  numbers, variables, arrays, functions) and `Evaluator::r_state` in `src/eval/` (the whole
   state; it reads `pub(crate)` fields, so it must stay `pub(crate)`). The syntax-tree types are
   declared outside `verus!` (Verus rejects derived impls on recursive types) and made visible to
   Verus with `external_type_specification`; the output streams `WrappedStdout` and `ErrWriter`
@@ -266,7 +266,7 @@ as possible and state the reason next to it.
   bytes to `err_log`.
 - Variables and arrays are read and written only through the verified storage functions
   (`var_get`, `var_set`, `var_push`, `var_pop`, `arr_get`, `arr_set`, `arr_push`, `arr_pop` in
-  `src/eval.rs`), which maintain `Evaluator::inv` (registers in range, every stored scale at most
+  `src/eval/`), which maintain `Evaluator::inv` (registers in range, every stored scale at most
   `BC_SCALE_MAX`). Reading a name does not create its binding. Other trusted facts about the
   standard library (`String` keys, the derived `Clone` of `FunctionDef`) are the axioms in
   `trusted_std.rs`.
@@ -284,7 +284,7 @@ as possible and state the reason next to it.
 - The trusted base of the refinement theorems (`run_parsed`, `try_evaluate`, `try_execute`) is:
   Verus, Z3, rustc and `vstd` (including its specifications of `Vec`, `BTreeMap`, `String` and
   `str`); the `num-bigint` wrappers and `axiom_bigint_size` in `trusted_bigint.rs`; the axioms of
-  `trusted_std.rs`; the output-stream wrappers in `eval.rs` (`WrappedStdout::write_bytes`,
+  `trusted_std.rs`; the output-stream wrappers in `eval/` (`WrappedStdout::write_bytes`,
   `flush_out`, `ErrWriter::write_bytes`, `flush_err`: a failing writer is outside the model).
   `-l` is excluded by `r_state`. Not covered: the lexer and parser
   (`driver::r_parsed`), `UnitAccumulator` and the front ends' loops over units

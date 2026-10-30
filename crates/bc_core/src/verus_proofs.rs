@@ -12,7 +12,7 @@
 //! - the kernels in `verified_kernels.rs`, which production code calls directly and which are
 //!   verified with their real bodies;
 //! - the production `BCNum` operations (`math.rs`), output formatting (`format.rs`), the
-//!   evaluator and unit driver (`eval.rs`, `driver.rs`), verified in place against the
+//!   evaluator and unit driver (`eval/`, `driver.rs`), verified in place against the
 //!   executable specification `crates/bc_spec` (relations in `refine.rs`), and the math library
 //!   (`mathlib/`), verified in place over the reals;
 //! - Kani harnesses on production helpers (e.g. `bc_c_api::write_c_string`);

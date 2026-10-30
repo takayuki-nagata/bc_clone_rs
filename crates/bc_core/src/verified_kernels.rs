@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 //! Dual-mode formally verified kernels shared directly between Verus SMT verification
-//! and production `#![no_std]` execution across `math.rs`, `eval.rs`, `parser.rs`, and `bc_cli`.
+//! and production `#![no_std]` execution across `math.rs`, `eval/`, `parser.rs`, and `bc_cli`.
 //!
 //! Every function in this module is a **Single Source of Truth**:
 //! - When compiled under Verus (`#[cfg(verus_keep_ghost)]`), `dual_verified!` expands inside
@@ -131,7 +131,7 @@ dual_verified! {
         }
     }
 
-    /// Verified hexadecimal digit parser (`eval.rs:AssignOp` for `ibase`/`obase`).
+    /// Verified hexadecimal digit parser (`eval/` assignments to `ibase`/`obase`).
     ///
     /// Proves that any ASCII byte maps to a bounded value in $0..=15$, with exact mappings
     /// for `'0'..='9'`, `'A'..='F'`, and `'a'..='f'`.
@@ -331,7 +331,7 @@ dual_verified! {
         }
     }
 
-    /// Verified single-character state transition for `WrappedStdout` (`eval.rs`).
+    /// Verified single-character state transition for `WrappedStdout` (`format::wrap_output`).
     ///
     /// Returns `(next_col, should_emit_backslash_newline_before_char)`.
     pub fn verified_wrapped_stdout_step(col: usize, is_newline: bool) -> (res: (usize, bool))
@@ -354,7 +354,7 @@ dual_verified! {
         }
     }
 
-    /// Verified exponent shift calculation for relational operators (`eval.rs`).
+    /// Verified exponent shift calculation for relational operators (`BCNum::cmp_val`).
     pub fn verified_relational_scale_shifts(
         l_scale: usize,
         r_scale: usize,
@@ -503,7 +503,7 @@ dual_verified! {
         base_prec + extra_prec + 15
     }
 
-    /// Verified nesting-limit check (`parser.rs` and `eval.rs`): whether `depth` enclosing
+    /// Verified nesting-limit check (`parser.rs` and `eval/`): whether `depth` enclosing
     /// levels plus `height` more stay within `max_depth`, computed without overflow.
     pub fn verified_nesting_within_limit(depth: usize, height: usize, max_depth: usize) -> (res: bool)
         ensures [
@@ -513,7 +513,7 @@ dual_verified! {
         height <= max_depth && depth <= max_depth - height
     }
 
-    /// Verified control-flow short-circuit check (`eval.rs:Evaluator::execute`).
+    /// Verified control-flow short-circuit check (`eval/stmt.rs`).
     pub fn verified_should_abort_execution(
         break_flag: bool,
         return_flag: bool,
@@ -526,7 +526,7 @@ dual_verified! {
         break_flag || return_flag || quit_flag
     }
 
-    /// Verified post-body loop flag transition for `while` and `for` loops (`eval.rs`).
+    /// Verified post-body loop flag transition for `while` and `for` loops (`eval/stmt.rs`).
     ///
     /// Returns `(should_exit_loop, next_break_flag)`.
     pub fn verified_loop_post_body_action(
@@ -627,7 +627,7 @@ dual_verified! {
     }
 
     /// Verified register clamping with warning classification for `scale`, `ibase`, and
-    /// `obase` assignments (`eval.rs`, `docs/COMPATIBILITY.md` §3.3).
+    /// `obase` assignments (`eval/expr.rs`, `docs/COMPATIBILITY.md` §3.3).
     ///
     /// `magnitude` is the absolute value of the integer part saturated to `usize::MAX`, and
     /// `negative` is the sign of the assigned value. Returns `(clamped, warning_kind)`:

@@ -13,7 +13,7 @@
 //! - `r_vars`, `r_arrays`, `r_funcs`: the evaluator's maps against the specification's
 //!   association lists, by lookup: a name has a binding in one exactly when it has one in the
 //!   other, and the scope stacks (or function definitions) correspond.
-//! - `Evaluator::r_state` (in `eval.rs`, where the evaluator's fields are visible): the whole
+//! - `Evaluator::r_state` (in `eval/mod.rs`, where the evaluator's fields are visible): the whole
 //!   evaluator state (registers, flags, call stack, depth, invocation `ibase`, and the output
 //!   streams through `out_log`/`out_col`/`err_log`).
 //!
