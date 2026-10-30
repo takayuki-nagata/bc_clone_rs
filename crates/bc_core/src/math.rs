@@ -4,7 +4,7 @@
 //!
 //! Provides the core `BCNum` type representing decimal numbers as integer
 //! coefficients paired with a scale factor, and its arithmetic. The `-l` functions are in
-//! `mathlib.rs`.
+//! `mathlib/`.
 
 use crate::error::RuntimeError;
 #[cfg(verus_keep_ghost)]
@@ -686,7 +686,7 @@ impl BCNum {
     }
 }
 
-// The `-l` math library lives in `mathlib.rs`.
+// The `-l` math library lives in `mathlib/`.
 pub use crate::mathlib::{EXP_ARG_MAX, bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 `bc_clone -l` returns, for `s(x)`, `c(x)`, `a(x)`, `l(x)`, `e(x)` and `j(n,x)`, the exact
 mathematical value truncated toward zero to the current `scale` (`COMPATIBILITY.md` §3.4). This
 document gives the argument behind that claim for the implementation in
-`crates/bc_core/src/mathlib.rs`. Section numbers are referenced from the code.
+`crates/bc_core/src/mathlib/`. Section numbers are referenced from the code.
 
 ## 1. Structure of the argument
 
@@ -43,7 +43,7 @@ Let A = a·10^p denote a value in ulps, with ball (MA, RA), so |A − MA| <= RA.
 | A / B (requires \|MB\| > RB) | trunc(MA·10^p / MB) | ⌈10^p·(RA·\|MB\| + \|MA\|·RB) / ((\|MB\| − RB)·\|MB\|)⌉ + 1 | A/B − MA/MB = (δA·MB − MA·δB) / (B·MB) and \|B\| >= \|MB\| − RB |
 | √A (requires MA >= RA, MA·10^p >= 1) | isqrt(MA·10^p) | ⌈RA·10^p / isqrt(MA·10^p)⌉ + 1 | \|√(A·10^p) − √(MA·10^p)\| = \|δA\|·10^p / (√(A·10^p) + √(MA·10^p)) |
 
-Verus proves each row in place (`Ball` in `mathlib.rs`, lemmas `lemma_ball_*` in
+Verus proves each row in place (`Ball` in `mathlib/ball.rs`, lemmas `lemma_ball_*` in
 `real_arith.rs`): for all reals in the operands' balls, the result's ball contains the exact
 result. `mathlib::tests::ball_operations_contain_exact_results` also checks containment for
 random operands.

@@ -14,7 +14,7 @@
 //! - the production `BCNum` operations (`math.rs`), output formatting (`format.rs`), the
 //!   evaluator and unit driver (`eval.rs`, `driver.rs`), verified in place against the
 //!   executable specification `crates/bc_spec` (relations in `refine.rs`), and the math library
-//!   (`mathlib.rs`), verified in place over the reals;
+//!   (`mathlib/`), verified in place over the reals;
 //! - Kani harnesses on production helpers (e.g. `bc_c_api::write_c_string`);
 //! - tests that check production behavior against exact references (`tests/proptest_suite.rs`,
 //!   the GNU differential and oracle tests in `bc_cli`).
