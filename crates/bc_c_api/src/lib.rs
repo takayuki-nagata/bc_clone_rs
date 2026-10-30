@@ -1002,7 +1002,7 @@ mod tests {
             "Runtime error (func=(main)): Square root of a negative number\n"
         );
 
-        // 3. Session ScopeGuard recovery and 100-iteration error stress test
+        // 3. Frame recovery after a runtime error in a call, and a 100-iteration error stress test
         let session = unsafe { bc_session_create(false) };
         let setup =
             CString::new("x = 55\ndefine f(x) { auto z; x = 999; z = 1 / 0; return (z); }\n")

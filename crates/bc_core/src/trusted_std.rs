@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 
 //! Trusted facts about the standard library that `vstd` does not provide, used by the
-//! refinement proofs. Each is an `axiom fn`: Verus assumes it without proof, so
-//! together with `trusted_bigint.rs` this file lists the trusted base of those proofs beyond
-//! Verus, `vstd`, rustc and Z3. Compiled only under Verus.
+//! refinement proofs. Each is an `axiom fn`: Verus assumes it without proof. The rest of the
+//! trusted base of those proofs, beyond Verus, `vstd`, rustc and Z3, is `trusted_bigint.rs`
+//! and the `external_body` output-stream wrappers in `eval.rs` (AGENTS.md lists it); the math
+//! library adds `trusted_math.rs`. Compiled only under Verus.
 
 use crate::parser::FunctionDef;
 use alloc::string::String;

@@ -182,8 +182,9 @@ For `s`, `c`, `a`, `l`, `e`, `j`, the result is the exact mathematical value **t
 zero** to the current `scale`, for every argument within the limits of §2. The implementation
 computes rigorous error bounds (interval arithmetic) and returns a result only when every value
 within the bounds truncates to it; otherwise it recomputes with more digits.
-[MATH_ERROR_BOUNDS.md](MATH_ERROR_BOUNDS.md) gives the argument; the truncation decision is
-proved in Verus. The integration test `test_math_library_against_high_precision_oracle` also
+[MATH_ERROR_BOUNDS.md](MATH_ERROR_BOUNDS.md) gives the argument, and Verus proves the whole
+result of each function (partial correctness, assuming the facts of real analysis stated in
+`crates/bc_core/src/trusted_math.rs`). The integration test `test_math_library_against_high_precision_oracle` also
 checks every function against GNU `bc` evaluated at `scale + 100` and truncated.
 
 ---

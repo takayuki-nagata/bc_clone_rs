@@ -32,7 +32,7 @@ export MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check -Zmir
 echo "--- [1/5] Verifying bc_c_api (Unsafe C-FFI, raw pointers, sessions, callbacks) ---"
 cargo "+${MIRI_TOOLCHAIN}" miri test --package bc_c_api --lib
 
-echo "--- [2/5] Verifying bc_core (BigInt math, Parser, Evaluator, ScopeGuard unwinding) ---"
+echo "--- [2/5] Verifying bc_core (BigInt math, Parser, Evaluator, call-frame restore on errors) ---"
 cargo "+${MIRI_TOOLCHAIN}" miri test --package bc_core --lib
 
 echo "--- [3/5] Verifying bc_zephyr (RTOS C-FFI shims, SharedBuffer, interactive REPL) ---"

@@ -930,8 +930,7 @@ impl Evaluator {
         r
     }
 
-    /// `evaluate_node` (the specification's `ev_node`) for the expressions in `in_fragment`;
-    /// the others go to `eval_other`.
+    /// `evaluate_node` (the specification's `ev_node`): one step of expression evaluation.
     #[verifier::exec_allows_no_decreases_clause]
     pub(crate) fn eval_node_ref(
         &mut self,
@@ -1225,7 +1224,7 @@ impl Evaluator {
 
     /// `l <op> r` at the current `scale` (the specification's `arith`), for the specification
     /// numbers `a`, `b` and state `st` that `l`, `r` and the evaluator correspond to. `^` goes
-    /// through `power_other` (not proved yet).
+    /// through `power_ref`.
     fn arith_ref(&mut self, op: BinOp, l: &BCNum, r: &BCNum, Ghost(a): Ghost<SpecNum>, Ghost(b): Ghost<SpecNum>, Ghost(st): Ghost<SpecState>) -> (res: Result<BCNum, BcError>)
         requires
             old(self).inv(),

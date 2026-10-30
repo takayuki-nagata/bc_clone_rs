@@ -3,8 +3,8 @@
 //! Arbitrary-precision decimal math library for bc.
 //!
 //! Provides the core `BCNum` type representing decimal numbers as integer
-//! coefficients paired with a scale factor. Also implements transcendental
-//! functions using series expansions.
+//! coefficients paired with a scale factor, and its arithmetic. The `-l` functions are in
+//! `mathlib.rs`.
 
 use crate::error::RuntimeError;
 #[cfg(verus_keep_ghost)]
@@ -621,8 +621,8 @@ impl BCNum {
 
 impl BCNum {
     /// The digit values of a numeric constant: its integer digits and its fraction digits, most
-    /// significant first, without backslash-newlines and the radix point. Not verified yet: the
-    /// refinement proof relates it to the specification's literal digits.
+    /// significant first, without backslash-newlines and the radix point. Not verified; the
+    /// evaluator reads constants with the verified `eval::literal_digit_values` instead.
     #[allow(
         clippy::cast_possible_truncation,
         reason = "verified_alphanumeric_char_val returns at most 35"

@@ -742,7 +742,7 @@ pub open spec fn push_autos(st: EState, autos: Seq<Param>) -> EState
     }
 }
 
-/// Pops the frames of `ps`, last first (`ScopeGuard::drop`).
+/// Pops the frames of `ps`, last first (as `Evaluator::leave_call` does).
 pub open spec fn pop_frames(st: EState, ps: Seq<Param>) -> EState
     decreases ps.len()
 {
@@ -755,7 +755,7 @@ pub open spec fn pop_frames(st: EState, ps: Seq<Param>) -> EState
     }
 }
 
-/// The caller's context saved at a call (`ScopeGuard`).
+/// The caller's context saved at a call (the `saved_*` arguments of `Evaluator::leave_call`).
 pub struct Saved {
     pub ret: bool,
     pub ret_val: Num,
@@ -763,7 +763,7 @@ pub struct Saved {
     pub inv_ibase: u32,
 }
 
-/// `ScopeGuard::drop`: pops the call, restores the caller's return state and invocation
+/// `Evaluator::leave_call`: pops the call, restores the caller's return state and invocation
 /// `ibase`, and pops the `auto` frames and then the parameter frames.
 pub open spec fn leave_call(st: EState, f: Func, s: Saved) -> EState {
     let calls = if st.calls.len() > 0 { st.calls.drop_last() } else { st.calls };

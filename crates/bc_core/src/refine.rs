@@ -17,10 +17,11 @@
 //!   evaluator state (registers, flags, call stack, depth, invocation `ibase`, and the output
 //!   streams through `out_log`/`out_col`/`err_log`).
 //!
-//! The refinement theorem will state: if `r_state(e, st)` and `r_expr(x, nodes, n)`, and
-//! evaluating `x` returns, then some fuel `f` gives a specification result `ev(nodes, n, st, f)`
-//! that did not run out of fuel and corresponds to it (`bc_spec::fuel` combines the fuels of
-//! sub-evaluations).
+//! The refinement theorems are the postconditions of `Evaluator::eval_ref` and
+//! `Evaluator::exec_ref`: if `r_state(e, st)` and `r_expr(x, nodes, n)` (or `r_stmt`), then for
+//! every fuel with which the specification's `ev` (or `exec`) finishes, the result and the new
+//! state correspond to it (`r_result`; `bc_spec::fuel` shows that every finishing fuel gives the
+//! same result).
 
 use crate::error::{BcError, RuntimeError};
 use crate::math::BCNum;
