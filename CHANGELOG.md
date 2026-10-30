@@ -25,6 +25,8 @@ against the specification. AGENTS.md lists what the proofs assume.
   `quit`, whether the unit failed) refine the specification for every program the parser builds,
   without `-l` (partial correctness). The theorem assumes that the parser's output corresponds
   to the specification's (`driver::r_parsed`), which the differential tests check.
+  `Evaluator::new` and the public setters are proved to establish and keep the invariant that
+  these theorems assume.
 - **Math library.** Verus proves, over the reals, that the ball operations contain their exact
   results, that the retry loop returns the truncation of the true value, that the balls of π and
   ln 2 and of each series with its tail bound contain their values, and so that an `Ok` result of
@@ -95,13 +97,21 @@ against the specification. AGENTS.md lists what the proofs assume.
   `Lexer::get_next_token`, `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`,
   `Evaluator::evaluate`, `Evaluator::execute`) are removed from the public API. Use the `try_*`
   forms, which return every error as an `Err`.
-- `BCNum::try_from_string` returns `ScaleTooLarge` for a constant with more than `BC_SCALE_MAX`
-  fraction digits before converting it, and reads a constant with the evaluator's verified digit
+- `BCNum`'s arithmetic (`add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`,
+  `length`, `cmp_val`, `from_digit_values`), `format_bytes`, the math library functions
+  (`math::bc_sin`, …, `bc_bessel`) and the kernels in `verified_kernels` that no front end
+  calls are no longer public. They require bounds that nothing checks at run time (every scale
+  at most `BC_SCALE_MAX`), so a caller outside `bc_core` could break the proofs' preconditions
+  with a `BCNum` built by `BCNum::new`. Evaluate through `Evaluator` instead.
+- `BCNum::format_obase` is replaced by `try_format_obase`. It returns the new
+  `RuntimeError::BaseOutOfRange` for an `obase` outside 2 to `BC_BASE_MAX`, and `ScaleTooLarge`
+  for a scale above `BC_SCALE_MAX`.
+- `BCNum::try_from_string` returns `BaseOutOfRange` for an `ibase` outside 2 to 16, and
+  `ScaleTooLarge` for a constant with more than `BC_SCALE_MAX` fraction digits before converting it, and reads a constant with the evaluator's verified digit
   conversion. Lowercase letters read as uppercase; the result for characters that cannot appear
   in a constant is unspecified (they used to read as 0).
-- `math::bc_sin`, `bc_cos`, `bc_atan`, `bc_ln`, `bc_exp` and `bc_bessel` return
-  `Result<BCNum, RuntimeError>`; the new `RuntimeError::MathArgumentTooLarge` is reported as
-  `argument too large`.
+- The new `RuntimeError::MathArgumentTooLarge` is reported as `argument too large` (see
+  Math library).
 - Operators in the syntax tree are enums instead of strings: `Expr::BinaryOp(BinOp, …)`,
   `RelationalOp(RelOp, …)`, `AssignOp(AssignOp, …)` (`Assign` or `Compound(BinOp)`),
   `Negate(…)` instead of `UnaryOp(char, …)`, and `Update(increment, prefix, target)` instead of

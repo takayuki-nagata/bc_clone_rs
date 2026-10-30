@@ -115,6 +115,13 @@ Every `BCNum` scale stays at most `BC_SCALE_MAX`. This invariant establishes the
 `scale <= MAX_VERIFIED_SCALE` preconditions of the Verus-verified scale kernels, and keeps every
 decimal shift below `u32::MAX`, including on 32-bit targets.
 
+The library's public conversions check their arguments instead of clamping them as the
+registers do (§3.3). `BCNum::try_from_string` with an `ibase` outside 2 to 16 and
+`BCNum::try_format_obase` with an `obase` outside 2 to `BC_BASE_MAX` return
+`RuntimeError::BaseOutOfRange`. `try_format_obase` of a value with a scale above `BC_SCALE_MAX`,
+which only `BCNum::new` can build, returns `ScaleTooLarge`. Evaluation never raises
+`BaseOutOfRange`.
+
 Running out of memory (for example `scale=1000000000; 1/3`) is outside the language semantics: the
 process may abort, as GNU `bc` does.
 

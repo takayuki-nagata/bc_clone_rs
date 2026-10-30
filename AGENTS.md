@@ -73,11 +73,17 @@ graph TD
   at most `BC_SCALE_MAX`. They use `BigInt` only through `trusted_bigint.rs`, whose one-line
   wrappers Verus assumes correct (each is checked by a test). The output `format_bytes` (`src/format.rs`) is
   proved to write the specification's `l0_format` of the value for every `obase` from 2 to
-  `BC_BASE_MAX`; `format_obase` only turns those ASCII bytes into a `String`. Constants are
-  read with the verified `math::literal_digit_values`, by the evaluator and by the public
-  `BCNum::try_from_string` alike.
-- Fallible API: `try_from_string`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`. The panicking
-  wrappers (`from_string`, `div`, `pow`, …) are compiled only under `cfg(test)`, as are `Lexer::get_next_token`,
+  `BC_BASE_MAX`. Constants are read with the verified `math::literal_digit_values`, by the
+  evaluator and by the public `BCNum::try_from_string` alike.
+- Public API: nothing checks the scale bound of these operations at run time, so they are
+  `pub(crate)`, as are `format_bytes` and the `-l` functions; the evaluator is their only
+  caller. Outside the crate a `BCNum` is built with `new`, `zero` or `try_from_string` and
+  printed with `try_format_obase`. These two conversions check their preconditions in verified
+  code (`from_digit_values_checked`, `checked_format_bytes`) and return `BaseOutOfRange` or
+  `ScaleTooLarge`. Do not make a function with a `requires` clause public.
+- Fallible API: `try_from_string`, `try_format_obase` (public), and inside the crate `try_div`,
+  `try_mod_op`, `try_pow`, `try_sqrt`. The panicking wrappers (`from_string`, `format_obase`,
+  `div`, `pow`, …) are compiled only under `cfg(test)`, as are `Lexer::get_next_token`,
   `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`, `Evaluator::evaluate`, and
   `Evaluator::execute`.
 - Output for `obase != 10` uses exact `BigInt` arithmetic. The number of fractional digits is the
@@ -127,8 +133,9 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   the specification's `write_wrapped`; `write_str` passes its result to the writer in one call.
 - Fallible API: `Evaluator::try_evaluate`, `Evaluator::try_execute`.
 - The evaluator's state (variables, arrays, functions, registers, flags, output streams) is
-  `pub(crate)`, so `Evaluator::inv` is established by `new` and kept by the verified functions
-  alone. Front ends configure it (`set_scale`, `max_depth`, `extension_policy`) and use
+  `pub(crate)`, so `Evaluator::inv` is established by `new` (the verified `with_streams`) and
+  kept by the verified functions alone, the public setters included; the documentation of
+  `inv` gives the argument. Front ends configure it (`set_scale`, `max_depth`, `extension_policy`) and use
   `stderr_writer`, `request_quit`, `clear_quit` and `reset_control_flags`; do not add a method
   that stores a number without going through the verified storage layer.
 
@@ -185,6 +192,23 @@ at every call in verified code (all of `math.rs`, `format.rs`, `eval/` and `math
 `-l` functions require scales of at most `MAX_VERIFIED_SCALE`, which their verified caller
 `Evaluator::eval_math` establishes from `Evaluator::inv`. Review any new code that creates a `BCNum` scale against
 this invariant.
+
+A kernel is `pub` only if a front end calls it; of those, only `verified_repl_block_completeness`
+has a precondition. Every call of a function with a `requires` clause is in verified code,
+except the following, whose preconditions are argued here but not proved:
+
+- The lexer (`parser.rs`): `peek`, `advance_char` and `try_peek_token` call
+  `verified_lexer_peek_char_index`, `verified_lexer_advance_step` and
+  `verified_lexer_peek_token_index`. Their bounds (`text_len <= MAX_VERIFIED_SCALE`,
+  `pos < 10^9`) do not hold for an input unit of more than 10^9 characters.
+- `UnitAccumulator::push_line` (`driver.rs`) and the CLI's `count_open_braces` and
+  `is_block_incomplete` call `verified_repl_block_completeness`, which requires at most 10^9
+  bytes.
+- The trusted glue. `WrappedStdout::write_str` passes its column to `format::wrap_output`; the
+  column is 0 or a column that `wrap_output` returned, so at most `POSIX_WRAP_COL_LIMIT`.
+  `run_unit` and the front ends call `run_parsed`, `try_evaluate` and `try_execute`, which
+  require `Evaluator::inv`; the invariant holds for every evaluator outside the crate (see
+  `inv`).
 
 ## Verification Stack — What Is and Is Not Covered
 
@@ -293,8 +317,8 @@ as possible and state the reason next to it.
   `flush_out`, `ErrWriter::write_bytes`, `flush_err`: a failing writer is outside the model).
   `-l` is excluded by `r_state`. Not covered: the lexer and parser
   (`driver::r_parsed`), `UnitAccumulator` and the front ends' loops over units
-  (unit splitting, error count, exit status), and `Evaluator::new` (its correspondence with the
-  specification's `initial` is not stated).
+  (unit splitting, error count, exit status), and the correspondence of `Evaluator::new` with the
+  specification's `initial` (only that `new` establishes `Evaluator::inv` is proved).
 - The trusted base of the math-library theorems (`bc_sin`, …, `bc_bessel` in `mathlib/`) is:
   Verus, Z3, rustc and `vstd`; the `num-bigint` wrappers in `trusted_bigint.rs`; and the facts of
   real analysis in `trusted_math.rs`. Facts about the real functions go only in
