@@ -119,6 +119,10 @@ against the specification. AGENTS.md lists what the proofs assume.
 - Array frames are `BTreeMap<usize, BCNum>` instead of `BTreeMap<BigInt, BCNum>` (subscripts are
   below `BC_DIM_MAX`). `BcError::in_function` takes the function name as `&String`.
   `Register::name` is removed.
+- `BcWriter` has a new method `write_bytes`, through which the evaluator writes all output.
+  Its default implementation passes the bytes to `write_str`, replacing invalid UTF-8 with
+  U+FFFD; a writer to a byte stream overrides it to write them unchanged (`bc_cli`'s
+  `IoWriter` does). The output streams used to drop a chunk that was not UTF-8.
 - `bc_core` denies `unwrap`, `expect`, `panic!`, and lossy integer casts outside tests.
 
 ## v0.4.0 — 2026-10-26

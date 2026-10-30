@@ -40,6 +40,10 @@ impl<W: Write + Send> FmtWrite for IoWriter<W> {
 }
 
 impl<W: Write + Send> BcWriter for IoWriter<W> {
+    fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
+        self.inner.write_all(b).map_err(|_| core::fmt::Error)
+    }
+
     fn flush(&mut self) -> core::fmt::Result {
         self.inner.flush().map_err(|_| core::fmt::Error)
     }
@@ -1148,7 +1152,9 @@ mod tests {
 
         let mut success = IoWriter::new(Vec::new());
         assert!(FmtWrite::write_str(&mut success, "hello").is_ok());
+        assert!(BcWriter::write_bytes(&mut success, b" \xff").is_ok());
         assert!(success.flush().is_ok());
+        assert_eq!(success.inner, b"hello \xff");
     }
 }
 

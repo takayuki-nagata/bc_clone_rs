@@ -906,6 +906,15 @@ fn test_unary_op_scale_preservation_and_assign_registers() {
 }
 
 #[test]
+fn test_default_write_bytes_replaces_invalid_utf8() {
+    // A writer that stores text receives invalid UTF-8 as U+FFFD; valid text is unchanged.
+    let mut text = String::new();
+    assert!(BcWriter::write_bytes(&mut text, "\u{e9}".as_bytes()).is_ok());
+    assert!(BcWriter::write_bytes(&mut text, b"a\xffb").is_ok());
+    assert_eq!(text, "\u{e9}a\u{fffd}b");
+}
+
+#[test]
 fn test_relational_op_scale_normalization_and_register_scopes() {
     let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));

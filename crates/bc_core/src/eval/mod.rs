@@ -105,6 +105,16 @@ mod unit;
 
 /// Abstract output writer trait compatible with both no_std and std environments.
 pub trait BcWriter: FmtWrite + Send {
+    /// Writes bytes. A string literal is printed byte for byte, so the bytes need not be UTF-8.
+    /// The default implementation passes them to `write_str`, replacing each invalid UTF-8
+    /// sequence with U+FFFD; a writer to a byte stream overrides it to write them unchanged.
+    fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
+        match core::str::from_utf8(b) {
+            Ok(text) => self.write_str(text),
+            Err(_) => self.write_str(&String::from_utf8_lossy(b)),
+        }
+    }
+
     /// Flushes any buffered content.
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
@@ -125,11 +135,7 @@ impl WrappedStdout {
     pub fn write_str(&mut self, s: &str) -> core::fmt::Result {
         let (out, col) = wrap_output(self.col, s.as_bytes());
         self.col = col;
-        // Backslash-newlines go only before the first byte of a character, so `out` is UTF-8.
-        match core::str::from_utf8(&out) {
-            Ok(text) => self.writer.write_str(text),
-            Err(_) => Err(core::fmt::Error),
-        }
+        self.writer.write_bytes(&out)
     }
 
     /// Flushes the underlying writer.
@@ -693,9 +699,10 @@ pub(crate) open spec fn same_but_err(e1: Evaluator, e2: Evaluator) -> bool {
 }
 
 impl WrappedStdout {
-    /// Writes `b` (UTF-8 text) to standard output with POSIX line wrapping (the verified
-    /// `format::wrap_output`). Trusted: the stream receives exactly the wrapped bytes, as the
-    /// specification's `write_wrapped` describes; a failing writer is outside the model.
+    /// Writes `b` to standard output with POSIX line wrapping (the verified
+    /// `format::wrap_output`). Trusted: the writer's `BcWriter::write_bytes` receives exactly
+    /// the wrapped bytes, as the specification's `write_wrapped` describes (a writer that stores
+    /// text replaces invalid UTF-8 there); a failing writer is outside the model.
     #[verifier::external_body]
     pub(crate) fn write_bytes(&mut self, b: &[u8])
         ensures
@@ -703,9 +710,7 @@ impl WrappedStdout {
     {
         let (out, col) = wrap_output(self.col, b);
         self.col = col;
-        if let Ok(text) = core::str::from_utf8(&out) {
-            let _ = self.writer.write_str(text);
-        }
+        let _ = self.writer.write_bytes(&out);
     }
 
     /// Flushes the underlying writer (no effect on what has been written).
@@ -720,16 +725,15 @@ impl WrappedStdout {
 }
 
 impl ErrWriter {
-    /// Writes `b` (UTF-8 text) to the diagnostic stream. Trusted: the stream receives exactly
-    /// these bytes; a failing writer is outside the model (diagnostics ignore write errors).
+    /// Writes `b` to the diagnostic stream. Trusted: the writer's `BcWriter::write_bytes`
+    /// receives exactly these bytes; a failing writer is outside the model (diagnostics ignore
+    /// write errors).
     #[verifier::external_body]
     pub(crate) fn write_bytes(&mut self, b: &[u8])
         ensures
             err_log(final(self)) == err_log(old(self)).add(b@),
     {
-        if let Ok(text) = core::str::from_utf8(b) {
-            let _ = self.writer.write_str(text);
-        }
+        let _ = self.writer.write_bytes(b);
     }
     /// Flushes the underlying writer (no effect on what has been written).
     #[verifier::external_body]

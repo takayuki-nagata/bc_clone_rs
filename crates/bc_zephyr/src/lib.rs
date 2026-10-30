@@ -77,16 +77,20 @@ pub struct ZephyrConsoleWriter;
 
 impl Write for ZephyrConsoleWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for b in s.bytes() {
-            unsafe {
-                zephyr_putc(b as core::ffi::c_char);
-            }
-        }
-        Ok(())
+        self.write_bytes(s.as_bytes())
     }
 }
 
 impl BcWriter for ZephyrConsoleWriter {
+    fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
+        for &byte in b {
+            unsafe {
+                zephyr_putc(byte as core::ffi::c_char);
+            }
+        }
+        Ok(())
+    }
+
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
     }

@@ -27,7 +27,13 @@ impl Uart {
 
 impl Write for Uart {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        for byte in s.bytes() {
+        self.write_bytes(s.as_bytes())
+    }
+}
+
+impl BcWriter for Uart {
+    fn write_bytes(&mut self, b: &[u8]) -> fmt::Result {
+        for &byte in b {
             if byte == b'\n' {
                 self.write_byte(b'\r');
             }
@@ -35,9 +41,7 @@ impl Write for Uart {
         }
         Ok(())
     }
-}
 
-impl BcWriter for Uart {
     fn flush(&mut self) -> fmt::Result {
         Ok(())
     }

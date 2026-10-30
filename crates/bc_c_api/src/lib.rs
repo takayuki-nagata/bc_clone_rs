@@ -16,6 +16,7 @@ use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::rc::Rc;
 use alloc::string::String;
+use alloc::vec::Vec;
 use bc_core::verified_kernels::verified_c_ffi_check_buf_capacity;
 use bc_core::{BcWriter, Evaluator, ExtensionPolicy, STDIN_SOURCE};
 use core::cell::RefCell;
@@ -81,20 +82,25 @@ pub enum BcStatus {
     ErrExecution = 3,
 }
 
-/// A reference-counted, interior-mutable String buffer implementing BcWriter.
+/// A reference-counted, interior-mutable byte buffer implementing BcWriter.
 #[derive(Clone, Default)]
-struct SharedBuffer(Rc<RefCell<String>>);
+struct SharedBuffer(Rc<RefCell<Vec<u8>>>);
 
 unsafe impl Send for SharedBuffer {}
 
 impl Write for SharedBuffer {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        self.0.borrow_mut().push_str(s);
+        self.0.borrow_mut().extend_from_slice(s.as_bytes());
         Ok(())
     }
 }
 
 impl BcWriter for SharedBuffer {
+    fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
+        self.0.borrow_mut().extend_from_slice(b);
+        Ok(())
+    }
+
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
     }
@@ -113,16 +119,20 @@ unsafe impl Send for CallbackWriter {}
 
 impl Write for CallbackWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        if let (Some(callback), Ok(c_str)) = (self.cb, CString::new(s)) {
+        self.write_bytes(s.as_bytes())
+    }
+}
+
+impl BcWriter for CallbackWriter {
+    fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
+        if let (Some(callback), Ok(c_str)) = (self.cb, CString::new(b)) {
             unsafe {
                 callback(c_str.as_ptr(), self.user_data);
             }
         }
         Ok(())
     }
-}
 
-impl BcWriter for CallbackWriter {
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
     }
@@ -202,16 +212,14 @@ pub unsafe extern "C" fn bc_eval(
 
     let status = eval_into_evaluator(code_str, &mut ev);
     if status != BcStatus::Ok {
-        let err_captured = err_shared.0.borrow().clone();
-        let err_bytes = err_captured.as_bytes();
+        let err_bytes = err_shared.0.borrow();
         // A diagnostic that does not fit is dropped; the buffer then holds an empty string.
-        unsafe { write_c_string(err_bytes, out_buf, buf_size) };
+        unsafe { write_c_string(&err_bytes, out_buf, buf_size) };
         return status;
     }
 
-    let captured = out_shared.0.borrow().clone();
-    let bytes = captured.as_bytes();
-    if !unsafe { write_c_string(bytes, out_buf, buf_size) } {
+    let bytes = out_shared.0.borrow();
+    if !unsafe { write_c_string(&bytes, out_buf, buf_size) } {
         return BcStatus::ErrBufferTooSmall;
     }
 
@@ -332,16 +340,14 @@ pub unsafe extern "C" fn bc_session_eval(
 
     let status = eval_into_evaluator(&code_with_nl, &mut sess.evaluator);
     if status != BcStatus::Ok {
-        let err_captured = sess.err_shared.0.borrow().clone();
-        let err_bytes = err_captured.as_bytes();
+        let err_bytes = sess.err_shared.0.borrow();
         // A diagnostic that does not fit is dropped; the buffer then holds an empty string.
-        unsafe { write_c_string(err_bytes, out_buf, buf_size) };
+        unsafe { write_c_string(&err_bytes, out_buf, buf_size) };
         return status;
     }
 
-    let captured = sess.out_shared.0.borrow().clone();
-    let bytes = captured.as_bytes();
-    if !unsafe { write_c_string(bytes, out_buf, buf_size) } {
+    let bytes = sess.out_shared.0.borrow();
+    if !unsafe { write_c_string(&bytes, out_buf, buf_size) } {
         return BcStatus::ErrBufferTooSmall;
     }
 
@@ -835,6 +841,33 @@ mod tests {
         );
 
         unsafe { bc_session_destroy(session) };
+    }
+
+    #[test]
+    fn test_shared_buffer_keeps_bytes() {
+        let mut shared = SharedBuffer::default();
+        assert!(BcWriter::write_bytes(&mut shared, b"a\xff").is_ok());
+        assert!(Write::write_str(&mut shared, "b").is_ok());
+        assert_eq!(*shared.0.borrow(), b"a\xffb");
+    }
+
+    #[test]
+    fn test_callback_writer_passes_both_writes() {
+        unsafe extern "C" fn collect_cb(chunk: *const c_char, user_data: *mut c_void) {
+            unsafe {
+                let target = &mut *(user_data as *mut Vec<u8>);
+                target.extend_from_slice(CStr::from_ptr(chunk).to_bytes());
+            }
+        }
+
+        let mut collected: Vec<u8> = Vec::new();
+        let mut writer = CallbackWriter {
+            cb: Some(collect_cb),
+            user_data: &mut collected as *mut Vec<u8> as *mut c_void,
+        };
+        assert!(BcWriter::write_bytes(&mut writer, b"a\xff").is_ok());
+        assert!(Write::write_str(&mut writer, "b").is_ok());
+        assert_eq!(collected, b"a\xffb");
     }
 
     #[test]
