@@ -8,23 +8,10 @@
 
 use crate::verified_kernels::*;
 
-/// Bit-precise verification of `verified_alphanumeric_char_val` and `verified_hex_char_val`
-/// across all 256 possible `u8` values.
+/// Bit-precise verification of `verified_hex_char_val` across all 256 possible `u8` values.
 #[kani::proof]
 fn proof_verified_char_parsers() {
     let c: u8 = kani::any();
-
-    let alpha_val = verified_alphanumeric_char_val(c);
-    assert!(alpha_val <= 35);
-    if c.is_ascii_digit() {
-        assert_eq!(alpha_val, (c - b'0') as usize);
-    } else if c.is_ascii_uppercase() {
-        assert_eq!(alpha_val, (c - b'A') as usize + 10);
-    } else if c.is_ascii_lowercase() {
-        assert_eq!(alpha_val, (c - b'a') as usize + 10);
-    } else {
-        assert_eq!(alpha_val, 0);
-    }
 
     let hex_val = verified_hex_char_val(c);
     assert!(hex_val <= 15);

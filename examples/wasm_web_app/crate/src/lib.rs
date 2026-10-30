@@ -99,7 +99,7 @@ impl BcSession {
         }
 
         eval_into_wasm(&code_with_nl, &mut self.evaluator);
-        self.evaluator.quit_flag = false;
+        self.evaluator.clear_quit();
 
         let err = self.err_buf.0.borrow().clone();
         if !err.is_empty() {

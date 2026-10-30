@@ -73,9 +73,9 @@ graph TD
   at most `BC_SCALE_MAX`. They use `BigInt` only through `trusted_bigint.rs`, whose one-line
   wrappers Verus assumes correct (each is checked by a test). The output `format_bytes` (`src/format.rs`) is
   proved to write the specification's `l0_format` of the value for every `obase` from 2 to
-  `BC_BASE_MAX`; `format_obase` only turns those ASCII bytes into a `String`. The evaluator
-  reads constants with the verified `eval::literal_digit_values`; `BCNum::try_from_string` (public
-  API, not used by the evaluator) still converts with the unverified `digit_values`.
+  `BC_BASE_MAX`; `format_obase` only turns those ASCII bytes into a `String`. Constants are
+  read with the verified `math::literal_digit_values`, by the evaluator and by the public
+  `BCNum::try_from_string` alike.
 - Fallible API: `try_from_string`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`. The panicking
   wrappers (`from_string`, `div`, `pow`, …) are compiled only under `cfg(test)`, as are `Lexer::get_next_token`,
   `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`, `Evaluator::evaluate`, and
@@ -126,6 +126,11 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   `\` + newline, as POSIX requires. The wrapping itself is `format::wrap_output`, verified against
   the specification's `write_wrapped`; `write_str` passes its result to the writer in one call.
 - Fallible API: `Evaluator::try_evaluate`, `Evaluator::try_execute`.
+- The evaluator's state (variables, arrays, functions, registers, flags, output streams) is
+  `pub(crate)`, so `Evaluator::inv` is established by `new` and kept by the verified functions
+  alone. Front ends configure it (`set_scale`, `max_depth`, `extension_policy`) and use
+  `stderr_writer`, `request_quit`, `clear_quit` and `reset_control_flags`; do not add a method
+  that stores a number without going through the verified storage layer.
 
 ### Error handling contract
 - `bc_core` itself never needs to panic on user input. Every syntax or runtime error must be

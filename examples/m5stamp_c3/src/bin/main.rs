@@ -72,7 +72,7 @@ impl BcWriter for SerialWriter {
 
 fn eval_bc_non_panicking(code: &str, ev: &mut Evaluator) {
     if ev.run_source(code, STDIN_SOURCE).quit {
-        ev.quit_flag = true;
+        ev.request_quit();
     }
 }
 
@@ -244,7 +244,7 @@ fn main() -> ! {
                     // process to exit on bare metal, so `quit` only ends the current unit.
                     if let Some((unit, first_line)) = acc.push_line(line) {
                         evaluator.run_unit(&unit, STDIN_SOURCE, first_line);
-                        evaluator.quit_flag = false;
+                        evaluator.clear_quit();
                     }
                 }
                 line_buf.clear();

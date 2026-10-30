@@ -16,7 +16,7 @@ fi
 echo "=== Running Kani Bounded Model Checking Suite ==="
 cargo kani --version
 
-echo "--- [1/3] Verifying bc_core (31 verified_kernels & multi-step state machines) ---"
+echo "--- [1/3] Verifying bc_core (verified_kernels & multi-step state machines) ---"
 cargo kani --package bc_core
 
 echo "--- [2/3] Verifying bc_c_api (C-FFI pointer bounds, NUL termination & NULL guards) ---"

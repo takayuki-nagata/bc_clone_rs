@@ -141,6 +141,15 @@
 - `BcError::in_function` takes the function name as `&String`.
 - `Register::name` is removed (nothing used it once the register warnings became verified byte
   strings).
+- The `Evaluator`'s state is no longer public: `variables`, `arrays`, `functions`,
+  `math_enabled`, the output streams, the `break`/`return`/`quit` flags and `return_value` are
+  crate-private, so that code outside `bc_core` cannot store a number that breaks the invariant
+  the proofs rely on (every scale at most `BC_SCALE_MAX`). Front ends use the new methods
+  `stderr_writer()`, `request_quit()`, `clear_quit()` and `reset_control_flags()`; `max_depth`
+  and `extension_policy` stay public.
+- `BCNum::try_from_string` reads a constant with the same verified digit conversion as the
+  evaluator. Lowercase letters still read as uppercase; the result for characters that cannot
+  appear in a constant is unspecified (they used to read as 0).
 
 ## v0.4.0 — 2026-10-26
 

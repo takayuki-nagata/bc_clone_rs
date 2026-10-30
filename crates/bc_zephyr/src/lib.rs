@@ -266,10 +266,10 @@ pub const TEST_CASES: &[TestCase] = &[
     },
 ];
 
-/// Evaluates `code` on `ev` without panicking, writing diagnostics to `ev.stderr_writer`.
+/// Evaluates `code` on `ev` without panicking, writing diagnostics to its diagnostic stream.
 pub fn eval_bc_non_panicking(code: &str, ev: &mut Evaluator) {
     if ev.run_source(code, STDIN_SOURCE).quit {
-        ev.quit_flag = true;
+        ev.request_quit();
     }
 }
 

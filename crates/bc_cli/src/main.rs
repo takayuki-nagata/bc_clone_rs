@@ -122,10 +122,9 @@ fn run_unit_guarded(
     match result {
         Ok(outcome) => outcome,
         Err(payload) => {
-            evaluator.break_flag = false;
-            evaluator.return_flag = false;
+            evaluator.reset_control_flags();
             let _ = writeln!(
-                evaluator.stderr_writer,
+                evaluator.stderr_writer(),
                 "bc_clone: internal error: {}",
                 panic_message(payload.as_ref())
             );
@@ -190,7 +189,7 @@ pub fn run_interactive_loop<R: BufRead>(mut reader: R, evaluator: &mut Evaluator
 
     loop {
         if CTRL_C_PRESSED.swap(false, Ordering::SeqCst) {
-            let _ = writeln!(evaluator.stderr_writer);
+            let _ = writeln!(evaluator.stderr_writer());
             acc.clear();
             continue;
         }
@@ -291,7 +290,11 @@ where
                 }
             }
             Err(_) => {
-                let _ = writeln!(evaluator.stderr_writer, "bc: cannot open file {}", filename);
+                let _ = writeln!(
+                    evaluator.stderr_writer(),
+                    "bc: cannot open file {}",
+                    filename
+                );
                 return 1;
             }
         }
@@ -303,7 +306,7 @@ where
         let mut bytes = Vec::new();
         if let Err(e) = stdin_reader.read_to_end(&mut bytes) {
             let _ = writeln!(
-                evaluator.stderr_writer,
+                evaluator.stderr_writer(),
                 "bc: cannot read standard input: {}",
                 e
             );
@@ -991,7 +994,7 @@ mod tests {
             buf: stderr_buf.clone(),
         };
         let mut evaluator = create_evaluator(false, stdout, stderr);
-        evaluator.quit_flag = true;
+        evaluator.request_quit();
         let summary = run_non_interactive_block("1\n", "test.bc", &mut evaluator);
         assert!(summary.quit);
     }
@@ -1009,7 +1012,7 @@ mod tests {
             buf: stderr_buf.clone(),
         };
         let mut evaluator = create_evaluator(false, stdout, stderr);
-        evaluator.quit_flag = true;
+        evaluator.request_quit();
         let input = "1\n";
         let summary = run_interactive_loop(input.as_bytes(), &mut evaluator);
         assert!(summary.quit);

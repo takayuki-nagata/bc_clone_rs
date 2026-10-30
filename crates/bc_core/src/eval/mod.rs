@@ -15,9 +15,9 @@ use core::fmt::Write as FmtWrite;
 
 use crate::error::{BcError, RuntimeError};
 use crate::format::{push_dec, wrap_output};
-use crate::math::BCNum;
 use crate::math::pow10_within;
-use crate::math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
+use crate::math::{BCNum, literal_digit_values};
+use crate::mathlib::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
 #[cfg(verus_keep_ghost)]
 use crate::mathlib::{lemma_math_ok, math_ok};
 use crate::parser::{
@@ -165,22 +165,23 @@ pub uninterp spec fn err_log(w: &ErrWriter) -> Seq<u8>;
 
 /// Evaluator maintaining registers, scoped variables, functions, and state.
 pub struct Evaluator {
-    pub variables: BTreeMap<String, Vec<BCNum>>,
-    pub arrays: BTreeMap<String, Vec<BTreeMap<usize, BCNum>>>,
-    pub functions: BTreeMap<String, FunctionDef>,
-    // Registers are private so that every value stays within its valid range; in particular
-    // `scale <= BC_SCALE_MAX` is what the verified scale kernels rely on.
+    // The state is private: `Evaluator::inv` (registers in range, every stored number with a
+    // scale of at most `BC_SCALE_MAX`) holds because only `new` and the verified functions change
+    // it; front ends use the methods below.
+    pub(crate) variables: BTreeMap<String, Vec<BCNum>>,
+    pub(crate) arrays: BTreeMap<String, Vec<BTreeMap<usize, BCNum>>>,
+    pub(crate) functions: BTreeMap<String, FunctionDef>,
     pub(crate) scale: usize,
     pub(crate) ibase: usize,
     pub(crate) obase: usize,
-    pub math_enabled: bool,
-    pub stdout_writer: WrappedStdout,
-    pub stderr_writer: ErrWriter,
+    pub(crate) math_enabled: bool,
+    pub(crate) stdout_writer: WrappedStdout,
+    pub(crate) stderr_writer: ErrWriter,
 
-    pub break_flag: bool,
-    pub return_flag: bool,
-    pub return_value: BCNum,
-    pub quit_flag: bool,
+    pub(crate) break_flag: bool,
+    pub(crate) return_flag: bool,
+    pub(crate) return_value: BCNum,
+    pub(crate) quit_flag: bool,
     /// How non-POSIX syntax is treated (`-s` / `-w`); applied by the input-unit driver.
     pub extension_policy: ExtensionPolicy,
 
@@ -277,68 +278,6 @@ pub(crate) open spec fn frame_ok(f: Map<usize, BCNum>) -> bool {
 
 pub(crate) open spec fn frames_ok(s: Seq<BTreeMap<usize, BCNum>>) -> bool {
     forall|i: int| 0 <= i < s.len() ==> frame_ok((#[trigger] s[i])@)
-}
-
-/// The digit value of a constant's character, as the specification's `digit_val`.
-#[allow(
-    clippy::manual_range_contains,
-    clippy::implicit_saturating_sub,
-    reason = "written as the specification's digit_val, which Verus compares directly"
-)]
-pub(crate) fn digit_val_of(c: u8) -> (r: u8)
-    ensures
-        r == bc_spec::eval::digit_val(c),
-{
-    if c <= 57 {
-        if c >= 48 { c - 48 } else { 0 }
-    } else if c >= 65 {
-        c - 55
-    } else {
-        0
-    }
-}
-
-/// The integer and fraction digit values of a constant's text (the specification's
-/// `literal_digits`): characters before the first `.` and after it; any `.` is skipped.
-pub(crate) fn literal_digit_values(t: &[u8]) -> (r: (Vec<u8>, Vec<u8>))
-    ensures
-        r.0@ == bc_spec::eval::literal_digits(t@, true, false, Seq::empty()),
-        r.1@ == bc_spec::eval::literal_digits(t@, false, false, Seq::empty()),
-{
-    let mut ds: Vec<u8> = Vec::new();
-    let mut fs: Vec<u8> = Vec::new();
-    let mut seen = false;
-    let mut i: usize = 0;
-    proof {
-        assert(t@.skip(0) =~= t@);
-    }
-    while i < t.len()
-        invariant
-            i <= t.len(),
-            bc_spec::eval::literal_digits(t@, true, false, Seq::empty())
-                == bc_spec::eval::literal_digits(t@.skip(i as int), true, seen, ds@),
-            bc_spec::eval::literal_digits(t@, false, false, Seq::empty())
-                == bc_spec::eval::literal_digits(t@.skip(i as int), false, seen, fs@),
-        decreases t.len() - i,
-    {
-        let c = t[i];
-        proof {
-            assert(t@.skip(i as int)[0] == c);
-            assert(t@.skip(i as int).drop_first() =~= t@.skip(i as int + 1));
-        }
-        if c == 46 {
-            seen = true;
-        } else if seen {
-            fs.push(digit_val_of(c));
-        } else {
-            ds.push(digit_val_of(c));
-        }
-        i += 1;
-    }
-    proof {
-        assert(t@.skip(i as int) =~= Seq::<u8>::empty());
-    }
-    (ds, fs)
 }
 
 impl Evaluator {
@@ -949,6 +888,27 @@ impl Evaluator {
     /// Sets the `scale` register (e.g. a front end's default scale), clamped to `BC_SCALE_MAX`.
     pub fn set_scale(&mut self, scale: usize) {
         self.scale = verified_clamp_register(scale, false, 0, BC_SCALE_MAX).0;
+    }
+
+    /// The diagnostic stream, for a front end's own messages (e.g. a file that cannot be read).
+    pub fn stderr_writer(&mut self) -> &mut ErrWriter {
+        &mut self.stderr_writer
+    }
+
+    /// Stops processing after the current unit, as `quit` does.
+    pub fn request_quit(&mut self) {
+        self.quit_flag = true;
+    }
+
+    /// Clears a `quit` request, so that a front end that keeps running (a REPL) can go on.
+    pub fn clear_quit(&mut self) {
+        self.quit_flag = false;
+    }
+
+    /// Clears the `break` and `return` flags, e.g. after a unit was abandoned by a panic.
+    pub fn reset_control_flags(&mut self) {
+        self.break_flag = false;
+        self.return_flag = false;
     }
 
     /// Evaluates an AST expression node and returns a BCNum.

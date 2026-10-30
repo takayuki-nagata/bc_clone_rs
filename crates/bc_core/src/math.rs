@@ -20,9 +20,9 @@ use crate::trusted_bigint::{
 };
 use crate::verified_kernels::{BC_SCALE_MAX, MAX_VERIFIED_SCALE};
 use crate::verified_kernels::{
-    verified_add_sub_scales, verified_alphanumeric_char_val, verified_bcnum_length,
-    verified_div_scale_and_shift, verified_mul_scale_and_shift, verified_pow_scale_and_shift,
-    verified_relational_scale_shifts, verified_sqrt_scale_and_shift,
+    verified_add_sub_scales, verified_bcnum_length, verified_div_scale_and_shift,
+    verified_mul_scale_and_shift, verified_pow_scale_and_shift, verified_relational_scale_shifts,
+    verified_sqrt_scale_and_shift,
 };
 use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
@@ -617,34 +617,80 @@ impl BCNum {
     }
 }
 
+/// The digit value of a constant's character, as the specification's `digit_val`.
+#[allow(
+    clippy::manual_range_contains,
+    clippy::implicit_saturating_sub,
+    reason = "written as the specification's digit_val, which Verus compares directly"
+)]
+fn digit_val_of(c: u8) -> (r: u8)
+    ensures
+        r == bc_spec::eval::digit_val(c),
+{
+    if c <= 57 {
+        if c >= 48 { c - 48 } else { 0 }
+    } else if c >= 65 {
+        c - 55
+    } else {
+        0
+    }
+}
+
+/// The integer and fraction digit values of a constant's text (the specification's
+/// `literal_digits`): characters before the first `.` and after it; any `.` is skipped.
+pub(crate) fn literal_digit_values(t: &[u8]) -> (r: (Vec<u8>, Vec<u8>))
+    ensures
+        r.0@ == bc_spec::eval::literal_digits(t@, true, false, Seq::empty()),
+        r.1@ == bc_spec::eval::literal_digits(t@, false, false, Seq::empty()),
+{
+    let mut ds: Vec<u8> = Vec::new();
+    let mut fs: Vec<u8> = Vec::new();
+    let mut seen = false;
+    let mut i: usize = 0;
+    proof {
+        assert(t@.skip(0) =~= t@);
+    }
+    while i < t.len()
+        invariant
+            i <= t.len(),
+            bc_spec::eval::literal_digits(t@, true, false, Seq::empty())
+                == bc_spec::eval::literal_digits(t@.skip(i as int), true, seen, ds@),
+            bc_spec::eval::literal_digits(t@, false, false, Seq::empty())
+                == bc_spec::eval::literal_digits(t@.skip(i as int), false, seen, fs@),
+        decreases t.len() - i,
+    {
+        let c = t[i];
+        proof {
+            assert(t@.skip(i as int)[0] == c);
+            assert(t@.skip(i as int).drop_first() =~= t@.skip(i as int + 1));
+        }
+        if c == 46 {
+            seen = true;
+        } else if seen {
+            fs.push(digit_val_of(c));
+        } else {
+            ds.push(digit_val_of(c));
+        }
+        i += 1;
+    }
+    proof {
+        assert(t@.skip(i as int) =~= Seq::<u8>::empty());
+    }
+    (ds, fs)
+}
+
 } // verus!
 
 impl BCNum {
-    /// The digit values of a numeric constant: its integer digits and its fraction digits, most
-    /// significant first, without backslash-newlines and the radix point. Not verified; the
-    /// evaluator reads constants with the verified `eval::literal_digit_values` instead.
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "verified_alphanumeric_char_val returns at most 35"
-    )]
-    fn digit_values(num_str: &str) -> (Vec<u8>, Vec<u8>) {
-        let num_str = num_str.replace("\\\n", "");
-        let (int_part, frac_part) = match num_str.find('.') {
-            Some(pos) => (&num_str[..pos], &num_str[pos + 1..]),
-            None => (num_str.as_str(), ""),
-        };
-        let value = |b: u8| verified_alphanumeric_char_val(b) as u8;
-        (
-            int_part.bytes().map(value).collect(),
-            frac_part.bytes().map(value).collect(),
-        )
-    }
-
-    /// Parses a numeric constant string under `ibase` (2 to 16) into a BCNum. A constant with
+    /// Parses the text of a numeric constant (digits `0`-`9` and `A`-`Z`, at most one radix
+    /// point, backslash-newlines allowed) under `ibase` (2 to 16) into a BCNum, as the evaluator
+    /// reads a constant (`literal_digit_values`, then `from_digit_values`). Lowercase letters
+    /// are read as uppercase; for other characters the result is unspecified. A constant with
     /// more than `BC_SCALE_MAX` fraction digits is `ScaleTooLarge`, rejected before any
     /// arithmetic, which keeps the scale invariant.
     pub fn try_from_string(num_str: &str, ibase: usize) -> Result<Self, RuntimeError> {
-        let (ds, fs) = Self::digit_values(num_str);
+        let text = num_str.replace("\\\n", "").to_ascii_uppercase();
+        let (ds, fs) = literal_digit_values(text.as_bytes());
         if fs.len() > BC_SCALE_MAX {
             return Err(RuntimeError::ScaleTooLarge);
         }
@@ -838,9 +884,13 @@ mod tests {
 
     #[test]
     fn test_math_uncovered_lines() {
-        // 1. Invalid char in unsigned parsing (line 48)
-        let num1 = BCNum::from_string("_", 10);
-        assert_eq!(num1.coeff, BigInt::zero());
+        // 1. Lowercase letters read as uppercase, and backslash-newlines are skipped.
+        assert_eq!(BCNum::from_string("ff", 16).coeff, BigInt::from(255));
+        assert_eq!(BCNum::from_string("a", 10).coeff, BigInt::from(10));
+        assert_eq!(
+            BCNum::from_string("1\\\n2.5", 10),
+            BCNum::from_string("12.5", 10)
+        );
 
         // 2. Power with fractional exponent (line 145)
         let num_2 = BCNum::from_string("2", 10);

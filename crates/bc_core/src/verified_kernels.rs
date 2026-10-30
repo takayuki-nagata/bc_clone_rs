@@ -106,30 +106,6 @@ dual_verified! {
     pub const CLI_ARG_OPT_W: u8 = 5;
     pub const CLI_ARG_END_OF_OPTIONS: u8 = 6;
     pub const CLI_ARG_OPT_CLUSTER: u8 = 7;
-    /// Verified alphanumeric digit parser (`math.rs:BCNum::from_string`).
-    ///
-    /// Proves that any ASCII byte maps to a bounded value in $0..=35$, with exact mappings
-    /// for `'0'..='9'` ($0..=9$) and `'A'..='Z'` / `'a'..='z'` ($10..=35$).
-    pub fn verified_alphanumeric_char_val(c: u8) -> (res: usize)
-        ensures [
-            res <= 35,
-            (b'0' <= c && c <= b'9') ==> res == (c - b'0') as usize,
-            (b'A' <= c && c <= b'Z') ==> res == (c - b'A') as usize + 10,
-            (b'a' <= c && c <= b'z') ==> res == (c - b'a') as usize + 10,
-            !((b'0' <= c && c <= b'9') || (b'A' <= c && c <= b'Z') || (b'a' <= c && c <= b'z'))
-                ==> res == 0,
-        ]
-    {
-        if c >= b'0' && c <= b'9' {
-            (c - b'0') as usize
-        } else if c >= b'A' && c <= b'Z' {
-            (c - b'A') as usize + 10
-        } else if c >= b'a' && c <= b'z' {
-            (c - b'a') as usize + 10
-        } else {
-            0
-        }
-    }
 
     /// Verified hexadecimal digit parser (`eval/` assignments to `ibase`/`obase`).
     ///

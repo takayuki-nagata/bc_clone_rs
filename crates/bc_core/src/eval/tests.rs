@@ -1263,3 +1263,18 @@ fn test_fallible_evaluator_and_scope_restoration() {
     assert_eq!(eval_expr(&mut ev, "e(0)\n").coeff, BigInt::from(10000));
     assert_eq!(eval_expr(&mut ev, "j(0, 0)\n").coeff, BigInt::from(10000));
 }
+
+#[test]
+fn test_front_end_control_methods() {
+    let mut evaluator = Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
+    evaluator.request_quit();
+    assert!(evaluator.quit_flag);
+    evaluator.clear_quit();
+    assert!(!evaluator.quit_flag);
+
+    evaluator.break_flag = true;
+    evaluator.return_flag = true;
+    evaluator.reset_control_flags();
+    assert!(!evaluator.break_flag);
+    assert!(!evaluator.return_flag);
+}
