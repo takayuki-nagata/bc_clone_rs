@@ -165,9 +165,8 @@ pub uninterp spec fn err_log(w: &ErrWriter) -> Seq<u8>;
 
 /// Evaluator maintaining registers, scoped variables, functions, and state.
 pub struct Evaluator {
-    // The state is private: `Evaluator::inv` (registers in range, every stored number with a
-    // scale of at most `BC_SCALE_MAX`) holds because only `new` and the verified functions change
-    // it; front ends use the methods below.
+    // The state is private, so that `Evaluator::inv` holds for every evaluator a front end can
+    // reach (see `inv`); front ends use the methods below.
     pub(crate) variables: BTreeMap<String, Vec<BCNum>>,
     pub(crate) arrays: BTreeMap<String, Vec<BTreeMap<usize, BCNum>>>,
     pub(crate) functions: BTreeMap<String, FunctionDef>,
@@ -283,6 +282,13 @@ pub(crate) open spec fn frames_ok(s: Seq<BTreeMap<usize, BCNum>>) -> bool {
 impl Evaluator {
     /// The evaluator's invariant (`docs/COMPATIBILITY.md` §2): registers in range, and every
     /// stored number with a scale of at most `BC_SCALE_MAX`.
+    ///
+    /// It holds for every `Evaluator` outside this crate, which establishes the precondition of
+    /// `try_evaluate`, `try_execute` and `run_parsed` for their unverified callers (the front
+    /// ends, and the glue `run_unit`): `new` establishes it (`with_streams`); every public
+    /// method that changes a field it reads is verified to keep it (`set_scale`, `try_*`, …);
+    /// and those fields are `pub(crate)` and written only by verified code. The public fields
+    /// `max_depth` and `extension_policy` are not part of it.
     pub closed spec fn inv(&self) -> bool {
         &&& self.scale <= BC_SCALE_MAX
         &&& 2 <= self.ibase <= IBASE_MAX
@@ -793,6 +799,66 @@ pub(crate) proof fn lemma_r_state_depth(e1: Evaluator, e2: Evaluator, st: EState
 }
 
 impl Evaluator {
+    /// The initial state with the given streams and nesting limit (`new`).
+    pub(crate) fn with_streams(math_enabled: bool, stdout_writer: WrappedStdout, stderr_writer: ErrWriter, max_depth: usize) -> (r: Self)
+        ensures
+            r.inv(),
+    {
+        Self {
+            variables: BTreeMap::new(),
+            arrays: BTreeMap::new(),
+            functions: BTreeMap::new(),
+            scale: 0,
+            ibase: 10,
+            obase: 10,
+            math_enabled,
+            stdout_writer,
+            stderr_writer,
+            break_flag: false,
+            return_flag: false,
+            return_value: BCNum::zero(),
+            quit_flag: false,
+            extension_policy: ExtensionPolicy::Allow,
+            call_stack: Vec::new(),
+            max_depth,
+            eval_depth: 0,
+            invocation_ibase: None,
+        }
+    }
+
+    /// Sets the `scale` register (e.g. a front end's default scale), clamped to `BC_SCALE_MAX`.
+    pub fn set_scale(&mut self, scale: usize)
+        ensures
+            old(self).inv() ==> final(self).inv(),
+    {
+        self.scale = verified_clamp_register(scale, false, 0, BC_SCALE_MAX).0;
+    }
+
+    /// Stops processing after the current unit, as `quit` does.
+    pub fn request_quit(&mut self)
+        ensures
+            old(self).inv() ==> final(self).inv(),
+    {
+        self.quit_flag = true;
+    }
+
+    /// Clears a `quit` request, so that a front end that keeps running (a REPL) can go on.
+    pub fn clear_quit(&mut self)
+        ensures
+            old(self).inv() ==> final(self).inv(),
+    {
+        self.quit_flag = false;
+    }
+
+    /// Clears the `break` and `return` flags, e.g. after a unit was abandoned by a panic.
+    pub fn reset_control_flags(&mut self)
+        ensures
+            old(self).inv() ==> final(self).inv(),
+    {
+        self.break_flag = false;
+        self.return_flag = false;
+    }
+
     /// Evaluates an AST expression node, returning Err on runtime math/call errors.
     pub fn try_evaluate(&mut self, node: &Expr) -> (r: Result<BCNum, BcError>)
         requires
@@ -848,26 +914,13 @@ impl Evaluator {
         stdout_writer: Box<dyn BcWriter>,
         stderr_writer: Box<dyn BcWriter>,
     ) -> Self {
-        Self {
-            variables: BTreeMap::new(),
-            arrays: BTreeMap::new(),
-            functions: BTreeMap::new(),
-            scale: 0,
-            ibase: 10,
-            obase: 10,
+        // The streams and the nesting limit are outside `inv`; `with_streams` establishes it.
+        Self::with_streams(
             math_enabled,
-            stdout_writer: WrappedStdout::new(stdout_writer),
-            stderr_writer: ErrWriter::new(stderr_writer),
-            break_flag: false,
-            return_flag: false,
-            return_value: BCNum::zero(),
-            quit_flag: false,
-            extension_policy: ExtensionPolicy::Allow,
-            call_stack: Vec::new(),
-            max_depth: DEFAULT_MAX_DEPTH,
-            eval_depth: 0,
-            invocation_ibase: None,
-        }
+            WrappedStdout::new(stdout_writer),
+            ErrWriter::new(stderr_writer),
+            DEFAULT_MAX_DEPTH,
+        )
     }
 
     /// The `scale` register.
@@ -885,30 +938,9 @@ impl Evaluator {
         self.obase
     }
 
-    /// Sets the `scale` register (e.g. a front end's default scale), clamped to `BC_SCALE_MAX`.
-    pub fn set_scale(&mut self, scale: usize) {
-        self.scale = verified_clamp_register(scale, false, 0, BC_SCALE_MAX).0;
-    }
-
     /// The diagnostic stream, for a front end's own messages (e.g. a file that cannot be read).
     pub fn stderr_writer(&mut self) -> &mut ErrWriter {
         &mut self.stderr_writer
-    }
-
-    /// Stops processing after the current unit, as `quit` does.
-    pub fn request_quit(&mut self) {
-        self.quit_flag = true;
-    }
-
-    /// Clears a `quit` request, so that a front end that keeps running (a REPL) can go on.
-    pub fn clear_quit(&mut self) {
-        self.quit_flag = false;
-    }
-
-    /// Clears the `break` and `return` flags, e.g. after a unit was abandoned by a panic.
-    pub fn reset_control_flags(&mut self) {
-        self.break_flag = false;
-        self.return_flag = false;
     }
 
     /// Evaluates an AST expression node and returns a BCNum.
