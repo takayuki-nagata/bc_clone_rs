@@ -735,6 +735,10 @@ impl BCNum {
 // The `-l` math library lives in `mathlib/`.
 pub use crate::mathlib::{EXP_ARG_MAX, bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
 
+// Not under Miri, like the integration proptests: the cases are pure BigInt arithmetic.
+#[cfg(all(test, not(miri)))]
+mod proptests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

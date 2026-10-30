@@ -1,52 +1,22 @@
 // SPDX-License-Identifier: MIT
 
-//! Property-based tests (`proptest`) for `bc_core`.
-//!
-//! Arithmetic results are checked against an exact reference: each operand is the rational
-//! `coeff / 10^scale`, the reference computes the exact result with `BigInt`, and then truncates
-//! it toward zero to the POSIX result scale (`docs/COMPATIBILITY.md` §1.4). The suite also checks
-//! base-conversion round trips and that the parser and evaluator never panic.
+//! Property-based tests (`proptest`) of `bc_core`'s public API: base-conversion round trips, and
+//! that the parser and evaluator never panic. The arithmetic and the `-l` functions are tested
+//! against exact references in the crate's unit tests (`src/math/proptests.rs`).
 
 #![cfg(not(miri))]
 
-use bc_core::verified_kernels::BC_SCALE_MAX;
-use bc_core::{BCNum, Evaluator, Lexer, Parser, RuntimeError, STDIN_SOURCE};
+use bc_core::{BCNum, Evaluator, Lexer, Parser, STDIN_SOURCE};
 use num_bigint::BigInt;
-use num_traits::{Signed, Zero};
 use proptest::prelude::*;
 
 fn pow10(n: usize) -> BigInt {
     BigInt::from(10).pow(n as u32)
 }
 
-/// Truncates the rational `num / den` toward zero to `scale` decimal places, as a `BCNum`.
-/// `BigInt` division truncates toward zero, which is the POSIX rounding rule.
-fn truncate(num: BigInt, den: BigInt, scale: usize) -> BCNum {
-    BCNum::new(num * pow10(scale) / den, scale)
-}
-
 /// Compares numeric value and scale (the coefficient representation must match exactly).
 fn same(actual: &BCNum, expected: &BCNum) -> bool {
     actual.scale == expected.scale && actual.coeff == expected.coeff
-}
-
-fn arb_bcnum() -> impl Strategy<Value = BCNum> {
-    (
-        prop_oneof![
-            -1_000i128..=1_000i128,
-            -1_000_000_000_000_000_000_000_000i128..=1_000_000_000_000_000_000_000_000i128,
-        ],
-        0usize..=30usize,
-    )
-        .prop_map(|(c, scale)| BCNum::new(BigInt::from(c), scale))
-}
-
-fn arb_nonzero_bcnum() -> impl Strategy<Value = BCNum> {
-    arb_bcnum().prop_filter("non-zero", |n| !n.coeff.is_zero())
-}
-
-fn arb_global_scale() -> impl Strategy<Value = usize> {
-    0usize..=40usize
 }
 
 /// Programs mixing every statement kind with bounded loops, recursion, arrays, registers, and
@@ -85,97 +55,6 @@ proptest! {
         fork: false,
         .. ProptestConfig::default()
     })]
-
-    #[test]
-    fn prop_add_sub_exact(a in arb_bcnum(), b in arb_bcnum()) {
-        let s = a.scale.max(b.scale);
-        let (ca, cb) = (&a.coeff * pow10(s - a.scale), &b.coeff * pow10(s - b.scale));
-        prop_assert!(same(&a.add(&b), &BCNum::new(&ca + &cb, s)));
-        prop_assert!(same(&a.sub(&b), &BCNum::new(&ca - &cb, s)));
-        prop_assert!(same(&a.add(&b), &b.add(&a)));
-    }
-
-    #[test]
-    fn prop_mul_truncates_to_posix_scale(a in arb_bcnum(), b in arb_bcnum(), g in arb_global_scale()) {
-        let r = (a.scale + b.scale).min(g.max(a.scale).max(b.scale));
-        let expected = truncate(&a.coeff * &b.coeff, pow10(a.scale + b.scale), r);
-        prop_assert!(same(&a.mul(&b, g), &expected));
-        prop_assert!(same(&a.mul(&b, g), &b.mul(&a, g)));
-    }
-
-    #[test]
-    fn prop_div_truncates_to_scale(a in arb_bcnum(), b in arb_nonzero_bcnum(), g in arb_global_scale()) {
-        // a / b = (ca / 10^sa) / (cb / 10^sb) = (ca * 10^sb) / (cb * 10^sa)
-        let expected = truncate(&a.coeff * pow10(b.scale), &b.coeff * pow10(a.scale), g);
-        prop_assert!(same(&a.try_div(&b, g).unwrap(), &expected));
-        prop_assert_eq!(a.try_div(&BCNum::zero(), g), Err(RuntimeError::DivideByZero));
-    }
-
-    #[test]
-    fn prop_mod_matches_posix_definition(a in arb_bcnum(), b in arb_nonzero_bcnum(), g in arb_global_scale()) {
-        let r = a.try_mod_op(&b, g).unwrap();
-        prop_assert_eq!(r.scale, (g + b.scale).max(a.scale));
-        // POSIX: a % b = a - (a / b) * b, with a / b computed at `scale` and the product exact.
-        let q = truncate(&a.coeff * pow10(b.scale), &b.coeff * pow10(a.scale), g);
-        let exact = a.sub(&BCNum::new(&q.coeff * &b.coeff, g + b.scale));
-        prop_assert!(same(&r, &exact));
-        // The remainder is smaller than |b| * 10^-scale and has the sign of a (or is zero).
-        let s = r.scale;
-        let bound = b.coeff.abs() * pow10(s - b.scale);
-        prop_assert!(r.coeff.abs() * pow10(g) < bound);
-        prop_assert!(r.coeff.is_zero() || r.coeff.is_negative() == a.coeff.is_negative());
-        prop_assert_eq!(a.try_mod_op(&BCNum::zero(), g), Err(RuntimeError::ModuloByZero));
-    }
-
-    #[test]
-    fn prop_sqrt_is_floor_at_posix_scale(a in arb_bcnum(), g in arb_global_scale()) {
-        if a.coeff.is_negative() {
-            prop_assert_eq!(a.try_sqrt(g), Err(RuntimeError::NegativeSqrt));
-            return Ok(());
-        }
-        let z = a.try_sqrt(g).unwrap();
-        let r = g.max(a.scale);
-        prop_assert_eq!(z.scale, r);
-        // z = floor(sqrt(a) * 10^r): z^2 <= a * 10^(2r) < (z + 1)^2
-        let target = &a.coeff * pow10(2 * r - a.scale);
-        prop_assert!(&z.coeff * &z.coeff <= target);
-        prop_assert!(target < (&z.coeff + 1) * (&z.coeff + 1));
-    }
-
-    #[test]
-    fn prop_pow_truncates_exact_power(a in arb_bcnum(), e in -6i64..=12i64, g in arb_global_scale()) {
-        let exp = BCNum::new(BigInt::from(e), 0);
-        let n = e.unsigned_abs() as usize;
-        let exact_num = a.coeff.pow(n as u32);
-        let exact_scale = a.scale * n;
-        let result = a.try_pow(&exp, g);
-        if e >= 0 {
-            let r = exact_scale.min(g.max(a.scale));
-            prop_assert!(same(&result.unwrap(), &truncate(exact_num, pow10(exact_scale), r)));
-        } else if a.coeff.is_zero() {
-            prop_assert_eq!(result, Err(RuntimeError::NegativePowerOfZero));
-        } else {
-            prop_assert!(same(&result.unwrap(), &truncate(pow10(exact_scale), exact_num, g)));
-        }
-    }
-
-    #[test]
-    fn prop_scale_limits_are_enforced(a in arb_bcnum(), b in arb_nonzero_bcnum()) {
-        // The `%` result scale is max(scale + scale(b), scale(a)); it may not exceed BC_SCALE_MAX.
-        let b_fraction = BCNum::new(b.coeff.clone() * 10, b.scale + 1);
-        prop_assert_eq!(
-            a.try_mod_op(&b_fraction, BC_SCALE_MAX),
-            Err(RuntimeError::ScaleTooLarge)
-        );
-        let huge_exp = BCNum::new(BigInt::from(BC_SCALE_MAX) + 1, 0);
-        let fractional = BCNum::new(a.coeff.clone() + 1, a.scale.max(1));
-        prop_assert_eq!(
-            fractional.try_pow(&huge_exp, 0),
-            Err(RuntimeError::ScaleTooLarge)
-        );
-        let too_big_exp = BCNum::new(BigInt::from(i64::MAX) + 1, 0);
-        prop_assert_eq!(a.try_pow(&too_big_exp, 0), Err(RuntimeError::ExponentTooLarge));
-    }
 
     #[test]
     fn prop_obase_ibase_integer_roundtrip(
@@ -230,46 +109,5 @@ proptest! {
         // The last line always divides by zero; everything before it is valid.
         prop_assert!(summary.errors >= 1);
         prop_assert!(!summary.quit);
-    }
-}
-
-/// A math library argument: up to 6 integer digits and 6 fractional digits, either sign.
-fn arb_math_arg() -> impl Strategy<Value = BCNum> {
-    (-999_999_999_999i64..=999_999_999_999i64, 0usize..=6usize)
-        .prop_map(|(coeff, scale)| BCNum::new(BigInt::from(coeff), scale))
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
-
-    /// The math library is a certified truncation of the exact value (`docs/COMPATIBILITY.md`
-    /// §3.4), so its result at `scale` is the truncation of its result at `scale + extra`:
-    /// truncating a truncation toward zero to fewer digits is the same as truncating the exact
-    /// value once.
-    #[test]
-    fn prop_math_library_results_are_consistent_truncations(
-        x in arb_math_arg(),
-        n in -6i64..=6i64,
-        scale in 0usize..=12usize,
-        extra in 1usize..=12usize,
-    ) {
-        use bc_core::math::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
-        let order = BCNum::new(BigInt::from(n), 0);
-        let small = BCNum::new(&x.coeff % (BigInt::from(100) * pow10(x.scale)), x.scale);
-        type MathFn<'a> = Box<dyn Fn(usize) -> Result<BCNum, RuntimeError> + 'a>;
-        let funcs: [(&str, MathFn); 6] = [
-            ("s", Box::new(|s| bc_sin(&x, s))),
-            ("c", Box::new(|s| bc_cos(&x, s))),
-            ("a", Box::new(|s| bc_atan(&x, s))),
-            ("l", Box::new(|s| bc_ln(&BCNum::new(x.coeff.abs() + 1, x.scale), s))),
-            ("e", Box::new(|s| bc_exp(&small, s))),
-            ("j", Box::new(|s| bc_bessel(&order, &small, s))),
-        ];
-        for (name, f) in &funcs {
-            let coarse = f(scale).unwrap();
-            let fine = f(scale + extra).unwrap();
-            let expected = BCNum::new(&fine.coeff / pow10(extra), scale);
-            prop_assert!(same(&coarse, &expected), "{}: {:?} vs {:?}", name, coarse, expected);
-        }
     }
 }
