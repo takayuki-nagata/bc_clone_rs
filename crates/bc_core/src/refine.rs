@@ -358,6 +358,8 @@ pub open spec fn runtime_msg(k: RuntimeError) -> Seq<u8> {
         // `-l` only (not in the specification): `argument too large`.
         RuntimeError::MathArgumentTooLarge => seq![97u8, 114, 103, 117, 109, 101, 110, 116, 32, 116, 111, 111, 32, 108, 97, 114, 103, 101],
         RuntimeError::NestingTooDeep => msg_nesting_too_deep(),
+        // Library conversions only (never raised by evaluation): `base out of range`.
+        RuntimeError::BaseOutOfRange => seq![98u8, 97, 115, 101, 32, 111, 117, 116, 32, 111, 102, 32, 114, 97, 110, 103, 101],
     }
 }
 

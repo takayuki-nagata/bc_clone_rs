@@ -32,6 +32,10 @@ pub enum RuntimeError {
     MathArgumentTooLarge,
     /// More nested evaluation (mostly recursion) than the evaluator's `max_depth` allows.
     NestingTooDeep,
+    /// An `ibase` or `obase` outside its range, passed to a public conversion function
+    /// (`BCNum::try_from_string`, `BCNum::try_format_obase`). Evaluation never raises it: the
+    /// evaluator clamps the registers.
+    BaseOutOfRange,
 }
 
 #[cfg(verus_keep_ghost)]
@@ -59,6 +63,7 @@ impl fmt::Display for RuntimeError {
             Self::ScaleTooLarge => f.write_str("scale too large"),
             Self::MathArgumentTooLarge => f.write_str("argument too large"),
             Self::NestingTooDeep => f.write_str("nesting too deep"),
+            Self::BaseOutOfRange => f.write_str("base out of range"),
         }
     }
 }

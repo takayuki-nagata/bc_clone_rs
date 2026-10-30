@@ -62,7 +62,7 @@ proptest! {
         base in 2usize..=16usize
     ) {
         let n = BCNum::new(BigInt::from(val), 0);
-        let formatted = n.format_obase(base);
+        let formatted = n.try_format_obase(base).expect("base in range");
         let (negative, digits) = match formatted.strip_prefix('-') {
             Some(rest) => (true, rest),
             None => (false, formatted.as_str()),
@@ -81,7 +81,7 @@ proptest! {
         // POSIX: the output has the smallest number k of base digits with base^k >= 10^scale,
         // and its value f = digits / base^k satisfies x - base^-k < f <= x (truncation).
         let x = BCNum::new(BigInt::from(coeff), scale);
-        let printed = x.format_obase(base);
+        let printed = x.try_format_obase(base).expect("base in range");
         let (int_digits, frac_digits) = printed.split_once('.').unwrap_or((&printed, ""));
         let k = frac_digits.len();
         let base_k = BigInt::from(base).pow(k as u32);

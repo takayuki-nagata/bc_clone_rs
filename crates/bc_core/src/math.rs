@@ -182,7 +182,7 @@ impl BCNum {
     /// its face value, while in a multi-digit number a digit >= ibase counts as ibase - 1
     /// (`docs/COMPATIBILITY.md` §3.3). The fraction is converted exactly and truncated to
     /// `len(fs)` decimal digits.
-    pub fn from_digit_values(ds: &[u8], fs: &[u8], ibase: usize) -> (r: Self)
+    pub(crate) fn from_digit_values(ds: &[u8], fs: &[u8], ibase: usize) -> (r: Self)
         requires
             2 <= ibase <= 16,
             fs.len() <= BC_SCALE_MAX,
@@ -227,6 +227,26 @@ impl BCNum {
         Self::new(big_tdiv(&num, &frac_denominator), fs.len())
     }
 
+    /// `from_digit_values` for a caller outside verified code: checks its preconditions and
+    /// returns `BaseOutOfRange` or `ScaleTooLarge` when they do not hold.
+    #[allow(
+        clippy::manual_range_contains,
+        reason = "Verus compares the bounds directly; it does not specify RangeInclusive::contains"
+    )]
+    pub(crate) fn from_digit_values_checked(ds: &[u8], fs: &[u8], ibase: usize) -> (r: Result<Self, RuntimeError>)
+        ensures
+            r is Ok ==> 2 <= ibase <= 16 && fs.len() <= BC_SCALE_MAX && r->Ok_0.scale == fs.len(),
+            r is Err ==> !(2 <= ibase <= 16 && fs.len() <= BC_SCALE_MAX),
+    {
+        if ibase < 2 || ibase > 16 {
+            return Err(RuntimeError::BaseOutOfRange);
+        }
+        if fs.len() > BC_SCALE_MAX {
+            return Err(RuntimeError::ScaleTooLarge);
+        }
+        Ok(Self::from_digit_values(ds, fs, ibase))
+    }
+
     /// The value of `BCNum::new(BigInt::from(n), 0)`.
     pub open spec fn spec_new_usize(n: usize) -> SpecBCNum {
         SpecBCNum { coeff: n as int, scale: 0 }
@@ -255,7 +275,7 @@ impl BCNum {
     }
 
     /// Adds two BCNum values.
-    pub fn add(&self, other: &Self) -> (r: Self)
+    pub(crate) fn add(&self, other: &Self) -> (r: Self)
         requires
             self.scale <= BC_SCALE_MAX,
             other.scale <= BC_SCALE_MAX,
@@ -270,7 +290,7 @@ impl BCNum {
     }
 
     /// Subtracts other from self.
-    pub fn sub(&self, other: &Self) -> (r: Self)
+    pub(crate) fn sub(&self, other: &Self) -> (r: Self)
         requires
             self.scale <= BC_SCALE_MAX,
             other.scale <= BC_SCALE_MAX,
@@ -285,7 +305,7 @@ impl BCNum {
     }
 
     /// Multiplies two BCNum values under scale.
-    pub fn mul(&self, other: &Self, global_scale: usize) -> (r: Self)
+    pub(crate) fn mul(&self, other: &Self, global_scale: usize) -> (r: Self)
         requires
             self.scale <= BC_SCALE_MAX,
             other.scale <= BC_SCALE_MAX,
@@ -308,7 +328,7 @@ impl BCNum {
         clippy::cast_sign_loss,
         reason = "Verus proves 0 <= |shift| <= 2·BC_SCALE_MAX < 2^31 for both casts"
     )]
-    pub fn try_div(&self, other: &Self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
+    pub(crate) fn try_div(&self, other: &Self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
         requires
             self.scale <= BC_SCALE_MAX,
             other.scale <= BC_SCALE_MAX,
@@ -345,7 +365,7 @@ impl BCNum {
     }
 
     /// Computes self % other under scale, returning Err on division by zero.
-    pub fn try_mod_op(&self, other: &Self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
+    pub(crate) fn try_mod_op(&self, other: &Self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
         requires
             self.scale <= BC_SCALE_MAX,
             other.scale <= BC_SCALE_MAX,
@@ -374,7 +394,7 @@ impl BCNum {
         Ok(self.sub(&prod))
     }
     /// Computes the square root of self under scale, returning Err on negative input.
-    pub fn try_sqrt(&self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
+    pub(crate) fn try_sqrt(&self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
         requires
             self.scale <= BC_SCALE_MAX,
             global_scale <= BC_SCALE_MAX,
@@ -403,7 +423,7 @@ impl BCNum {
     }
 
     /// Computes the total number of significant decimal digits.
-    pub fn length(&self) -> (r: Self)
+    pub(crate) fn length(&self) -> (r: Self)
         requires
             self.scale <= BC_SCALE_MAX,
         ensures
@@ -446,7 +466,7 @@ impl BCNum {
         reason = "Verus proves each cast lossless: a non-negative i64 to u64, and an exact scale \
                   of at most BC_SCALE_MAX to usize"
     )]
-    pub fn try_pow(&self, other: &Self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
+    pub(crate) fn try_pow(&self, other: &Self, global_scale: usize) -> (r: Result<Self, RuntimeError>)
         requires
             self.scale <= BC_SCALE_MAX,
             other.scale <= BC_SCALE_MAX,
@@ -571,7 +591,7 @@ impl BCNum {
     }
 
     /// Compares the values of self and other (as `==`, `<`, … do).
-    pub fn cmp_val(&self, other: &Self) -> (r: Ordering)
+    pub(crate) fn cmp_val(&self, other: &Self) -> (r: Ordering)
         requires
             self.scale <= BC_SCALE_MAX,
             other.scale <= BC_SCALE_MAX,
@@ -683,18 +703,15 @@ pub(crate) fn literal_digit_values(t: &[u8]) -> (r: (Vec<u8>, Vec<u8>))
 
 impl BCNum {
     /// Parses the text of a numeric constant (digits `0`-`9` and `A`-`Z`, at most one radix
-    /// point, backslash-newlines allowed) under `ibase` (2 to 16) into a BCNum, as the evaluator
-    /// reads a constant (`literal_digit_values`, then `from_digit_values`). Lowercase letters
-    /// are read as uppercase; for other characters the result is unspecified. A constant with
-    /// more than `BC_SCALE_MAX` fraction digits is `ScaleTooLarge`, rejected before any
-    /// arithmetic, which keeps the scale invariant.
+    /// point, backslash-newlines allowed) under `ibase` into a BCNum, as the evaluator reads a
+    /// constant (`literal_digit_values`, then `from_digit_values`). Lowercase letters are read
+    /// as uppercase; for other characters the result is unspecified. An `ibase` outside 2 to 16
+    /// is `BaseOutOfRange`, and a constant with more than `BC_SCALE_MAX` fraction digits is
+    /// `ScaleTooLarge`, rejected before any arithmetic, which keeps the scale invariant.
     pub fn try_from_string(num_str: &str, ibase: usize) -> Result<Self, RuntimeError> {
         let text = num_str.replace("\\\n", "").to_ascii_uppercase();
         let (ds, fs) = literal_digit_values(text.as_bytes());
-        if fs.len() > BC_SCALE_MAX {
-            return Err(RuntimeError::ScaleTooLarge);
-        }
-        Ok(Self::from_digit_values(&ds, &fs, ibase))
+        Self::from_digit_values_checked(&ds, &fs, ibase)
     }
 
     /// Parses a numeric constant string under `ibase` into a BCNum.
@@ -732,8 +749,10 @@ impl BCNum {
     }
 }
 
-// The `-l` math library lives in `mathlib/`.
-pub use crate::mathlib::{EXP_ARG_MAX, bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
+// The `-l` math library lives in `mathlib/`; the evaluator calls it from there.
+pub use crate::mathlib::EXP_ARG_MAX;
+#[cfg(test)]
+use crate::mathlib::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
 
 // Not under Miri, like the integration proptests: the cases are pure BigInt arithmetic.
 #[cfg(all(test, not(miri)))]
@@ -867,6 +886,40 @@ mod tests {
 
         let b = BCNum::from_string("0.25", 10);
         assert_eq!(b.format_obase(16), ".40");
+    }
+
+    #[test]
+    fn public_conversions_check_their_bases_and_scale() {
+        use crate::verified_kernels::BC_BASE_MAX;
+        for ibase in [0, 1, 17, usize::MAX] {
+            assert_eq!(
+                BCNum::try_from_string("1", ibase),
+                Err(RuntimeError::BaseOutOfRange)
+            );
+        }
+        assert_eq!(
+            BCNum::try_from_string("1F", 16),
+            Ok(BCNum::from_string("31", 10))
+        );
+        assert_eq!(
+            BCNum::try_from_string("11", 2),
+            Ok(BCNum::from_string("3", 10))
+        );
+
+        let a = BCNum::from_string("255.5", 10);
+        for obase in [0, 1, BC_BASE_MAX + 1, usize::MAX] {
+            assert_eq!(a.try_format_obase(obase), Err(RuntimeError::BaseOutOfRange));
+        }
+        assert_eq!(a.try_format_obase(2).as_deref(), Ok("11111111.1000"));
+        assert_eq!(
+            a.try_format_obase(BC_BASE_MAX).as_deref(),
+            Ok(" 0000000255.1073741823")
+        );
+        let too_fine = BCNum::new(BigInt::from(1), BC_SCALE_MAX + 1);
+        assert_eq!(
+            too_fine.try_format_obase(10),
+            Err(RuntimeError::ScaleTooLarge)
+        );
     }
 
     #[test]

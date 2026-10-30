@@ -205,6 +205,11 @@ impl Evaluator {
                 self.stderr_writer.write_bytes(&m);
                 proof { assert(m@ =~= bc_spec::eval::msg_nesting_too_deep()); }
             },
+            RuntimeError::BaseOutOfRange => {
+                let m: [u8; 17] = [98, 97, 115, 101, 32, 111, 117, 116, 32, 111, 102, 32, 114, 97, 110, 103, 101];
+                self.stderr_writer.write_bytes(&m);
+                proof { assert(m@ =~= runtime_msg(RuntimeError::BaseOutOfRange)); }
+            },
         }
     }
 

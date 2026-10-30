@@ -9,6 +9,7 @@
 //! `out_digit`: a character for `obase <= 16`, otherwise a separator and the zero-padded decimal
 //! value.
 
+use crate::error::RuntimeError;
 use crate::math::{BCNum, pow10_within};
 #[cfg(verus_keep_ghost)]
 use crate::real_arith::lemma_pow_ge_pow2;
@@ -21,7 +22,8 @@ use crate::trusted_bigint::{
     big_tdiv, big_to_u64_small, big_trem,
 };
 #[cfg(verus_keep_ghost)]
-use crate::verified_kernels::{BC_BASE_MAX, BC_SCALE_MAX, POSIX_WRAP_COL_LIMIT};
+use crate::verified_kernels::POSIX_WRAP_COL_LIMIT;
+use crate::verified_kernels::{BC_BASE_MAX, BC_SCALE_MAX};
 use crate::verified_kernels::{verified_multi_digit_obase_pad_zeros, verified_wrapped_stdout_step};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -488,7 +490,7 @@ pub(crate) fn wrap_output(col: usize, s: &[u8]) -> (r: (Vec<u8>, usize))
 
 impl BCNum {
     /// The output of the value in `obase` (without the newline): `l0_format` of the value.
-    pub fn format_bytes(&self, obase: usize) -> (r: Vec<u8>)
+    pub(crate) fn format_bytes(&self, obase: usize) -> (r: Vec<u8>)
         requires
             2 <= obase <= BC_BASE_MAX,
             self.scale <= BC_SCALE_MAX,
@@ -558,16 +560,49 @@ impl BCNum {
     }
 }
 
+impl BCNum {
+    /// `format_bytes` for a caller outside verified code: checks its preconditions and
+    /// returns `BaseOutOfRange` or `ScaleTooLarge` when they do not hold.
+    #[allow(
+        clippy::manual_range_contains,
+        reason = "Verus compares the bounds directly; it does not specify RangeInclusive::contains"
+    )]
+    pub(crate) fn checked_format_bytes(&self, obase: usize) -> (r: Result<Vec<u8>, RuntimeError>)
+        ensures
+            r is Ok ==> 2 <= obase <= BC_BASE_MAX && self.scale <= BC_SCALE_MAX
+                && r->Ok_0@ == l0_format(self.val(), obase as u32),
+            r is Err ==> !(2 <= obase <= BC_BASE_MAX && self.scale <= BC_SCALE_MAX),
+    {
+        if obase < 2 || obase > BC_BASE_MAX {
+            return Err(RuntimeError::BaseOutOfRange);
+        }
+        if self.scale > BC_SCALE_MAX {
+            return Err(RuntimeError::ScaleTooLarge);
+        }
+        Ok(self.format_bytes(obase))
+    }
+}
+
 } // verus!
 
 impl BCNum {
-    /// Formats the BCNum value as a string in `obase` (2 to `BC_BASE_MAX`): `format_bytes`,
-    /// whose bytes are ASCII, as characters.
-    pub fn format_obase(&self, obase: usize) -> String {
-        self.format_bytes(obase)
+    /// Formats the value as a string in `obase`, as `print` writes it (without the newline
+    /// and the 70-column wrapping). An `obase` outside 2 to `BC_BASE_MAX` is `BaseOutOfRange`,
+    /// and a scale above `BC_SCALE_MAX` is `ScaleTooLarge`.
+    pub fn try_format_obase(&self, obase: usize) -> Result<String, RuntimeError> {
+        // The bytes of `format_bytes` are ASCII.
+        Ok(self
+            .checked_format_bytes(obase)?
             .into_iter()
             .map(char::from)
-            .collect()
+            .collect())
+    }
+
+    /// Formats the value as a string in `obase` (2 to `BC_BASE_MAX`).
+    #[cfg(test)]
+    pub fn format_obase(&self, obase: usize) -> String {
+        self.try_format_obase(obase)
+            .unwrap_or_else(|msg| panic!("{}", msg))
     }
 }
 
