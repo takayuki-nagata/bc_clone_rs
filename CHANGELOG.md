@@ -2,154 +2,114 @@
 
 ## Unreleased
 
+Without `-l`, the execution of every input unit after parsing is now proved with Verus to refine
+an executable formal specification of `bc`, and each `-l` function is proved to return the exact
+value truncated toward zero at `scale`. The parser is not proved; differential tests check it
+against the specification. AGENTS.md lists what the proofs assume.
+
 ### Verification
-- New executable formal specification `crates/bc_spec`: Verus specifications from input bytes to
-  stdout, stderr and exit status (decoding, input units, tokens, parsing, evaluation, output and
-  diagnostics; `-l` is not modeled). `exec_spec_verified!` compiles it into the reference
-  interpreter `bc_spec_oracle` (`scripts/build_spec_oracle.sh`) and proves the compiled code equal
-  to the specification; lemmas prove its arithmetic exact against integer definitions.
-- `crates/bc_cli/tests/spec_differential.rs` compares `bc_clone` with the specification on random
-  programs, including inputs that cannot be compared with GNU `bc` (syntax errors, `ibase`
-  changes, `-s`/`-w`, `quit`, invalid UTF-8), and checks the specification against GNU `bc`. The
-  POSIX conformance script also runs against the specification (`BC_BIN=target/bc_spec_oracle`).
-- `crates/bc_spec` is a Cargo package (library and the `bc_spec_oracle` binary) in the workspace,
-  outside `default-members`. It is verified with `cargo verus verify -p bc_spec`, and the oracle
-  is compiled with a normal `cargo build`.
-- `bc_core` is verified with `cargo verus verify -p bc_core --features verify`. The `verify`
-  feature links `vstd` and the executable specification (for the refinement proofs); production
-  builds link neither. The L0 number model `spec_num.rs` moved into `crates/bc_spec`.
-- Lemmas for the refinement proofs, in `crates/bc_spec`: an evaluation that did not run out of
-  fuel gives the same result with more fuel (`fuel.rs`), and array subscripts and register
-  stores depend only on the value of a number, not on its digit sequence (`values.rs`).
-- The output of a number has an integer-level definition in the specification (`l0_format` in
-  `crates/bc_spec/src/format.rs`: digits by repeated division and multiplication, and the
-  smallest `k` with `obase^k >= 10^scale` fraction digits), and Verus proves that the executable
-  `format_num` computes it for every `obase` from 2 to `BC_BASE_MAX`. The specification now also
-  prints the integer part of numbers with 2^28 or more digits, which it used to omit. The proofs
-  about digit counts depend on the value of a number (below 2^(2^60)), not on the length of its
-  digit sequence: the specification takes the number of division steps from the significant
-  digits, and `length()` of an integer part with more than 2^32 digits is no longer 0.
-- The output of numbers in `bc_core` (`BCNum::format_bytes`, behind `format_obase`) is verified
-  with Verus to write that definition for every `obase`, with the same output and speed as before.
-  The 70-column line wrapping (`WrappedStdout`) is verified against the specification's
-  `write_wrapped`; it now passes each string to the writer in one call.
-- `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`,
-  `scale_func`, the comparison used by `==`, `<`, … (`cmp_val`) and the value of a constant
-  (`from_digit_values`) are verified with Verus: they compute the integer (L0) definitions of
-  the POSIX operations exactly, assuming only the `num-bigint` operations listed in
-  `crates/bc_core/src/trusted_bigint.rs`.
-- Expression evaluation is proved to refine the specification for every
-  expression except function calls: constants, variables, array elements, registers, all
-  arithmetic and relational operators, `length`, `scale`, `sqrt`, assignments (including
-  compound ones, register clamping with its warnings, and a single hexadecimal digit for
-  `ibase`/`obase`) and `++`/`--`, with runtime errors and the nesting limit.
-- Statement execution is proved to refine the specification as well: expression statements
-  (printing the value unless it is an assignment), strings, blocks, `if`, `while`, `for`,
-  `break`, `return` and function definitions. `try_execute` now runs the verified executor.
-- Function calls are proved to refine the specification too: argument evaluation (including
-  copies of array arguments and parameter type errors), the parameter and `auto` frames, the
-  invocation `ibase`, the body, restoring the caller's state on every return path, and the
-  attribution of errors to the function. Every expression and statement the parser builds is
-  now covered when `-l` is not in effect; only `-l`'s functions remain outside the proof.
-- The execution of an input unit is proved to refine the specification's `run_unit` as well
-  (`Evaluator::run_parsed`): the `-w` / `-s` diagnostics, the statements, the syntax and
-  runtime diagnostics, `quit`, and whether the unit failed. The theorem assumes that the
-  parser's output corresponds to the specification's (`driver::r_parsed`; the parser
-  itself is not proved). `spec_differential.rs` checks that assumption on generated inputs.
-- A syntax error no longer clears the `break` and `return` flags (only a runtime error does, as
-  in the specification; no unit leaves them set). A diagnostic's line number above 2³² − 1 is
-  replaced by the unit's first line (`docs/COMPATIBILITY.md` §3.2).
-- The math library's interval arithmetic is verified with Verus over the reals:
-  every ball operation (`+`, `−`, integer multiples and quotients, shifts, precision reduction,
-  `×`, `÷`, `√`) contains the exact result for all values in its operands' balls, the truncation
-  decision is proved in place, and the retry loop ends and returns the truncation of any value
-  that all its balls contain. The balls of π and ln 2 are proved to contain them, and the
-  summation of each series (sin, cos, atan, artanh, exp, J_n) with its tail bound is proved to
-  return a ball containing the series' value; the argument bound that a tail bound needs is now
-  checked at run time (it always holds for the library's arguments). For all six functions
-  the whole result is proved: an `Ok` result is the exact value truncated toward zero at `scale`
-  digits (partial correctness: that a series loop ends is not proved). The evaluator's call of
-  these functions (`eval_math`) is verified too: it is no longer a trusted boundary. The
-  facts of real analysis that these proofs assume (series tail bounds, periodicity, Machin's
-  formula, …) are stated as axioms with their sources in `crates/bc_core/src/trusted_math.rs`.
+- **Executable specification.** `crates/bc_spec` defines `bc_clone`'s stdout, stderr and exit
+  status for any input without `-l`: decoding, input units, tokens, parsing, evaluation, output
+  and diagnostics. `exec_spec_verified!` compiles it into the reference interpreter
+  `bc_spec_oracle` (`scripts/build_spec_oracle.sh`) and proves the compiled code equal to the
+  specification, and lemmas prove its arithmetic and output exact against integer definitions
+  (`spec_num.rs`, `l0_format`). It is a Cargo package outside `default-members`, verified with
+  `cargo verus verify -p bc_spec`.
+- **Arithmetic and output.** `BCNum`'s operations (`add`, `sub`, `mul`, `try_div`, `try_mod_op`,
+  `try_pow`, `try_sqrt`, `length`, `scale_func`, the comparison `cmp_val`) and the value of a
+  constant compute the integer definitions of the POSIX operations exactly. The output of a
+  number (`format_bytes`) writes the specification's `l0_format` for every `obase`, and the
+  70-column wrapping matches the specification's `write_wrapped`.
+- **Evaluator.** Expression evaluation, statement execution, function calls and the execution of
+  an input unit (`Evaluator::run_parsed`: `-w`/`-s` diagnostics, syntax and runtime diagnostics,
+  `quit`, whether the unit failed) refine the specification for every program the parser builds,
+  without `-l` (partial correctness). The theorem assumes that the parser's output corresponds
+  to the specification's (`driver::r_parsed`), which the differential tests check.
+- **Math library.** Verus proves, over the reals, that the ball operations contain their exact
+  results, that the retry loop returns the truncation of the true value, that the balls of π and
+  ln 2 and of each series with its tail bound contain their values, and so that an `Ok` result of
+  `s`, `c`, `a`, `l`, `e` or `j` is the exact value truncated toward zero (partial correctness:
+  that a series loop ends is not proved). The facts of real analysis the proofs assume are stated
+  as axioms with their sources in `crates/bc_core/src/trusted_math.rs`.
+- **Tests.** `crates/bc_cli/tests/spec_differential.rs` compares `bc_clone` with the specification
+  on random programs, including inputs that cannot be compared with GNU `bc` (syntax errors,
+  `ibase` changes, `-s`/`-w`, `quit`, invalid UTF-8), checks the parser's output against the
+  specification's, and checks the specification against GNU `bc`. The POSIX conformance script
+  also runs against the specification (`BC_BIN=target/bc_spec_oracle`). A second differential
+  fuzzer generates deeply nested programs.
+- **Build.** `bc_core` is verified with `cargo verus verify -p bc_core --features verify`; the
+  `verify` feature links `vstd` and the specification, which production builds never link.
 
 ### Math library
-- `s`, `c`, `a`, `l`, `e`, `j` now compute with rigorous error bounds (midpoint-radius interval
+- `s`, `c`, `a`, `l`, `e`, `j` compute with rigorous error bounds (midpoint-radius interval
   arithmetic) and return a result only when every value within the bounds truncates to it,
   recomputing with twice the guard digits otherwise. The result is the exact value truncated
-  toward zero for every argument, not only for arguments where fixed guard digits happened to
-  suffice. Verus proves the truncation decision; `docs/MATH_ERROR_BOUNDS.md` derives the bounds.
-- `j(n,x)` with an argument whose integer part exceeds 2 000 000 000 is `argument too large`
-  instead of a computation that cannot finish.
+  toward zero for every argument, not only where fixed guard digits happened to suffice.
+  `docs/MATH_ERROR_BOUNDS.md` derives the bounds.
+- `e(x)` with a very large argument no longer crashes or returns 0 (`e(-(10^20))` aborted with an
+  internal error and `e(10^20)` printed `0`), and `j(n,x)` with an order outside the 64-bit range
+  no longer computes `J_0` (`j(10^20,1)` printed `.765…`) or aborts
+  (`j(-9223372036854775808,1)`). Results that truncate to 0 are returned without computing them;
+  an argument of `e` or `j` whose integer part exceeds 2 000 000 000, and an order of `j` outside
+  the range whose result is not provably 0, are the new runtime error `argument too large`.
 
-### Fixes
-- On 32-bit targets (RISC-V, Wasm), a power of a number without fractional digits whose exponent
-  does not fit in 32 bits, such as `1^5000000000`, is no longer `scale too large`: the exact scale
-  of a power is computed in 64 bits. Found by the refinement proof of `^`.
-- A NUL character in the input no longer ends the input unit silently. It is reported as
-  `illegal character: ^@` and processing continues with the next unit. Other control characters
-  are shown as `^X`, and DEL and non-ASCII characters as octal escapes (`\177`), as in GNU `bc`.
-- An unterminated string is reported at the line where it starts.
-- Input that is not valid UTF-8 is no longer discarded without a diagnostic. Invalid bytes are
-  reported as illegal characters and the rest of the input is processed, on standard input
-  (also interactively) and in files. A file that is not UTF-8 is no longer reported as
-  `cannot open file`.
-- `e(x)` with a very large argument no longer crashes or returns 0: `e(-(10^20))` used to abort
-  with an internal error and `e(10^20)` printed `0`. A result that truncates to 0 is now
-  returned without computing it, and an argument whose integer part exceeds 2 000 000 000 is the
-  new runtime error `argument too large`.
-- `j(n,x)` with an order outside the 64-bit range no longer computes `J_0`
-  (`j(10^20,1)` printed `.765…`), and `j(-9223372036854775808,1)` no longer aborts. Large orders
-  whose result truncates to 0 return 0; other orders outside the range are `argument too large`.
-- `bc_core` no longer panics when an embedder empties a scope stack through the public
-  `Evaluator::variables` / `Evaluator::arrays` fields.
-- Deep nesting no longer crashes with a stack overflow. Programs such as a 20 000-term sum, 10 000
-  nested parentheses, or recursion 10 000 calls deep aborted the process (and could corrupt
-  memory on embedded targets). Statements, expressions, and pending calls now have a nesting
-  limit (`docs/COMPATIBILITY.md` §2), reported as `nesting too deep`. The CLI evaluates on a
-  512 MiB-stack thread with a limit of 100 000 levels; embedders set `Evaluator::max_depth` or
-  call the new `bc_session_set_max_depth`. The Zephyr main stack grows to 96 KiB.
-- Numeric constants in a function body are interpreted in the `ibase` in effect when the
-  function was invoked, as POSIX requires, even if the body changes `ibase`:
-  `define f() { ibase = 16; return (10) }; f()` printed 16 and now prints 10, as GNU `bc` does.
-- Documented behavior: a name repeated in a function's parameter and `auto` lists is accepted.
-- Command-line options follow the XBD 12.2 Utility Syntax Guidelines, as POSIX requires: options
-  may be grouped (`-lw`), `--` ends the options, and `-` is a file operand. Long options are
-  reported as `bc: unrecognized option '--name'`.
+### Behavior changes and fixes
+- **Input.** A NUL character no longer ends the input unit silently: it is reported as
+  `illegal character: ^@` and processing continues. Other control characters are shown as `^X`,
+  and DEL and non-ASCII characters as octal escapes (`\177`), as in GNU `bc`. Input that is not
+  valid UTF-8 is no longer discarded without a diagnostic: invalid bytes are reported as illegal
+  characters and the rest is processed, on standard input (also interactively) and in files, and
+  such a file is no longer `cannot open file`. An unterminated string is reported at the line
+  where it starts.
+- **Nesting limit.** Deep nesting no longer crashes with a stack overflow (a 20 000-term sum,
+  10 000 nested parentheses or recursion 10 000 calls deep aborted the process, and could corrupt
+  memory on embedded targets). Statements, expressions and pending calls have a nesting limit
+  (`docs/COMPATIBILITY.md` §2), reported as `nesting too deep`. The CLI evaluates on a 512 MiB
+  stack with a limit of 100 000 levels; embedders set `Evaluator::max_depth` or call the new
+  `bc_session_set_max_depth`. The Zephyr main stack grows to 96 KiB.
+- **`ibase` in functions.** Numeric constants in a function body are interpreted in the `ibase` in
+  effect when the function was invoked, as POSIX requires, even if the body changes `ibase`:
+  `define f() { ibase = 16; return (10) }; f()` printed 16 and now prints 10.
+- **Powers on 32-bit targets.** On RISC-V and Wasm, a power of a number without fractional digits
+  whose exponent does not fit in 32 bits, such as `1^5000000000`, is no longer
+  `scale too large`.
+- **Diagnostics.** A syntax error no longer clears the `break` and `return` flags (only a runtime
+  error does; no unit leaves them set). A diagnostic's line number above 2³² − 1 is replaced by
+  the unit's first line (`docs/COMPATIBILITY.md` §3.2).
+- A name repeated in a function's parameter and `auto` lists is accepted (now documented).
+
+### Command line
+- Options follow the XBD 12.2 Utility Syntax Guidelines, as POSIX requires: options may be grouped
+  (`-lw`), `--` ends the options, and `-` is a file operand. Long options are reported as
+  `bc: unrecognized option '--name'`.
 
 ### API changes (`bc_core`)
-- The panicking convenience wrappers (`BCNum::div`, `mod_op`, `pow`, `sqrt`,
-  `Lexer::get_next_token`, `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`,
-  `Evaluator::evaluate`, `Evaluator::execute`) are removed from the public API. Use the `try_*`
-  forms, which return every error as an `Err`.
-- `math::bc_sin`, `bc_cos`, `bc_atan`, `bc_ln`, `bc_exp` and `bc_bessel` return
-  `Result<BCNum, RuntimeError>`; the new `RuntimeError::MathArgumentTooLarge` is reported as
-  `argument too large`.
-- `bc_core` denies `unwrap`, `expect`, `panic!`, and lossy integer casts outside tests.
-- `BCNum::from_string` is replaced by `BCNum::try_from_string`, which returns `ScaleTooLarge`
-  for a constant with more than `BC_SCALE_MAX` fraction digits before converting it; the
-  panicking `from_string` remains for tests only.
-- Operators in the syntax tree are enums instead of strings: `Expr::BinaryOp(BinOp, …)`,
-  `RelationalOp(RelOp, …)`, `AssignOp(AssignOp, …)` (`Assign` or `Compound(BinOp)`),
-  `Negate(…)` instead of `UnaryOp(char, …)`, and `Update(increment, prefix, target)` instead of
-  `UpdateOp(String, prefix, target)`. Their order matches the operator codes of the
-  executable specification.
-- `Evaluator::stderr_writer` is an `ErrWriter` (a wrapper of the `Box<dyn BcWriter>` given to
-  `Evaluator::new`, with `write_fmt` and `flush`, so `writeln!` works as before), and array
-  frames are `BTreeMap<usize, BCNum>` instead of `BTreeMap<BigInt, BCNum>` (subscripts are below
-  `BC_DIM_MAX`).
-- `BcError::in_function` takes the function name as `&String`.
-- `Register::name` is removed (nothing used it once the register warnings became verified byte
-  strings).
 - The `Evaluator`'s state is no longer public: `variables`, `arrays`, `functions`,
   `math_enabled`, the output streams, the `break`/`return`/`quit` flags and `return_value` are
   crate-private, so that code outside `bc_core` cannot store a number that breaks the invariant
   the proofs rely on (every scale at most `BC_SCALE_MAX`). Front ends use the new methods
-  `stderr_writer()`, `request_quit()`, `clear_quit()` and `reset_control_flags()`; `max_depth`
-  and `extension_policy` stay public.
-- `BCNum::try_from_string` reads a constant with the same verified digit conversion as the
-  evaluator. Lowercase letters still read as uppercase; the result for characters that cannot
-  appear in a constant is unspecified (they used to read as 0).
+  `stderr_writer()` (an `ErrWriter` with `write_fmt` and `flush`, so `writeln!` works),
+  `request_quit()`, `clear_quit()` and `reset_control_flags()`; `max_depth` and
+  `extension_policy` stay public.
+- The panicking convenience wrappers (`BCNum::from_string`, `div`, `mod_op`, `pow`, `sqrt`,
+  `Lexer::get_next_token`, `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`,
+  `Evaluator::evaluate`, `Evaluator::execute`) are removed from the public API. Use the `try_*`
+  forms, which return every error as an `Err`.
+- `BCNum::try_from_string` returns `ScaleTooLarge` for a constant with more than `BC_SCALE_MAX`
+  fraction digits before converting it, and reads a constant with the evaluator's verified digit
+  conversion. Lowercase letters read as uppercase; the result for characters that cannot appear
+  in a constant is unspecified (they used to read as 0).
+- `math::bc_sin`, `bc_cos`, `bc_atan`, `bc_ln`, `bc_exp` and `bc_bessel` return
+  `Result<BCNum, RuntimeError>`; the new `RuntimeError::MathArgumentTooLarge` is reported as
+  `argument too large`.
+- Operators in the syntax tree are enums instead of strings: `Expr::BinaryOp(BinOp, …)`,
+  `RelationalOp(RelOp, …)`, `AssignOp(AssignOp, …)` (`Assign` or `Compound(BinOp)`),
+  `Negate(…)` instead of `UnaryOp(char, …)`, and `Update(increment, prefix, target)` instead of
+  `UpdateOp(String, prefix, target)`, in the order of the specification's operator codes.
+- Array frames are `BTreeMap<usize, BCNum>` instead of `BTreeMap<BigInt, BCNum>` (subscripts are
+  below `BC_DIM_MAX`). `BcError::in_function` takes the function name as `&String`.
+  `Register::name` is removed.
+- `bc_core` denies `unwrap`, `expect`, `panic!`, and lossy integer casts outside tests.
 
 ## v0.4.0 — 2026-10-26
 
