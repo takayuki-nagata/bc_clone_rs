@@ -11,6 +11,8 @@
 
 use crate::math::{BCNum, pow10_within};
 #[cfg(verus_keep_ghost)]
+use crate::real_arith::lemma_pow_ge_pow2;
+#[cfg(verus_keep_ghost)]
 use crate::spec_num::*;
 #[cfg(verus_keep_ghost)]
 use crate::trusted_bigint::big_view;
@@ -162,26 +164,6 @@ fn push_digit(out: &mut Vec<u8>, d: u64, obase: usize, sep: u8)
             assert(old(out)@.push(sep).add(zeros(pad as u64)).add(dec_str(d))
                 =~= old(out)@.add(seq![sep].add(padded(d, w))));
         }
-    }
-}
-
-/// `pow(ob, k) >= pow(2, k)` for `ob >= 2`.
-proof fn lemma_pow_ge_pow2(ob: int, k: nat)
-    requires
-        ob >= 2,
-    ensures
-        spec_pow_int(ob, k) >= spec_pow_int(2, k),
-        spec_pow_int(2, k) >= 1,
-    decreases k,
-{
-    if k > 0 {
-        lemma_pow_ge_pow2(ob, (k - 1) as nat);
-        let (a, b) = (spec_pow_int(ob, (k - 1) as nat), spec_pow_int(2, (k - 1) as nat));
-        assert(ob * a >= 2 * b && 2 * b >= 1) by (nonlinear_arith)
-            requires
-                ob >= 2,
-                a >= b,
-                b >= 1;
     }
 }
 

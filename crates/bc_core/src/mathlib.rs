@@ -2560,54 +2560,6 @@ proof fn lemma_exp_n_ln2(n: int)
     }
 }
 
-/// (a as real)^m = (a^m) as real.
-proof fn lemma_pow_r_int(a: int, m: nat)
-    ensures
-        pow_r(a as real, m) == spec_pow_int(a, m) as real,
-    decreases m,
-{
-    if m > 0 {
-        lemma_pow_r_int(a, (m - 1) as nat);
-        lemma_cast_mul(a, spec_pow_int(a, (m - 1) as nat));
-    }
-}
-
-/// a^k > b^k for a > b > 0 and k >= 1.
-proof fn lemma_pow_r_gt(a: real, b: real, k: nat)
-    requires
-        a > b,
-        b > 0real,
-        k >= 1,
-    ensures
-        pow_r(a, k) > pow_r(b, k),
-        pow_r(b, k) > 0real,
-    decreases k,
-{
-    if k == 1 {
-        assert(pow_r(a, 1) == a * pow_r(a, 0));
-        assert(pow_r(b, 1) == b * pow_r(b, 0));
-        let (pa0, pb0) = (pow_r(a, 0), pow_r(b, 0));
-        assert(pa0 == 1real && pb0 == 1real);
-        assert(a * pa0 > b * pb0 && b * pb0 > 0real) by (nonlinear_arith)
-            requires
-                pa0 == 1real,
-                pb0 == 1real,
-                a > b,
-                b > 0real,
-        ;
-    } else {
-        lemma_pow_r_gt(a, b, (k - 1) as nat);
-        let (pa, pb) = (pow_r(a, (k - 1) as nat), pow_r(b, (k - 1) as nat));
-        assert(a * pa > b * pb && b * pb > 0real) by (nonlinear_arith)
-            requires
-                a > b,
-                b > 0real,
-                pa > pb,
-                pb > 0real,
-        ;
-    }
-}
-
 /// e^2.3026 > 10 (2.3026 > ln 10). With z = 2.3026/4, the exponential series' tail bound after
 /// nine terms gives e^z >= 1.778284, and 1.778284^4 > 10.
 proof fn lemma_exp_23026()
@@ -2778,17 +2730,6 @@ proof fn lemma_exp_tiny(x: real, scale: nat)
             ps >= 1real,
             y == ex * ps,
     ;
-}
-
-/// 10^n as `pow10` and as `spec_pow_int(10, n)` agree.
-proof fn lemma_pow10_is_pow(n: nat)
-    ensures
-        spec_num::pow10(n) == spec_pow_int(10, n),
-    decreases n,
-{
-    if n > 0 {
-        lemma_pow10_is_pow((n - 1) as nat);
-    }
 }
 
 /// Term 0 of the exponential series is 1.
@@ -2986,65 +2927,6 @@ pub fn bc_exp(x: &BCNum, global_scale: usize) -> (r: Result<BCNum, RuntimeError>
 // --- Bessel functions ---
 
 verus! {
-
-/// 0 <= a <= b implies 0 <= a^k <= b^k.
-proof fn lemma_pow_r_mono(a: real, b: real, k: nat)
-    requires
-        0real <= a,
-        a <= b,
-    ensures
-        0real <= pow_r(a, k),
-        pow_r(a, k) <= pow_r(b, k),
-    decreases k,
-{
-    if k > 0 {
-        lemma_pow_r_mono(a, b, (k - 1) as nat);
-        let (pa, pb) = (pow_r(a, (k - 1) as nat), pow_r(b, (k - 1) as nat));
-        assert(0real <= a * pa && a * pa <= b * pb) by (nonlinear_arith)
-            requires
-                0real <= a,
-                a <= b,
-                0real <= pa,
-                pa <= pb,
-        ;
-    }
-}
-
-/// (a·b)^k = a^k·b^k.
-proof fn lemma_pow_r_mul(a: real, b: real, k: nat)
-    ensures
-        pow_r(a * b, k) == pow_r(a, k) * pow_r(b, k),
-    decreases k,
-{
-    if k > 0 {
-        lemma_pow_r_mul(a, b, (k - 1) as nat);
-        let (pa, pb) = (pow_r(a, (k - 1) as nat), pow_r(b, (k - 1) as nat));
-        assert((a * b) * (pa * pb) == (a * pa) * (b * pb)) by (nonlinear_arith);
-    }
-}
-
-/// For 0 <= a <= 1, a^k <= a^j when j <= k.
-proof fn lemma_pow_r_le_one(a: real, j: nat, k: nat)
-    requires
-        0real <= a,
-        a <= 1real,
-        j <= k,
-    ensures
-        pow_r(a, k) <= pow_r(a, j),
-    decreases k - j,
-{
-    if j < k {
-        lemma_pow_r_le_one(a, j, (k - 1) as nat);
-        lemma_pow_r_mono(0real, a, (k - 1) as nat);
-        let p = pow_r(a, (k - 1) as nat);
-        assert(a * p <= p) by (nonlinear_arith)
-            requires
-                0real <= a,
-                a <= 1real,
-                0real <= p,
-        ;
-    }
-}
 
 /// e <= 2.75 < 3, from the tail bound of the exponential series after four terms.
 proof fn lemma_e_le_3()
@@ -3262,17 +3144,6 @@ proof fn lemma_bessel_tiny(n: nat, x: real, scale: nat)
             ps >= 1real,
             b >= 0real,
     ;
-}
-
-/// 1^n = 1.
-proof fn lemma_pow_r_one(n: nat)
-    ensures
-        pow_r(1real, n) == 1real,
-    decreases n,
-{
-    if n > 0 {
-        lemma_pow_r_one((n - 1) as nat);
-    }
 }
 
 /// J_n(0) is 1 for n = 0 and 0 otherwise, from the tail bound of the series after one term.
