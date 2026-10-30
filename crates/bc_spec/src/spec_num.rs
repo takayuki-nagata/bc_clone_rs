@@ -3,8 +3,8 @@
 //! Mathematical (L0) specification of `bc` numbers over the unbounded integers.
 //!
 //! These definitions are the meaning of every number in the executable specification and the
-//! reference point for the proofs about `bc_core` (its design models in `verus_proofs.rs`, and
-//! the refinement proofs), which uses them through `bc_core::spec_num`.
+//! reference point for the refinement proofs of `bc_core`, which uses them through
+//! `bc_core::spec_num`.
 
 use vstd::prelude::*;
 
