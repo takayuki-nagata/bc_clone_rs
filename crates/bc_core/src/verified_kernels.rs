@@ -13,6 +13,11 @@
 //! The integer casts in the kernel bodies are lossless: each kernel's `ensures` clause states
 //! the result over mathematical integers, so Verus proves that no cast wraps or truncates for
 //! inputs that satisfy its `requires` clause (and Kani re-checks them bit-precisely).
+//!
+//! The `requires` clauses are not checked at run time, so a kernel is `pub` only if a front
+//! end calls it; the others are `pub(crate)`, called only by verified code or by the callers
+//! that AGENTS.md lists. Of the public kernels, only `verified_repl_block_completeness` has a
+//! precondition.
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -31,7 +36,7 @@ macro_rules! dual_verified {
         )*
         $(
             $(#[$meta:meta])*
-            pub fn $name:ident( $($arg:ident : $arg_ty:ty),* $(,)? ) -> ($ret_name:ident : $ret_ty:ty)
+            pub $(($scope:tt))? fn $name:ident( $($arg:ident : $arg_ty:ty),* $(,)? ) -> ($ret_name:ident : $ret_ty:ty)
                 $(requires [ $($req:tt)* ])?
                 ensures [ $($ens:tt)* ]
             $body:block
@@ -43,7 +48,7 @@ macro_rules! dual_verified {
             )*
             $(
                 $(#[$meta])*
-                pub fn $name( $($arg : $arg_ty),* ) -> ($ret_name : $ret_ty)
+                pub $(($scope))? fn $name( $($arg : $arg_ty),* ) -> ($ret_name : $ret_ty)
                     $(requires $($req)*)?
                     ensures $($ens)*
                 $body
@@ -60,7 +65,7 @@ macro_rules! dual_verified {
         )*
         $(
             $(#[$meta:meta])*
-            pub fn $name:ident( $($arg:ident : $arg_ty:ty),* $(,)? ) -> ($ret_name:ident : $ret_ty:ty)
+            pub $(($scope:tt))? fn $name:ident( $($arg:ident : $arg_ty:ty),* $(,)? ) -> ($ret_name:ident : $ret_ty:ty)
                 $(requires [ $($req:tt)* ])?
                 ensures [ $($ens:tt)* ]
             $body:block
@@ -77,7 +82,7 @@ macro_rules! dual_verified {
                 clippy::manual_clamp,
                 clippy::implicit_saturating_sub
             )]
-            pub fn $name( $($arg : $arg_ty),* ) -> $ret_ty
+            pub $(($scope))? fn $name( $($arg : $arg_ty),* ) -> $ret_ty
             $body
         )+
     };
@@ -111,7 +116,7 @@ dual_verified! {
     ///
     /// Proves that any ASCII byte maps to a bounded value in $0..=15$, with exact mappings
     /// for `'0'..='9'`, `'A'..='F'`, and `'a'..='f'`.
-    pub fn verified_hex_char_val(c: u8) -> (res: usize)
+    pub(crate) fn verified_hex_char_val(c: u8) -> (res: usize)
         ensures [
             res <= 15,
             (b'0' <= c && c <= b'9') ==> res == (c - b'0') as usize,
@@ -133,7 +138,7 @@ dual_verified! {
     }
 
     /// Verified POSIX scale and shift calculation for `BCNum::add` and `BCNum::sub`.
-    pub fn verified_add_sub_scales(
+    pub(crate) fn verified_add_sub_scales(
         self_scale: usize,
         other_scale: usize,
     ) -> (res: (usize, usize, usize))
@@ -160,7 +165,7 @@ dual_verified! {
     /// POSIX IEEE Std 1003.1 mandates:
     /// `scale(a * b) = min(scale(a) + scale(b), max(scale, scale(a), scale(b)))`.
     /// Formally proves that `exact_scale >= sr` always holds (i.e., `diff = exact_scale - sr >= 0`).
-    pub fn verified_mul_scale_and_shift(
+    pub(crate) fn verified_mul_scale_and_shift(
         self_scale: usize,
         other_scale: usize,
         global_scale: usize,
@@ -203,7 +208,7 @@ dual_verified! {
     }
 
     /// Verified POSIX scale and signed decimal shift calculation for `BCNum::div`.
-    pub fn verified_div_scale_and_shift(
+    pub(crate) fn verified_div_scale_and_shift(
         self_scale: usize,
         other_scale: usize,
         global_scale: usize,
@@ -226,7 +231,7 @@ dual_verified! {
     /// Verified POSIX scale and radicand shift calculation for `BCNum::sqrt`.
     ///
     /// Proves that `2 * sr >= self.scale` always holds without underflow.
-    pub fn verified_sqrt_scale_and_shift(
+    pub(crate) fn verified_sqrt_scale_and_shift(
         self_scale: usize,
         global_scale: usize,
     ) -> (res: (usize, usize))
@@ -252,7 +257,7 @@ dual_verified! {
     }
 
     /// Verified POSIX `length(x)` significant digit count calculation (`math.rs:BCNum::length`).
-    pub fn verified_bcnum_length(
+    pub(crate) fn verified_bcnum_length(
         int_part_is_zero: bool,
         int_part_digits: usize,
         scale: usize,
@@ -282,7 +287,7 @@ dual_verified! {
 
     /// Verified Bessel function negative-order parity identity $J_{-n}(x) = (-1)^n J_n(x)$
     /// (`math.rs:bc_bessel`).
-    pub fn verified_bessel_negative_order_parity(n_i64: i64) -> (res: (i64, i64))
+    pub(crate) fn verified_bessel_negative_order_parity(n_i64: i64) -> (res: (i64, i64))
         requires [
             n_i64 > i64::MIN,
         ]
@@ -310,7 +315,7 @@ dual_verified! {
     /// Verified single-character state transition for `WrappedStdout` (`format::wrap_output`).
     ///
     /// Returns `(next_col, should_emit_backslash_newline_before_char)`.
-    pub fn verified_wrapped_stdout_step(col: usize, is_newline: bool) -> (res: (usize, bool))
+    pub(crate) fn verified_wrapped_stdout_step(col: usize, is_newline: bool) -> (res: (usize, bool))
         requires [
             col <= POSIX_WRAP_COL_LIMIT,
         ]
@@ -331,7 +336,7 @@ dual_verified! {
     }
 
     /// Verified exponent shift calculation for relational operators (`BCNum::cmp_val`).
-    pub fn verified_relational_scale_shifts(
+    pub(crate) fn verified_relational_scale_shifts(
         l_scale: usize,
         r_scale: usize,
     ) -> (res: (usize, usize))
@@ -357,7 +362,7 @@ dual_verified! {
     }
 
     /// Verified check for valid bc numeric literal characters (`0..=9` or `A..=F`) (`parser.rs`).
-    pub fn verified_is_bc_digit(b: u32) -> (res: bool)
+    pub(crate) fn verified_is_bc_digit(b: u32) -> (res: bool)
         ensures [
             res == ((48 <= b && b <= 57) || (65 <= b && b <= 70)),
         ]
@@ -366,7 +371,7 @@ dual_verified! {
     }
 
     /// Verified `Lexer::peek_token` buffer index clamping (`parser.rs`).
-    pub fn verified_lexer_peek_token_index(buffer_len: usize, offset: usize) -> (res: usize)
+    pub(crate) fn verified_lexer_peek_token_index(buffer_len: usize, offset: usize) -> (res: usize)
         requires [
             buffer_len >= 1,
         ]
@@ -385,7 +390,7 @@ dual_verified! {
     }
 
     /// Verified Pratt parser `next_min_prec` calculation (`parser.rs`).
-    pub fn verified_pratt_next_min_prec(op_prec: i8, right_assoc: bool) -> (res: i8)
+    pub(crate) fn verified_pratt_next_min_prec(op_prec: i8, right_assoc: bool) -> (res: i8)
         requires [
             1 <= op_prec && op_prec <= 10,
         ]
@@ -402,7 +407,7 @@ dual_verified! {
     }
 
     /// Verified POSIX `pow` target scale `sr` and non-negative truncation shift `diff` (`math.rs:BCNum::pow`).
-    pub fn verified_pow_scale_and_shift(
+    pub(crate) fn verified_pow_scale_and_shift(
         res_scale: usize,
         a_scale: usize,
         global_scale: usize,
@@ -440,7 +445,7 @@ dual_verified! {
     }
 
     /// Verified zero-padding count for multi-digit `obase > 16` formatting (`math.rs:format_obase`).
-    pub fn verified_multi_digit_obase_pad_zeros(digit_width: usize, rem_len: usize) -> (res: usize)
+    pub(crate) fn verified_multi_digit_obase_pad_zeros(digit_width: usize, rem_len: usize) -> (res: usize)
         ensures [
             digit_width > rem_len ==> (res == digit_width - rem_len && res + rem_len == digit_width),
             digit_width <= rem_len ==> res == 0,
@@ -454,7 +459,7 @@ dual_verified! {
     }
 
     /// Verified internal guard precision calculation for transcendental functions (`math.rs`).
-    pub fn verified_transcendental_guard_prec(
+    pub(crate) fn verified_transcendental_guard_prec(
         x_scale: usize,
         global_scale: usize,
         extra_prec: usize,
@@ -481,7 +486,7 @@ dual_verified! {
 
     /// Verified nesting-limit check (`parser.rs` and `eval/`): whether `depth` enclosing
     /// levels plus `height` more stay within `max_depth`, computed without overflow.
-    pub fn verified_nesting_within_limit(depth: usize, height: usize, max_depth: usize) -> (res: bool)
+    pub(crate) fn verified_nesting_within_limit(depth: usize, height: usize, max_depth: usize) -> (res: bool)
         ensures [
             res == ((depth as int) + (height as int) <= (max_depth as int)),
         ]
@@ -490,7 +495,7 @@ dual_verified! {
     }
 
     /// Verified control-flow short-circuit check (`eval/stmt.rs`).
-    pub fn verified_should_abort_execution(
+    pub(crate) fn verified_should_abort_execution(
         break_flag: bool,
         return_flag: bool,
         quit_flag: bool,
@@ -505,7 +510,7 @@ dual_verified! {
     /// Verified post-body loop flag transition for `while` and `for` loops (`eval/stmt.rs`).
     ///
     /// Returns `(should_exit_loop, next_break_flag)`.
-    pub fn verified_loop_post_body_action(
+    pub(crate) fn verified_loop_post_body_action(
         break_flag: bool,
         return_flag: bool,
         quit_flag: bool,
@@ -520,7 +525,7 @@ dual_verified! {
     }
 
     /// Verified single-character cursor and line advancement (`parser.rs:Lexer::advance_char`).
-    pub fn verified_lexer_advance_step(
+    pub(crate) fn verified_lexer_advance_step(
         pos: usize,
         line: usize,
         is_newline: bool,
@@ -586,7 +591,7 @@ dual_verified! {
 
     /// Verified unsigned decimal shift and direction `(shift_digits, should_multiply)`
     /// for fixed-point scale conversions (`mathlib::ball::Ball::from_bcnum`).
-    pub fn verified_decimal_scale_shift(
+    pub(crate) fn verified_decimal_scale_shift(
         src_scale: usize,
         dst_scale: usize,
     ) -> (res: (usize, bool))
@@ -611,7 +616,7 @@ dual_verified! {
     /// - `-1`: `magnitude < min` ("<reg> too small, set to <min>")
     /// - `1`: `magnitude > max` ("<reg> too large, set to <max>")
     /// - `0`: in range (no warning)
-    pub fn verified_clamp_register(
+    pub(crate) fn verified_clamp_register(
         magnitude: usize,
         negative: bool,
         min: usize,
@@ -643,7 +648,7 @@ dual_verified! {
     /// (`parser.rs:Parser::get_infix_info`).
     ///
     /// Returns `(op_prec, right_assoc, next_min_prec)`.
-    pub fn verified_pratt_infix_info(tok_kind: u8) -> (res: (i8, bool, i8))
+    pub(crate) fn verified_pratt_infix_info(tok_kind: u8) -> (res: (i8, bool, i8))
         ensures [
             tok_kind == TOK_ASSIGN_OP ==> (res.0 == 1 && res.1 && res.2 == 1),
             tok_kind == TOK_PLUS_MINUS ==> (res.0 == 2 && !res.1 && res.2 == 3),
@@ -677,7 +682,7 @@ dual_verified! {
     /// Verified bounds-safe lookahead index calculation for `Lexer::peek_char` (`parser.rs`).
     ///
     /// Returns `(in_bounds, valid_idx)`.
-    pub fn verified_lexer_peek_char_index(
+    pub(crate) fn verified_lexer_peek_char_index(
         text_len: usize,
         pos: usize,
         offset: usize,
@@ -701,7 +706,7 @@ dual_verified! {
     }
 
     /// Verified identifier continuation character check (`a..=z`, `0..=9`, or `_`) (`parser.rs`).
-    pub fn verified_is_ident_continue(b: u32) -> (res: bool)
+    pub(crate) fn verified_is_ident_continue(b: u32) -> (res: bool)
         ensures [
             res == ((97 <= b && b <= 122) || (48 <= b && b <= 57) || b == 95),
         ]
