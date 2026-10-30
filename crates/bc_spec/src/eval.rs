@@ -537,6 +537,7 @@ pub open spec fn ev(nodes: Seq<Node>, n: usize, st: EState, fuel: u64) -> ER
 }
 
 /// `Evaluator::evaluate_node`.
+#[verifier::rlimit(20)]
 pub open spec fn ev_node(nodes: Seq<Node>, n: usize, st: EState, fuel: u64) -> ER
     decreases fuel
 {
