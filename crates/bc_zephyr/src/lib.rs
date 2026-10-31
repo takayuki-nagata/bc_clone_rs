@@ -484,7 +484,10 @@ mod tests {
     // Mock Zephyr C shims for host unit testing
     #[unsafe(no_mangle)]
     extern "C" fn zephyr_putc(c: core::ffi::c_char) {
-        MOCK_PUT_CHARS.lock().unwrap().push(c as u8);
+        MOCK_PUT_CHARS
+            .lock()
+            .unwrap()
+            .push(u8::from_ne_bytes(c.to_ne_bytes()));
     }
 
     #[unsafe(no_mangle)]
