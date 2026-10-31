@@ -22,13 +22,29 @@ pub fn run_command(cmd_name: &str, args: &[&str], input: &str) -> (i32, String, 
     run_command_bytes(cmd_name, args, &[], input.as_bytes())
 }
 
-/// Like [`run_command`], with raw input bytes and extra environment variables.
+/// Like [`run_command`], with raw input bytes and extra environment variables. Output that is
+/// not UTF-8 is decoded lossily; [`run_command_raw`] returns the bytes.
 pub fn run_command_bytes(
     cmd_name: &str,
     args: &[&str],
     envs: &[(&str, &str)],
     input: &[u8],
 ) -> (i32, String, String) {
+    let (exit_code, stdout, stderr) = run_command_raw(cmd_name, args, envs, input);
+    (
+        exit_code,
+        String::from_utf8_lossy(&stdout).into_owned(),
+        String::from_utf8_lossy(&stderr).into_owned(),
+    )
+}
+
+/// Like [`run_command_bytes`], returning stdout and stderr as bytes.
+pub fn run_command_raw(
+    cmd_name: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+    input: &[u8],
+) -> (i32, Vec<u8>, Vec<u8>) {
     let mut child = Command::new("timeout")
         .arg(TIME_LIMIT_SECS)
         .arg(cmd_name)
@@ -47,9 +63,7 @@ pub fn run_command_bytes(
 
     let output = child.wait_with_output().expect("failed to wait for output");
     let exit_code = output.status.code().unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    (exit_code, stdout, stderr)
+    (exit_code, output.stdout, output.stderr)
 }
 
 /// Rewrites GNU bc diagnostics into the format specified in `docs/COMPATIBILITY.md` §3.2:

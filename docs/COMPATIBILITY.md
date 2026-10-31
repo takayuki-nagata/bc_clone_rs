@@ -137,10 +137,10 @@ process may abort, as GNU `bc` does.
 - **Syntax errors**: a diagnostic, then processing continues with the next input unit.
 - Dynamic scopes (parameters and `auto`) are restored when an error unwinds out of a function.
 - **Input that is not valid UTF-8**: POSIX requires the input files to be text files, so other
-  input is undefined. The CLI decodes each file and standard input as UTF-8 and replaces each
-  invalid sequence with U+FFFD. Outside a string, U+FFFD is an illegal character
-  (`illegal character: \357\277\275`) and processing continues with the next input unit. Inside
-  a string, it is printed as U+FFFD. GNU prints such bytes unchanged.
+  input is undefined. `bc_clone` reads each file and standard input as bytes and does not decode
+  them (the C API reads its code string the same way). Inside a string, the bytes are printed
+  unchanged, as in GNU. Outside a string, an invalid byte is an illegal character
+  (`illegal character: \377`, §3.2) and processing continues with the next input unit.
 - **Exit status**: 0 when all input was processed without any error. 1 when any syntax or runtime
   error occurred (processing still continues to the end), when an option is invalid, or when a file
   cannot be opened. Warnings do not change the exit status.
@@ -148,7 +148,7 @@ process may abort, as GNU `bc` does.
 ### 3.2 Diagnostic formats
 | Kind | Format |
 |---|---|
-| Syntax error | `<source> <line>: syntax error`, or `<source> <line>: illegal character: <c>` for a character that cannot start a token (`<source>` is the file name, or `(standard_in)` for stdin). As in GNU, `<c>` is written as `^X` for a control character (NUL is `^@`) and as octal escapes of its UTF-8 bytes for DEL and non-ASCII characters (`\177`, `\303\251`). A NUL is an ordinary illegal character, not the end of input. An unterminated string is reported at the line where it starts |
+| Syntax error | `<source> <line>: syntax error`, or `<source> <line>: illegal character: <c>` for a character that cannot start a token (`<source>` is the file name, or `(standard_in)` for stdin). As in GNU, `<c>` is written as `^X` for a control character (NUL is `^@`) and as octal escapes for DEL and non-ASCII bytes (`\177`). A well-formed UTF-8 sequence is one character, written as the escapes of all its bytes (`\303\251`); any other non-ASCII byte is a character of its own (`\377`; the surrogate encoding `\355\240\200` is reported as `\355`). GNU reports every byte separately and goes on reading the line, so its first diagnostic for an invalid byte is the same, but for a multi-byte character it prints one diagnostic per byte, and further ones for the rest of the line. A NUL is an ordinary illegal character, not the end of input. An unterminated string is reported at the line where it starts |
 | Runtime error | `Runtime error (func=<name>): <message>` (`<name>` is `(main)` at top level) |
 | Runtime warning | `Runtime warning (func=<name>): <message>` |
 

@@ -9,7 +9,7 @@ against the specification. AGENTS.md lists what the proofs assume.
 
 ### Verification
 - **Executable specification.** `crates/bc_spec` defines `bc_clone`'s stdout, stderr and exit
-  status for any input without `-l`: decoding, input units, tokens, parsing, evaluation, output
+  status for any input without `-l`: input units, tokens, parsing, evaluation, output
   and diagnostics. `exec_spec_verified!` compiles it into the reference interpreter
   `bc_spec_oracle` (`scripts/build_spec_oracle.sh`) and proves the compiled code equal to the
   specification, and lemmas prove its arithmetic and output exact against integer definitions
@@ -61,8 +61,12 @@ against the specification. AGENTS.md lists what the proofs assume.
   and DEL and non-ASCII characters as octal escapes (`\177`), as in GNU `bc`. Input that is not
   valid UTF-8 is no longer discarded without a diagnostic: invalid bytes are reported as illegal
   characters and the rest is processed, on standard input (also interactively) and in files, and
-  such a file is no longer `cannot open file`. An unterminated string is reported at the line
-  where it starts.
+  such a file is no longer `cannot open file`. Input is read as bytes and not decoded: the
+  bytes of a string are printed unchanged (as in GNU; before, invalid UTF-8 became U+FFFD), and
+  outside a string an invalid byte is shown as itself (`\377`), while a well-formed multi-byte
+  character is shown as one (`\303\251`). The C API no longer rejects code that is not UTF-8
+  with `BC_STATUS_ERR_EXECUTION`. An unterminated string is reported at the line where it
+  starts.
 - **Nesting limit.** Deep nesting no longer crashes with a stack overflow (a 20 000-term sum,
   10 000 nested parentheses or recursion 10 000 calls deep aborted the process, and could corrupt
   memory on embedded targets). Statements, expressions and pending calls have a nesting limit

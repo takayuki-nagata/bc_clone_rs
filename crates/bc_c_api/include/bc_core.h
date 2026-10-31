@@ -41,7 +41,8 @@ typedef void (*bc_output_cb_t)(const char *str, void *user_data);
  * Like the bc command, evaluation continues after an error with the next input unit (a line,
  * or a multi-line construct).
  *
- * @param code Null-terminated string containing the bc code to evaluate.
+ * @param code Null-terminated string containing the bc code to evaluate, read as bytes
+ *        (it need not be UTF-8; the bytes of a bc string are written out unchanged).
  * @param math_enabled If true, preloads standard math functions (s, c, a, l, e, j).
  * @param default_scale Initial scale; values above 1000000000 are clamped to it.
  * @param out_buf Receives a null-terminated string: the standard output on success, or the
@@ -62,7 +63,8 @@ bc_status_t bc_eval(
 /**
  * Evaluates a bc script string and sends output chunks to callback functions.
  *
- * @param code Null-terminated string containing the bc code to evaluate.
+ * @param code Null-terminated string containing the bc code to evaluate, read as bytes
+ *        (it need not be UTF-8; the bytes of a bc string are written out unchanged).
  * @param math_enabled If true, preloads standard math functions.
  * @param default_scale Initial fractional digit scale.
  * @param stdout_cb Callback invoked for standard output chunks (may be NULL).
@@ -97,7 +99,8 @@ bc_session_t *bc_session_create(bool math_enabled);
  * Variables, functions, and scale persist across calls to the same session.
  *
  * @param session Pointer to active bc session.
- * @param code Null-terminated string containing the bc code to evaluate.
+ * @param code Null-terminated string containing the bc code to evaluate, read as bytes
+ *        (it need not be UTF-8; the bytes of a bc string are written out unchanged).
  * @param out_buf Buffer where the output result string will be stored.
  * @param buf_size Total size of out_buf in bytes.
  * @return BC_STATUS_OK on success, or an error status code.
@@ -113,7 +116,8 @@ bc_status_t bc_session_eval(
  * Evaluates bc code within a persistent session and streams output via callback.
  *
  * @param session Pointer to active bc session.
- * @param code Null-terminated string containing the bc code to evaluate.
+ * @param code Null-terminated string containing the bc code to evaluate, read as bytes
+ *        (it need not be UTF-8; the bytes of a bc string are written out unchanged).
  * @param stdout_cb Callback invoked for standard output chunks (may be NULL).
  * @param stderr_cb Callback invoked for error/warning messages (may be NULL).
  * @param user_data Context pointer passed to callback invocations.

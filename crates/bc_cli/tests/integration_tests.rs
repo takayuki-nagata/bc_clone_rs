@@ -4,7 +4,9 @@
 
 mod common;
 
-use common::{check_differential, expected_exit_code, normalize_gnu_stderr, run_command};
+use common::{
+    check_differential, expected_exit_code, normalize_gnu_stderr, run_command, run_command_raw,
+};
 use std::process::{Command, Stdio};
 
 #[test]
@@ -866,6 +868,34 @@ fn test_control_characters_in_input() {
     let programs = ["3\u{0}4\n5", "1\u{1}\n\u{7f}\n2"];
     for prog in &programs {
         check_differential(prog, &[]);
+    }
+}
+
+/// Input is bytes and is not decoded: the bytes of a string are printed unchanged, UTF-8 or
+/// not, and an invalid byte outside a string is an illegal character
+/// (`docs/COMPATIBILITY.md` §3.1, §3.2). Output is compared as bytes.
+#[test]
+fn test_invalid_utf8_in_strings_is_printed_unchanged() {
+    let programs: [&[u8]; 3] = [
+        b"\"a\xffb\"\n1\n",
+        b"\"\xed\xa0\x80\"\n\"\xe2\x82\"\n\"\xc0\x80\"\n2\n",
+        b"\"\xc3\xa9\"\n\xff\n3\n",
+    ];
+    for prog in programs {
+        let (gnu_code, gnu_out, gnu_err) = run_command_raw("bc", &[], &[], prog);
+        let expected_err = normalize_gnu_stderr(&String::from_utf8_lossy(&gnu_err));
+        let (code, out, err) = run_command_raw(env!("CARGO_BIN_EXE_bc_clone"), &[], &[], prog);
+        assert_eq!(out, gnu_out, "stdout of {prog:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&err),
+            expected_err,
+            "stderr of {prog:?}"
+        );
+        assert_eq!(
+            code,
+            expected_exit_code(gnu_code, &expected_err),
+            "status of {prog:?}"
+        );
     }
 }
 

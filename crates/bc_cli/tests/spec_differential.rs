@@ -28,7 +28,7 @@
 mod common;
 
 use common::generators::{PRELUDE, expr, program, statement, variable};
-use common::{TIMED_OUT, check_against_gnu, run_command_bytes};
+use common::{TIMED_OUT, check_against_gnu, run_command_raw};
 use proptest::prelude::*;
 
 /// Exit status of the oracle for inputs outside the specification.
@@ -66,22 +66,28 @@ fn check_against_spec(input: &[u8], flags: &[&str]) -> bool {
         return false;
     };
     let envs = [("BC_SPEC_MAX_DEPTH", MAX_DEPTH)];
-    let (spec_code, spec_out, spec_err) = run_command_bytes(&oracle, flags, &envs, input);
+    let (spec_code, spec_out, spec_err) = run_command_raw(&oracle, flags, &envs, input);
     if spec_code == TIMED_OUT || spec_code == NOT_MODELED {
         return false;
     }
-    let (code, out, err) = run_command_bytes(env!("CARGO_BIN_EXE_bc_clone"), flags, &[], input);
+    let (code, out, err) = run_command_raw(env!("CARGO_BIN_EXE_bc_clone"), flags, &[], input);
     if code == TIMED_OUT {
         return false;
     }
+    // Compared as bytes: a string's bytes are printed unchanged, UTF-8 or not.
     let shown = String::from_utf8_lossy(input);
-    assert_eq!(
-        out, spec_out,
-        "Stdout mismatch!\nProgram: {shown:?}\nFlags: {flags:?}"
+    let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    assert!(
+        out == spec_out,
+        "Stdout mismatch!\nProgram: {shown:?}\nFlags: {flags:?}\nbc_clone: {out:?} ({:?})\nspec: {spec_out:?} ({:?})",
+        text(&out),
+        text(&spec_out)
     );
-    assert_eq!(
-        err, spec_err,
-        "Stderr mismatch!\nProgram: {shown:?}\nFlags: {flags:?}"
+    assert!(
+        err == spec_err,
+        "Stderr mismatch!\nProgram: {shown:?}\nFlags: {flags:?}\nbc_clone: {:?}\nspec: {:?}",
+        text(&err),
+        text(&spec_err)
     );
     assert_eq!(
         code, spec_code,
@@ -199,6 +205,11 @@ fn byte_input() -> impl Strategy<Value = Vec<u8>> {
             &b"\x00"[..], b"\xff", b"\xe2\x82", b"\xed\xa0\x80", b"\xf4\x90\x80\x80", b"\x7f", b"\r\n",
         ])
         .prop_map(<[u8]>::to_vec),
+        // Strings whose bytes are not UTF-8, which are printed unchanged.
+        1 => prop::sample::select(vec![
+            &b"\"a\xffb\"\n"[..], b"\"\xed\xa0\x80\"\n", b"\"\xe2\x82\"\n", b"\"\xc0\x80\x00\"\n",
+        ])
+        .prop_map(<[u8]>::to_vec),
     ];
     prop::collection::vec(chunk, 1..8).prop_map(|v| {
         let mut bytes = v.concat();
@@ -262,7 +273,7 @@ mod parser_relation {
         AssignOp, BinOp, Expr, ExprOrArray, ExtensionPolicy, Lexer, Param, Parser, Register, RelOp,
         Stmt,
     };
-    use bc_spec::lexer::{exec_split_units, exec_tokenize, exec_utf8_lossy};
+    use bc_spec::lexer::{exec_split_units, exec_tokenize};
     use bc_spec::parser::{ExecArg, ExecNode, ExecPCfg, ExecParam, exec_parse_unit};
 
     fn bin_code(op: BinOp) -> u8 {
@@ -404,9 +415,9 @@ mod parser_relation {
     /// Parses every unit of `input` with both parsers and checks `r_parsed`, as
     /// `Evaluator::run_unit` and the specification's `run_unit` parse it under `policy`.
     pub fn check(input: &[u8], policy: ExtensionPolicy, max_depth: usize) {
-        let units = exec_split_units(&exec_utf8_lossy(input));
+        let units = exec_split_units(input);
         for unit in units {
-            let text = String::from_utf8(unit.text.clone()).expect("utf8_lossy gives UTF-8");
+            let text = String::from_utf8_lossy(&unit.text);
             let cfg = ExecPCfg {
                 record_extensions: policy != ExtensionPolicy::Allow,
                 max_depth: max_depth as u64,
@@ -416,7 +427,7 @@ mod parser_relation {
                 continue;
             }
             let mut ext = Vec::new();
-            let parsed = Parser::try_new(Lexer::new(text.as_bytes())).and_then(|mut parser| {
+            let parsed = Parser::try_new(Lexer::new(&unit.text)).and_then(|mut parser| {
                 parser.set_extension_policy(policy);
                 parser.set_max_depth(max_depth);
                 let stmts = parser.try_parse_program();

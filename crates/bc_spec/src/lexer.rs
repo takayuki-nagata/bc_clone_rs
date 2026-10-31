@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 
-//! Input decoding, unit splitting and tokens.
+//! Unit splitting and tokens. The input is bytes and is not decoded: a string keeps its bytes,
+//! whether or not they are UTF-8, and UTF-8 matters only for how an illegal character is shown
+//! (`utf8_len`).
 //!
-//! - `utf8_lossy` is `String::from_utf8_lossy` (`bc_cli::decode_input`): each maximal invalid
-//!   subsequence becomes U+FFFD (the `Utf8Chunks` algorithm of `core`).
 //! - `split_units` is `UnitAccumulator` (`bc_core::driver`) over `split_inclusive('\n')`.
 //! - `tokenize` is `parser::Lexer`, run to the end of a unit. The production lexer is
 //!   incremental, but it is context-free, so scanning ahead changes nothing: the parser meets
@@ -21,7 +21,7 @@ verus! {
 exec_spec_verified! {
 
 // ---------------------------------------------------------------------------------------------
-// UTF-8 decoding
+// UTF-8 sequences (for showing an illegal character)
 // ---------------------------------------------------------------------------------------------
 
 /// Whether `b` is a UTF-8 continuation byte.
@@ -42,59 +42,6 @@ pub open spec fn second_ok(lead: u8, b: u8) -> bool {
         0x80 <= b && b <= 0x8f
     } else {
         is_cont(b)
-    }
-}
-
-/// `String::from_utf8_lossy(s)` as bytes.
-pub open spec fn utf8_lossy(s: Seq<u8>) -> Seq<u8>
-    decreases s.len()
-{
-    if s.len() == 0 {
-        seq![]
-    } else {
-        let c = s[0];
-        let r1 = s.drop_first();
-        if c < 0x80 {
-            seq![c].add(utf8_lossy(r1))
-        } else if 0xc2 <= c && c <= 0xdf {
-            if s.len() >= 2 && is_cont(s[1]) {
-                let r2 = r1.drop_first();
-                seq![c, s[1]].add(utf8_lossy(r2))
-            } else {
-                seq![0xefu8, 0xbfu8, 0xbdu8].add(utf8_lossy(r1))
-            }
-        } else if 0xe0 <= c && c <= 0xef {
-            if s.len() >= 2 && second_ok(c, s[1]) {
-                let r2 = r1.drop_first();
-                if s.len() >= 3 && is_cont(s[2]) {
-                    let r3 = r2.drop_first();
-                    seq![c, s[1], s[2]].add(utf8_lossy(r3))
-                } else {
-                    seq![0xefu8, 0xbfu8, 0xbdu8].add(utf8_lossy(r2))
-                }
-            } else {
-                seq![0xefu8, 0xbfu8, 0xbdu8].add(utf8_lossy(r1))
-            }
-        } else if 0xf0 <= c && c <= 0xf4 {
-            if s.len() >= 2 && second_ok(c, s[1]) {
-                let r2 = r1.drop_first();
-                if s.len() >= 3 && is_cont(s[2]) {
-                    let r3 = r2.drop_first();
-                    if s.len() >= 4 && is_cont(s[3]) {
-                        let r4 = r3.drop_first();
-                        seq![c, s[1], s[2], s[3]].add(utf8_lossy(r4))
-                    } else {
-                        seq![0xefu8, 0xbfu8, 0xbdu8].add(utf8_lossy(r3))
-                    }
-                } else {
-                    seq![0xefu8, 0xbfu8, 0xbdu8].add(utf8_lossy(r2))
-                }
-            } else {
-                seq![0xefu8, 0xbfu8, 0xbdu8].add(utf8_lossy(r1))
-            }
-        } else {
-            seq![0xefu8, 0xbfu8, 0xbdu8].add(utf8_lossy(r1))
-        }
     }
 }
 
@@ -180,7 +127,7 @@ pub open spec fn take_line(t: Seq<u8>) -> (Seq<u8>, Seq<u8>)
     }
 }
 
-/// Splits decoded input into units after the units `out`, continuing the accumulator state
+/// Splits the input into units after the units `out`, continuing the accumulator state
 /// `buf` (first line `start`) at line `next`.
 pub open spec fn split_units_from(t: Seq<u8>, buf: Seq<u8>, start: u64, next: u64, out: Seq<Unit>) -> Seq<Unit>
     decreases t.len()
@@ -205,7 +152,7 @@ pub open spec fn split_units_from(t: Seq<u8>, buf: Seq<u8>, start: u64, next: u6
     }
 }
 
-/// The units of a decoded input, in order.
+/// The units of an input, in order.
 pub open spec fn split_units(t: Seq<u8>) -> Seq<Unit> {
     split_units_from(t, seq![], 1u64, 1u64, seq![])
 }
@@ -342,7 +289,7 @@ pub open spec fn octal_bytes(t: Seq<u8>, n: usize) -> Seq<u8>
     if n == 0 || t.len() == 0 { seq![] } else { octal(t[0]).add(octal_bytes(t.drop_first(), (n - 1) as usize)) }
 }
 
-/// `display_illegal_char` of the character at the start of `t`.
+/// `parser::display_illegal` of the character at the start of `t`.
 pub open spec fn display_illegal(t: Seq<u8>) -> Seq<u8> {
     let c = if t.len() > 0 { t[0] } else { 0u8 };
     if c < 0x20 {

@@ -15,7 +15,6 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::rc::Rc;
-use alloc::string::String;
 use alloc::vec::Vec;
 use bc_core::verified_kernels::verified_c_ffi_check_buf_capacity;
 use bc_core::{BcWriter, Evaluator, ExtensionPolicy, STDIN_SOURCE};
@@ -159,11 +158,11 @@ unsafe fn write_c_string(bytes: &[u8], out_buf: *mut c_char, buf_size: usize) ->
     }
 }
 
-/// Evaluates `code_str` against `ev` without panicking. Errors are reported to `ev`'s stderr
+/// Evaluates the bytes `code` against `ev` without panicking. Errors are reported to `ev`'s stderr
 /// writer and evaluation continues with the next input unit (`docs/COMPATIBILITY.md` §3.1).
 /// Returns `BcStatus::ErrExecution` if any unit failed.
-fn eval_into_evaluator(code_str: &str, ev: &mut Evaluator) -> BcStatus {
-    let summary = ev.run_source(code_str.as_bytes(), STDIN_SOURCE);
+fn eval_into_evaluator(code: &[u8], ev: &mut Evaluator) -> BcStatus {
+    let summary = ev.run_source(code, STDIN_SOURCE);
     if summary.errors > 0 {
         BcStatus::ErrExecution
     } else {
@@ -195,10 +194,7 @@ pub unsafe extern "C" fn bc_eval(
     }
 
     let code_cstr = unsafe { CStr::from_ptr(code) };
-    let code_str = match code_cstr.to_str() {
-        Ok(s) => s,
-        Err(_) => return BcStatus::ErrExecution,
-    };
+    let code_bytes = code_cstr.to_bytes();
 
     let out_shared = SharedBuffer::default();
     let err_shared = SharedBuffer::default();
@@ -210,7 +206,7 @@ pub unsafe extern "C" fn bc_eval(
     );
     ev.set_scale(default_scale as usize);
 
-    let status = eval_into_evaluator(code_str, &mut ev);
+    let status = eval_into_evaluator(code_bytes, &mut ev);
     if status != BcStatus::Ok {
         let err_bytes = err_shared.0.borrow();
         // A diagnostic that does not fit is dropped; the buffer then holds an empty string.
@@ -246,10 +242,7 @@ pub unsafe extern "C" fn bc_eval_callback(
     }
 
     let code_cstr = unsafe { CStr::from_ptr(code) };
-    let code_str = match code_cstr.to_str() {
-        Ok(s) => s,
-        Err(_) => return BcStatus::ErrExecution,
-    };
+    let code_bytes = code_cstr.to_bytes();
 
     let cb_writer_out = Box::new(CallbackWriter {
         cb: stdout_cb,
@@ -263,7 +256,7 @@ pub unsafe extern "C" fn bc_eval_callback(
     let mut evaluator = Evaluator::new(math_enabled, cb_writer_out, cb_writer_err);
     evaluator.set_scale(default_scale as usize);
 
-    eval_into_evaluator(code_str, &mut evaluator)
+    eval_into_evaluator(code_bytes, &mut evaluator)
 }
 
 /// Opaque session struct for stateful bc evaluation.
@@ -325,17 +318,14 @@ pub unsafe extern "C" fn bc_session_eval(
     let sess = unsafe { &mut *session };
 
     let code_cstr = unsafe { CStr::from_ptr(code) };
-    let code_str = match code_cstr.to_str() {
-        Ok(s) => s,
-        Err(_) => return BcStatus::ErrExecution,
-    };
+    let code_bytes = code_cstr.to_bytes();
 
     sess.out_shared.0.borrow_mut().clear();
     sess.err_shared.0.borrow_mut().clear();
 
-    let mut code_with_nl = String::from(code_str);
-    if !code_with_nl.ends_with('\n') {
-        code_with_nl.push('\n');
+    let mut code_with_nl = code_bytes.to_vec();
+    if !code_with_nl.ends_with(b"\n") {
+        code_with_nl.push(b'\n');
     }
 
     let status = eval_into_evaluator(&code_with_nl, &mut sess.evaluator);
@@ -376,17 +366,14 @@ pub unsafe extern "C" fn bc_session_eval_callback(
     let sess = unsafe { &mut *session };
 
     let code_cstr = unsafe { CStr::from_ptr(code) };
-    let code_str = match code_cstr.to_str() {
-        Ok(s) => s,
-        Err(_) => return BcStatus::ErrExecution,
-    };
+    let code_bytes = code_cstr.to_bytes();
 
     sess.out_shared.0.borrow_mut().clear();
     sess.err_shared.0.borrow_mut().clear();
 
-    let mut code_with_nl = String::from(code_str);
-    if !code_with_nl.ends_with('\n') {
-        code_with_nl.push('\n');
+    let mut code_with_nl = code_bytes.to_vec();
+    if !code_with_nl.ends_with(b"\n") {
+        code_with_nl.push(b'\n');
     }
 
     let status = eval_into_evaluator(&code_with_nl, &mut sess.evaluator);
@@ -872,14 +859,28 @@ mod tests {
 
     #[test]
     fn test_bc_c_api_invalid_utf8_exact_buffer_and_stderr_callbacks() {
-        // 1. Invalid UTF-8 C string handling across all 4 entry points (no UB or leak)
+        // 1. Code that is not UTF-8 is read as bytes by all 4 entry points: the invalid byte is an
+        // illegal character outside a string, and is printed unchanged inside one.
         let invalid_utf8: [u8; 4] = [b'1', b'+', 0xFF, 0x00];
         let invalid_ptr = invalid_utf8.as_ptr().cast::<c_char>();
-        let mut buf = [0 as c_char; 16];
+        let mut buf = [0 as c_char; 64];
 
         assert_eq!(
             unsafe { bc_eval(invalid_ptr, false, 0, buf.as_mut_ptr(), buf.len()) },
             BcStatus::ErrExecution
+        );
+        assert_eq!(
+            unsafe { CStr::from_ptr(buf.as_ptr()) }.to_bytes(),
+            b"(standard_in) 1: illegal character: \\377\n"
+        );
+        let in_string = c"\"a\xffb\"";
+        assert_eq!(
+            unsafe { bc_eval(in_string.as_ptr(), false, 0, buf.as_mut_ptr(), buf.len()) },
+            BcStatus::Ok
+        );
+        assert_eq!(
+            unsafe { CStr::from_ptr(buf.as_ptr()) }.to_bytes(),
+            b"a\xffb"
         );
         assert_eq!(
             unsafe { bc_eval_callback(invalid_ptr, false, 0, None, None, core::ptr::null_mut()) },

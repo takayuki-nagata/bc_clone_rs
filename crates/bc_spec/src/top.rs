@@ -145,7 +145,7 @@ pub open spec fn run_inputs(opts: Options, rs: RunState, inputs: Seq<Input>) -> 
     if inputs.len() == 0 || rs.quit { rs }
     else {
         let i = inputs[0];
-        run_inputs(opts, run_units(opts, rs, i.name, split_units(utf8_lossy(i.text))), inputs.drop_first())
+        run_inputs(opts, run_units(opts, rs, i.name, split_units(i.text)), inputs.drop_first())
     }
 }
 
