@@ -119,6 +119,12 @@ against the specification. AGENTS.md lists what the proofs assume.
 - Array frames are `BTreeMap<usize, BCNum>` instead of `BTreeMap<BigInt, BCNum>` (subscripts are
   below `BC_DIM_MAX`). `BcError::in_function` takes the function name as `&String`.
   `Register::name` is removed.
+- Input is bytes: `Lexer::new`, `Evaluator::run_source`, `Evaluator::run_unit` and
+  `UnitAccumulator::push_line` take `&[u8]`, `UnitAccumulator` returns units as `Vec<u8>`,
+  `Token::value` is a `Vec<u8>`, and a string in the syntax tree is
+  `Stmt::StringLiteral(Vec<u8>)`. Pass `text.as_bytes()` where a `&str` was passed.
+  `bc_cli`'s `count_open_braces`, `is_block_incomplete` and `run_non_interactive_block` take
+  `&[u8]` too.
 - `BcWriter` has a new method `write_bytes`, through which the evaluator writes all output.
   Its default implementation passes the bytes to `write_str`, replacing invalid UTF-8 with
   U+FFFD; a writer to a byte stream overrides it to write them unchanged (`bc_cli`'s

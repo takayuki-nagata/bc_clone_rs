@@ -99,7 +99,7 @@ impl Evaluator {
             Stmt::Block(list) => self.exec_block(Ghost(*node), list, Ghost(nodes), Ghost(n), Ghost(st)),
             Stmt::Expr(e) => self.exec_expr_stmt(Ghost(*node), e, Ghost(nodes), Ghost(n), Ghost(st)),
             Stmt::StringLiteral(t) => {
-                self.stdout_writer.write_bytes(t.as_str().as_bytes());
+                self.stdout_writer.write_bytes(t.as_slice());
                 self.stdout_writer.flush_out();
                 proof {
                     if hyp {

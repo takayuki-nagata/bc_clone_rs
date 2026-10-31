@@ -163,7 +163,7 @@ unsafe fn write_c_string(bytes: &[u8], out_buf: *mut c_char, buf_size: usize) ->
 /// writer and evaluation continues with the next input unit (`docs/COMPATIBILITY.md` §3.1).
 /// Returns `BcStatus::ErrExecution` if any unit failed.
 fn eval_into_evaluator(code_str: &str, ev: &mut Evaluator) -> BcStatus {
-    let summary = ev.run_source(code_str, STDIN_SOURCE);
+    let summary = ev.run_source(code_str.as_bytes(), STDIN_SOURCE);
     if summary.errors > 0 {
         BcStatus::ErrExecution
     } else {

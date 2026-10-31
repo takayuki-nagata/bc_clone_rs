@@ -71,7 +71,7 @@ impl BcWriter for SerialWriter {
 }
 
 fn eval_bc_non_panicking(code: &str, ev: &mut Evaluator) {
-    if ev.run_source(code, STDIN_SOURCE).quit {
+    if ev.run_source(code.as_bytes(), STDIN_SOURCE).quit {
         ev.request_quit();
     }
 }
@@ -238,14 +238,11 @@ fn main() -> ! {
             1 => {
                 print!("\r\n");
                 line_buf.push(b'\n');
-                // Only printable ASCII is buffered, so the line is always valid UTF-8.
-                if let Ok(line) = core::str::from_utf8(&line_buf) {
-                    // Lines are grouped into input units exactly as in the CLI. There is no
-                    // process to exit on bare metal, so `quit` only ends the current unit.
-                    if let Some((unit, first_line)) = acc.push_line(line) {
-                        evaluator.run_unit(&unit, STDIN_SOURCE, first_line);
-                        evaluator.clear_quit();
-                    }
+                // Lines are grouped into input units exactly as in the CLI. There is no
+                // process to exit on bare metal, so `quit` only ends the current unit.
+                if let Some((unit, first_line)) = acc.push_line(&line_buf) {
+                    evaluator.run_unit(&unit, STDIN_SOURCE, first_line);
+                    evaluator.clear_quit();
                 }
                 line_buf.clear();
                 print!("{}", if acc.is_pending() { "... " } else { "bc> " });

@@ -27,7 +27,7 @@ impl BcWriter for TestWriter {
 }
 
 fn test_eval(input: &str) -> (String, String) {
-    let lexer = Lexer::new(input);
+    let lexer = Lexer::new(input.as_bytes());
     let mut parser = Parser::new(lexer);
     let stmts = parser.parse_program();
 
@@ -68,7 +68,7 @@ fn test_emptied_public_scope_stacks_do_not_panic() {
     eval.arrays.insert("a".to_string(), Vec::new());
     eval.arrays.insert("b".to_string(), Vec::new());
     let summary = eval.run_source(
-        "x; a[0]; x += 2; x; a[1] = 3; a[1]\ndefine f(c[]) {\nreturn (c[0])\n}\nf(b[])\n",
+        b"x; a[0]; x += 2; x; a[1] = 3; a[1]\ndefine f(c[]) {\nreturn (c[0])\n}\nf(b[])\n",
         "(test)",
     );
     assert_eq!(summary.errors, 0);
@@ -649,7 +649,7 @@ fn test_evaluator_operator_and_assignment_mutants() {
     );
 
     // Test Stmt::StringLiteral
-    evaluator.execute(&Stmt::StringLiteral("out: hello".to_string()));
+    evaluator.execute(&Stmt::StringLiteral(b"out: hello".to_vec()));
     let out_str = String::from_utf8(stdout_buf.lock().unwrap().clone()).unwrap();
     assert!(out_str.contains("out: hello"));
 }
@@ -1054,7 +1054,7 @@ fn test_hex_base_assignment_obase_clamping_and_fractional_index() {
 fn test_return_inside_while_and_for_loops() {
     let mut evaluator = Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
     let mut parser_while = Parser::new(Lexer::new(
-        "define f_while() { i = 0; while (i < 10) { i = i + 1; return (i); }; return (999); }; f_while()",
+        b"define f_while() { i = 0; while (i < 10) { i = i + 1; return (i); }; return (999); }; f_while()",
     ));
     for stmt in parser_while.parse_program() {
         evaluator.execute(&stmt);
@@ -1064,7 +1064,7 @@ fn test_return_inside_while_and_for_loops() {
 
     let mut evaluator_for = Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
     let mut parser_for = Parser::new(Lexer::new(
-        "define f_for() { for (i = 0; i < 10; i = i + 1) { return (i + 1); }; return (999); }; f_for()",
+        b"define f_for() { for (i = 0; i < 10; i = i + 1) { return (i + 1); }; return (999); }; f_for()",
     ));
     for stmt in parser_for.parse_program() {
         evaluator_for.execute(&stmt);
@@ -1095,7 +1095,7 @@ fn test_wrapped_stdout_flush_error_propagation() {
 fn test_function_early_return_short_circuits_body_loop() {
     let mut evaluator = Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
     let mut parser = Parser::new(Lexer::new(
-        "define f() { return (10); x = 99; return (20); }; f()",
+        b"define f() { return (10); x = 99; return (20); }; f()",
     ));
     for stmt in parser.parse_program() {
         evaluator.execute(&stmt);
@@ -1165,7 +1165,7 @@ fn test_names_first_seen_as_parameters_or_autos_stay_usable() {
     let src = "define f(p, q[]) {\nauto r, s[]\nr = p; s[0] = q[0]\nreturn (r + s[0])\n}\n\
                t[0] = 2; f(1, t[])\n\
                p = 5; q[0] = 6; r++; s[1] = 7; p; q[0]; r; s[1]\n";
-    let summary = ev.run_source(src, "test");
+    let summary = ev.run_source(src.as_bytes(), "test");
     assert_eq!(summary.errors, 0);
     let out = String::from_utf8(out.lock().unwrap().clone()).unwrap();
     assert_eq!(out, "3\n0\n5\n6\n1\n7\n");
@@ -1176,7 +1176,7 @@ fn test_fallible_evaluator_and_scope_restoration() {
     let mut ev = Evaluator::new(true, Box::new(String::new()), Box::new(String::new()));
 
     let mut p_setup = Parser::try_new(Lexer::new(
-        "x = 42; a[0] = 7\ndefine bad(x, a[]) {\n  auto y, b[]\n  x = 99\n  y = 1 / 0\n  return (y)\n}\n",
+        b"x = 42; a[0] = 7\ndefine bad(x, a[]) {\n  auto y, b[]\n  x = 99\n  y = 1 / 0\n  return (y)\n}\n",
     ))
     .unwrap();
     for stmt in p_setup.try_parse_program().unwrap() {
@@ -1184,7 +1184,7 @@ fn test_fallible_evaluator_and_scope_restoration() {
     }
 
     // Calling bad(10, a[]) must fail with "Divide by zero" inside bad() AND leave_call must restore x = 42
-    let mut p_call = Parser::try_new(Lexer::new("bad(10, a[])\n")).unwrap();
+    let mut p_call = Parser::try_new(Lexer::new(b"bad(10, a[])\n")).unwrap();
     let call_stmts = p_call.try_parse_program().unwrap();
     assert_eq!(
         ev.try_execute(&call_stmts[0]),
@@ -1197,7 +1197,7 @@ fn test_fallible_evaluator_and_scope_restoration() {
     assert_eq!(x_after.coeff, BigInt::from(42));
 
     // Argument errors and undefined function
-    let mut p_mismatch = Parser::try_new(Lexer::new("bad(10)\n")).unwrap();
+    let mut p_mismatch = Parser::try_new(Lexer::new(b"bad(10)\n")).unwrap();
     let stmts_mismatch = p_mismatch.try_parse_program().unwrap();
     assert_eq!(
         ev.try_execute(&stmts_mismatch[0]),
@@ -1207,7 +1207,7 @@ fn test_fallible_evaluator_and_scope_restoration() {
         })
     );
 
-    let mut p_arr_err = Parser::try_new(Lexer::new("bad(10, 20)\n")).unwrap();
+    let mut p_arr_err = Parser::try_new(Lexer::new(b"bad(10, 20)\n")).unwrap();
     let stmts_arr_err = p_arr_err.try_parse_program().unwrap();
     assert_eq!(
         ev.try_execute(&stmts_arr_err[0]),
@@ -1217,7 +1217,7 @@ fn test_fallible_evaluator_and_scope_restoration() {
         })
     );
 
-    let mut p_scalar_err = Parser::try_new(Lexer::new("bad(a[], a[])\n")).unwrap();
+    let mut p_scalar_err = Parser::try_new(Lexer::new(b"bad(a[], a[])\n")).unwrap();
     let stmts_scalar_err = p_scalar_err.try_parse_program().unwrap();
     assert_eq!(
         ev.try_execute(&stmts_scalar_err[0]),
@@ -1227,7 +1227,7 @@ fn test_fallible_evaluator_and_scope_restoration() {
         })
     );
 
-    let mut p_undef = Parser::try_new(Lexer::new("nonexistent(1)\n")).unwrap();
+    let mut p_undef = Parser::try_new(Lexer::new(b"nonexistent(1)\n")).unwrap();
     let stmts_undef = p_undef.try_parse_program().unwrap();
     assert_eq!(
         ev.try_execute(&stmts_undef[0]),
@@ -1237,7 +1237,7 @@ fn test_fallible_evaluator_and_scope_restoration() {
         })
     );
 
-    let mut p_sqrt = Parser::try_new(Lexer::new("sqrt(-1)\n")).unwrap();
+    let mut p_sqrt = Parser::try_new(Lexer::new(b"sqrt(-1)\n")).unwrap();
     let stmts_sqrt = p_sqrt.try_parse_program().unwrap();
     assert_eq!(
         ev.try_execute(&stmts_sqrt[0]),
@@ -1250,7 +1250,7 @@ fn test_fallible_evaluator_and_scope_restoration() {
     // Verify binary operators (-, %, ^) and math library functions (s, c, a, l, e, j) via try_evaluate
     ev.scale = 4;
     let eval_expr = |ev: &mut Evaluator, src: &str| -> BCNum {
-        let mut p = Parser::try_new(Lexer::new(src)).unwrap();
+        let mut p = Parser::try_new(Lexer::new(src.as_bytes())).unwrap();
         let stmts = p.try_parse_program().unwrap();
         let inner = match &stmts[0] {
             Stmt::Block(b) => &b[0],

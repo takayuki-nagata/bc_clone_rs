@@ -54,8 +54,10 @@ graph TD
 ## Core Engine (`crates/bc_core`)
 
 ### Lexer and parser (`src/parser.rs`)
-- The lexer tracks line numbers and handles `/* */` comments, strings, and backslash-newline
-  continuation.
+- The lexer works on bytes, which need not be UTF-8. It tracks line numbers and handles
+  `/* */` comments, strings, and backslash-newline continuation. A string keeps its bytes
+  (`Stmt::StringLiteral(Vec<u8>)`). An illegal character is the well-formed UTF-8 sequence
+  that starts at that byte, or the byte alone (`verified_utf8_char_len`).
 - The parser is recursive descent, with Pratt precedence climbing for expressions. Assignment and
   `^` are right-associative. Precedence and associativity come from `verified_pratt_infix_info`.
 - Fallible API: `Lexer::try_get_next_token`, `Parser::try_new`, `Parser::try_parse_program`.
@@ -175,7 +177,8 @@ Small pure functions are defined once with `dual_verified!` / `dual_verified_rep
   production code.
 
 Examples are the POSIX scale and shift computations for `+ - * / sqrt ^`, digit parsing,
-`ibase`/`obase` clamping, the `WrappedStdout` column step, lexer cursor and lookahead bounds, Pratt
+`ibase`/`obase` clamping, the `WrappedStdout` column step, lexer cursor and lookahead bounds, the
+UTF-8 sequence length of an illegal character, Pratt
 precedence, the C-FFI buffer-capacity check, the Zephyr REPL character class, the CLI argument
 class, and the REPL block-completeness scanner.
 
@@ -200,7 +203,8 @@ except the following, whose preconditions are argued here but not proved:
 - The lexer (`parser.rs`): `peek`, `advance_char` and `try_peek_token` call
   `verified_lexer_peek_char_index`, `verified_lexer_advance_step` and
   `verified_lexer_peek_token_index`. Their bounds (`text_len <= MAX_VERIFIED_SCALE`,
-  `pos < 10^9`) do not hold for an input unit of more than 10^9 characters.
+  `pos < 10^9`) do not hold for an input unit of more than 10^9 bytes. `scan_token` calls
+  `verified_utf8_char_len` only after `peek(0)` returned a byte, so `pos < text.len()`.
 - `UnitAccumulator::push_line` (`driver.rs`) and the CLI's `count_open_braces` and
   `is_block_incomplete` call `verified_repl_block_completeness`, which requires at most 10^9
   bytes.

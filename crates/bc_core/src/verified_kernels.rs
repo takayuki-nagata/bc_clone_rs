@@ -714,6 +714,58 @@ dual_verified! {
         (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95
     }
 
+    /// Verified test of the second byte of a UTF-8 sequence led by `lead` (`parser.rs`): the
+    /// specification's `second_ok` (no overlong forms, surrogates or code points above
+    /// U+10FFFF).
+    pub(crate) fn verified_utf8_second_ok(lead: u8, b: u8) -> (res: bool)
+        ensures [
+            res == bc_spec::lexer::second_ok(lead, b),
+        ]
+    {
+        if lead == 0xe0 {
+            0xa0 <= b && b <= 0xbf
+        } else if lead == 0xed {
+            0x80 <= b && b <= 0x9f
+        } else if lead == 0xf0 {
+            0x90 <= b && b <= 0xbf
+        } else if lead == 0xf4 {
+            0x80 <= b && b <= 0x8f
+        } else {
+            0x80 <= b && b <= 0xbf
+        }
+    }
+
+    /// Verified length of the character at `text[pos]` for an `illegal character` diagnostic
+    /// (`parser.rs`): the length of the well-formed UTF-8 sequence that starts there, or 1 if
+    /// none does (the specification's `utf8_len`).
+    pub(crate) fn verified_utf8_char_len(text: &[u8], pos: usize) -> (n: usize)
+        requires [
+            pos < text@.len(),
+        ]
+        ensures [
+            1 <= n <= 4,
+            pos + n <= text@.len(),
+            n == bc_spec::lexer::utf8_len(text@.subrange(pos as int, text@.len() as int)),
+        ]
+    {
+        let c = text[pos];
+        let rem = text.len() - pos;
+        if 0xc2 <= c && c <= 0xdf && rem >= 2 && 0x80 <= text[pos + 1] && text[pos + 1] <= 0xbf {
+            2
+        } else if 0xe0 <= c && c <= 0xef && rem >= 3 && verified_utf8_second_ok(c, text[pos + 1])
+            && 0x80 <= text[pos + 2] && text[pos + 2] <= 0xbf
+        {
+            3
+        } else if 0xf0 <= c && c <= 0xf4 && rem >= 4 && verified_utf8_second_ok(c, text[pos + 1])
+            && 0x80 <= text[pos + 2] && text[pos + 2] <= 0xbf
+            && 0x80 <= text[pos + 3] && text[pos + 3] <= 0xbf
+        {
+            4
+        } else {
+            1
+        }
+    }
+
     /// Verified CLI argument classification (`crates/bc_cli/src/main.rs:run_app`), following
     /// the XBD 12.2 Utility Syntax Guidelines that POSIX requires of `bc`.
     ///

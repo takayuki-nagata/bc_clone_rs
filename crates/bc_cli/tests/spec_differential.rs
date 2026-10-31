@@ -376,7 +376,7 @@ mod parser_relation {
         match (s, node) {
             (Stmt::Block(list), ExecNode::Block(ns)) => r_stmts(list, nodes, ns),
             (Stmt::Expr(e), ExecNode::ExprStmt(j)) => r_expr(e, nodes, *j),
-            (Stmt::StringLiteral(t), ExecNode::Str(u)) => u == t.as_bytes(),
+            (Stmt::StringLiteral(t), ExecNode::Str(u)) => u == t,
             (Stmt::Break, ExecNode::Break) => true,
             (Stmt::Return(v), ExecNode::Return(hv, j)) => match v {
                 Some(e) => *hv && r_expr(e, nodes, *j),
@@ -416,7 +416,7 @@ mod parser_relation {
                 continue;
             }
             let mut ext = Vec::new();
-            let parsed = Parser::try_new(Lexer::new(&text)).and_then(|mut parser| {
+            let parsed = Parser::try_new(Lexer::new(text.as_bytes())).and_then(|mut parser| {
                 parser.set_extension_policy(policy);
                 parser.set_max_depth(max_depth);
                 let stmts = parser.try_parse_program();

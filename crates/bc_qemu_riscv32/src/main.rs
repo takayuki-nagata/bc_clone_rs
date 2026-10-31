@@ -70,7 +70,7 @@ fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> Strin
     evaluator.set_scale(default_scale);
     evaluator.max_depth = QEMU_MAX_DEPTH;
 
-    evaluator.run_source(code, STDIN_SOURCE);
+    evaluator.run_source(code.as_bytes(), STDIN_SOURCE);
 
     out_buf.0.borrow().clone()
 }

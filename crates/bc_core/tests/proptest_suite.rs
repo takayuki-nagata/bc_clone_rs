@@ -97,7 +97,7 @@ proptest! {
 
     #[test]
     fn prop_parser_never_panics_on_arbitrary_ascii(s in "[\\x20-\\x7E\\n]{0,256}") {
-        if let Ok(mut parser) = Parser::try_new(Lexer::new(&s)) {
+        if let Ok(mut parser) = Parser::try_new(Lexer::new(s.as_bytes())) {
             let _ = parser.try_parse_program();
         }
     }
@@ -105,7 +105,7 @@ proptest! {
     #[test]
     fn prop_evaluator_never_panics_on_bounded_programs(prog in arb_bounded_bc_program()) {
         let mut ev = Evaluator::new(false, Box::new(String::new()), Box::new(String::new()));
-        let summary = ev.run_source(&prog, STDIN_SOURCE);
+        let summary = ev.run_source(prog.as_bytes(), STDIN_SOURCE);
         // The last line always divides by zero; everything before it is valid.
         prop_assert!(summary.errors >= 1);
         prop_assert!(!summary.quit);

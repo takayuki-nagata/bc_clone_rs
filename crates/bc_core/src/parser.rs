@@ -10,6 +10,7 @@ use crate::verified_kernels::{
     TOK_ASSIGN_OP, TOK_EXP_OP, TOK_MUL_OP, TOK_PLUS_MINUS, verified_is_bc_digit,
     verified_is_ident_continue, verified_lexer_advance_step, verified_lexer_peek_char_index,
     verified_lexer_peek_token_index, verified_nesting_within_limit, verified_pratt_infix_info,
+    verified_utf8_char_len,
 };
 use alloc::boxed::Box;
 use alloc::format;
@@ -69,41 +70,44 @@ pub enum TokenType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     pub token_type: TokenType,
-    pub value: String,
+    /// The token's bytes (for a string, its text between the quotes).
+    pub value: Vec<u8>,
     pub line: usize,
 }
 
-/// Formats a character for an `illegal character` diagnostic the way GNU bc does: control
-/// characters as `^X`, DEL and non-ASCII characters as octal escapes of their UTF-8 bytes.
-fn display_illegal_char(c: char) -> String {
-    let code = u32::from(c);
-    if code < 0x20 {
-        // `code + 0x40` is in 0x40..0x60, an ASCII character.
-        format!("^{}", char::from_u32(code + 0x40).unwrap_or('?'))
-    } else if code == 0x7f || !c.is_ascii() {
-        let mut buf = [0u8; 4];
-        c.encode_utf8(&mut buf)
-            .bytes()
-            .map(|b| format!("\\{:03o}", b))
-            .collect()
-    } else {
-        c.to_string()
+impl Token {
+    /// The token's bytes as a `String`. Names, numbers and operators are ASCII, so each byte is
+    /// one character.
+    fn text(&self) -> String {
+        self.value.iter().map(|&b| char::from(b)).collect()
+    }
+}
+
+/// Formats a character (its bytes `c`) for an `illegal character` diagnostic the way GNU bc
+/// does: control characters as `^X`, DEL and other bytes outside ASCII as octal escapes.
+fn display_illegal(c: &[u8]) -> String {
+    match c {
+        // `b + 0x40` is in 0x40..0x60, an ASCII character.
+        [b] if *b < 0x20 => format!("^{}", char::from(*b + 0x40)),
+        [b] if *b < 0x7f => char::from(*b).to_string(),
+        _ => c.iter().map(|b| format!("\\{:03o}", b)).collect(),
     }
 }
 
 /// An incremental lexical analyzer for the bc language.
 pub struct Lexer {
-    text: Vec<char>,
+    text: Vec<u8>,
     pos: usize,
     pub line: usize,
     buffer: Vec<Token>,
 }
 
 impl Lexer {
-    /// Creates a new Lexer from the source text.
-    pub fn new(text: &str) -> Self {
+    /// Creates a new Lexer from the source bytes. They need not be UTF-8: a string's bytes are
+    /// kept unchanged, and elsewhere a byte that is not part of a token is an illegal character.
+    pub fn new(text: &[u8]) -> Self {
         Self {
-            text: text.chars().collect(),
+            text: text.to_vec(),
             pos: 0,
             line: 1,
             buffer: Vec::new(),
@@ -115,17 +119,17 @@ impl Lexer {
         Err(BcError::syntax(self.line, String::from(msg)))
     }
 
-    /// Reports a character that cannot start any token, as GNU bc does.
-    fn illegal_character<T>(&self, c: char) -> Result<T, BcError> {
+    /// Reports a character (its bytes `c`) that cannot start any token, as GNU bc does.
+    fn illegal_character<T>(&self, c: &[u8]) -> Result<T, BcError> {
         Err(BcError::Syntax {
             line: self.line,
-            message: format!("illegal character: {}", display_illegal_char(c)),
-            detail: format!("unexpected character {:?}", c),
+            message: format!("illegal character: {}", display_illegal(c)),
+            detail: format!("unexpected bytes {:?}", c),
         })
     }
 
     /// Peeks a character ahead of the current position by the given offset; `None` past the end.
-    fn peek(&self, offset: usize) -> Option<char> {
+    fn peek(&self, offset: usize) -> Option<u8> {
         let (in_bounds, idx) = verified_lexer_peek_char_index(self.text.len(), self.pos, offset);
         if in_bounds {
             Some(self.text[idx])
@@ -134,11 +138,11 @@ impl Lexer {
         }
     }
 
-    /// Like [`Self::peek`], but returns `'\0'` past the end. Only for comparisons against
-    /// non-NUL characters: a NUL in the input is an ordinary (illegal) character, so end of
-    /// input must be tested with `peek(..).is_none()`.
-    fn peek_char(&self, offset: usize) -> char {
-        self.peek(offset).unwrap_or('\0')
+    /// Like [`Self::peek`], but returns 0 past the end. Only for comparisons against non-NUL
+    /// bytes: a NUL in the input is an ordinary (illegal) character, so end of input must be
+    /// tested with `peek(..).is_none()`.
+    fn peek_char(&self, offset: usize) -> u8 {
+        self.peek(offset).unwrap_or(0)
     }
 
     /// Advances the position pointer by `steps`.
@@ -146,7 +150,7 @@ impl Lexer {
         for _ in 0..steps {
             if self.pos < self.text.len() {
                 let (next_pos, next_line) =
-                    verified_lexer_advance_step(self.pos, self.line, self.text[self.pos] == '\n');
+                    verified_lexer_advance_step(self.pos, self.line, self.text[self.pos] == b'\n');
                 self.pos = next_pos;
                 self.line = next_line;
             }
@@ -157,19 +161,19 @@ impl Lexer {
     fn skip_whitespace_and_comments(&mut self) -> Result<(), BcError> {
         loop {
             let c = self.peek_char(0);
-            if c == ' ' || c == '\t' || c == '\r' {
+            if c == b' ' || c == b'\t' || c == b'\r' {
                 self.advance_char(1);
-            } else if c == '\\' && self.peek_char(1) == '\n' {
+            } else if c == b'\\' && self.peek_char(1) == b'\n' {
                 self.advance_char(2);
-            } else if c == '\\' && self.peek_char(1) == '\r' && self.peek_char(2) == '\n' {
+            } else if c == b'\\' && self.peek_char(1) == b'\r' && self.peek_char(2) == b'\n' {
                 self.advance_char(3);
-            } else if c == '/' && self.peek_char(1) == '*' {
+            } else if c == b'/' && self.peek_char(1) == b'*' {
                 self.advance_char(2);
                 loop {
                     let Some(cc) = self.peek(0) else {
                         return self.error("unterminated comment");
                     };
-                    if cc == '*' && self.peek_char(1) == '/' {
+                    if cc == b'*' && self.peek_char(1) == b'/' {
                         self.advance_char(2);
                         break;
                     }
@@ -188,267 +192,267 @@ impl Lexer {
         let Some(c) = self.peek(0) else {
             return Ok(Token {
                 token_type: TokenType::Eof,
-                value: String::new(),
+                value: Vec::new(),
                 line: self.line,
             });
         };
 
-        if c == '\n' {
+        if c == b'\n' {
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Newline,
-                value: "\n".to_string(),
+                value: b"\n".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == ';' {
+        if c == b';' {
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Semicolon,
-                value: ";".to_string(),
+                value: b";".to_vec(),
                 line: self.line,
             });
         }
-        if c == ',' {
+        if c == b',' {
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Comma,
-                value: ",".to_string(),
+                value: b",".to_vec(),
                 line: self.line,
             });
         }
-        if c == '(' {
+        if c == b'(' {
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Lparen,
-                value: "(".to_string(),
+                value: b"(".to_vec(),
                 line: self.line,
             });
         }
-        if c == ')' {
+        if c == b')' {
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Rparen,
-                value: ")".to_string(),
+                value: b")".to_vec(),
                 line: self.line,
             });
         }
-        if c == '[' {
+        if c == b'[' {
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Lbracket,
-                value: "[".to_string(),
+                value: b"[".to_vec(),
                 line: self.line,
             });
         }
-        if c == ']' {
+        if c == b']' {
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Rbracket,
-                value: "]".to_string(),
+                value: b"]".to_vec(),
                 line: self.line,
             });
         }
-        if c == '{' {
+        if c == b'{' {
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Lbrace,
-                value: "{".to_string(),
+                value: b"{".to_vec(),
                 line: self.line,
             });
         }
-        if c == '}' {
+        if c == b'}' {
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Rbrace,
-                value: "}".to_string(),
+                value: b"}".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == '^' {
-            if self.peek_char(1) == '=' {
+        if c == b'^' {
+            if self.peek_char(1) == b'=' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::AssignOp,
-                    value: "^=".to_string(),
+                    value: b"^=".to_vec(),
                     line: self.line,
                 });
             }
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Exp,
-                value: "^".to_string(),
+                value: b"^".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == '+' {
-            if self.peek_char(1) == '+' {
+        if c == b'+' {
+            if self.peek_char(1) == b'+' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::IncrDecr,
-                    value: "++".to_string(),
+                    value: b"++".to_vec(),
                     line: self.line,
                 });
             }
-            if self.peek_char(1) == '=' {
+            if self.peek_char(1) == b'=' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::AssignOp,
-                    value: "+=".to_string(),
+                    value: b"+=".to_vec(),
                     line: self.line,
                 });
             }
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Plus,
-                value: "+".to_string(),
+                value: b"+".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == '-' {
-            if self.peek_char(1) == '-' {
+        if c == b'-' {
+            if self.peek_char(1) == b'-' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::IncrDecr,
-                    value: "--".to_string(),
+                    value: b"--".to_vec(),
                     line: self.line,
                 });
             }
-            if self.peek_char(1) == '=' {
+            if self.peek_char(1) == b'=' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::AssignOp,
-                    value: "-=".to_string(),
+                    value: b"-=".to_vec(),
                     line: self.line,
                 });
             }
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::Minus,
-                value: "-".to_string(),
+                value: b"-".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == '*' {
-            if self.peek_char(1) == '=' {
+        if c == b'*' {
+            if self.peek_char(1) == b'=' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::AssignOp,
-                    value: "*=".to_string(),
+                    value: b"*=".to_vec(),
                     line: self.line,
                 });
             }
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::MulOp,
-                value: "*".to_string(),
+                value: b"*".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == '/' {
-            if self.peek_char(1) == '=' {
+        if c == b'/' {
+            if self.peek_char(1) == b'=' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::AssignOp,
-                    value: "/=".to_string(),
+                    value: b"/=".to_vec(),
                     line: self.line,
                 });
             }
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::MulOp,
-                value: "/".to_string(),
+                value: b"/".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == '%' {
-            if self.peek_char(1) == '=' {
+        if c == b'%' {
+            if self.peek_char(1) == b'=' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::AssignOp,
-                    value: "%=".to_string(),
+                    value: b"%=".to_vec(),
                     line: self.line,
                 });
             }
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::MulOp,
-                value: "%".to_string(),
+                value: b"%".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == '=' {
-            if self.peek_char(1) == '=' {
+        if c == b'=' {
+            if self.peek_char(1) == b'=' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::RelOp,
-                    value: "==".to_string(),
+                    value: b"==".to_vec(),
                     line: self.line,
                 });
             }
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::AssignOp,
-                value: "=".to_string(),
+                value: b"=".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == '<' {
-            if self.peek_char(1) == '=' {
+        if c == b'<' {
+            if self.peek_char(1) == b'=' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::RelOp,
-                    value: "<=".to_string(),
+                    value: b"<=".to_vec(),
                     line: self.line,
                 });
             }
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::RelOp,
-                value: "<".to_string(),
+                value: b"<".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == '>' {
-            if self.peek_char(1) == '=' {
+        if c == b'>' {
+            if self.peek_char(1) == b'=' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::RelOp,
-                    value: ">=".to_string(),
+                    value: b">=".to_vec(),
                     line: self.line,
                 });
             }
             self.advance_char(1);
             return Ok(Token {
                 token_type: TokenType::RelOp,
-                value: ">".to_string(),
+                value: b">".to_vec(),
                 line: self.line,
             });
         }
 
-        if c == '!' {
-            if self.peek_char(1) == '=' {
+        if c == b'!' {
+            if self.peek_char(1) == b'=' {
                 self.advance_char(2);
                 return Ok(Token {
                     token_type: TokenType::RelOp,
-                    value: "!=".to_string(),
+                    value: b"!=".to_vec(),
                     line: self.line,
                 });
             }
-            return self.illegal_character('!');
+            return self.illegal_character(b"!");
         }
 
-        if c == '"' {
+        if c == b'"' {
             // An unterminated string is reported at the line where it starts, as in GNU bc.
             let start_line = self.line;
             self.advance_char(1);
@@ -456,20 +460,20 @@ impl Lexer {
             loop {
                 let Some(cc) = self.peek(0) else {
                     self.line = start_line;
-                    return self.illegal_character('"');
+                    return self.illegal_character(b"\"");
                 };
-                if cc == '"' {
+                if cc == b'"' {
                     self.advance_char(1);
                     break;
                 }
-                if cc == '\\' && self.peek_char(1) == '\n' {
-                    val_chars.push('\\');
-                    val_chars.push('\n');
+                if cc == b'\\' && self.peek_char(1) == b'\n' {
+                    val_chars.push(b'\\');
+                    val_chars.push(b'\n');
                     self.advance_char(2);
-                } else if cc == '\\' && self.peek_char(1) == '\r' && self.peek_char(2) == '\n' {
-                    val_chars.push('\\');
-                    val_chars.push('\r');
-                    val_chars.push('\n');
+                } else if cc == b'\\' && self.peek_char(1) == b'\r' && self.peek_char(2) == b'\n' {
+                    val_chars.push(b'\\');
+                    val_chars.push(b'\r');
+                    val_chars.push(b'\n');
                     self.advance_char(3);
                 } else {
                     val_chars.push(cc);
@@ -478,14 +482,14 @@ impl Lexer {
             }
             return Ok(Token {
                 token_type: TokenType::String,
-                value: val_chars.into_iter().collect(),
+                value: val_chars,
                 line: self.line,
             });
         }
 
-        let is_digit = |ch: char| -> bool { verified_is_bc_digit(ch as u32) };
+        let is_digit = |ch: u8| -> bool { verified_is_bc_digit(u32::from(ch)) };
 
-        if is_digit(c) || (c == '.' && is_digit(self.peek_char(1))) {
+        if is_digit(c) || (c == b'.' && is_digit(self.peek_char(1))) {
             let mut val_chars = Vec::new();
             let mut has_dot = false;
             loop {
@@ -493,13 +497,13 @@ impl Lexer {
                 if is_digit(cc) {
                     val_chars.push(cc);
                     self.advance_char(1);
-                } else if cc == '.' && !has_dot {
+                } else if cc == b'.' && !has_dot {
                     has_dot = true;
                     val_chars.push(cc);
                     self.advance_char(1);
-                } else if cc == '\\' && self.peek_char(1) == '\n' {
+                } else if cc == b'\\' && self.peek_char(1) == b'\n' {
                     self.advance_char(2);
-                } else if cc == '\\' && self.peek_char(1) == '\r' && self.peek_char(2) == '\n' {
+                } else if cc == b'\\' && self.peek_char(1) == b'\r' && self.peek_char(2) == b'\n' {
                     self.advance_char(3);
                 } else {
                     break;
@@ -507,7 +511,7 @@ impl Lexer {
             }
             return Ok(Token {
                 token_type: TokenType::Number,
-                value: val_chars.into_iter().collect(),
+                value: val_chars,
                 line: self.line,
             });
         }
@@ -517,40 +521,39 @@ impl Lexer {
             self.advance_char(1);
             loop {
                 let peek = self.peek_char(0);
-                if verified_is_ident_continue(peek as u32) {
+                if verified_is_ident_continue(u32::from(peek)) {
                     letters.push(peek);
                     self.advance_char(1);
                 } else {
                     break;
                 }
             }
-            let word: String = letters.into_iter().collect();
-
-            let token_type = match word.as_str() {
-                "auto" => TokenType::Auto,
-                "break" => TokenType::Break,
-                "define" => TokenType::Define,
-                "ibase" => TokenType::Ibase,
-                "if" => TokenType::If,
-                "for" => TokenType::For,
-                "length" => TokenType::Length,
-                "obase" => TokenType::Obase,
-                "quit" => TokenType::Quit,
-                "return" => TokenType::Return,
-                "scale" => TokenType::Scale,
-                "sqrt" => TokenType::Sqrt,
-                "while" => TokenType::While,
+            let token_type = match letters.as_slice() {
+                b"auto" => TokenType::Auto,
+                b"break" => TokenType::Break,
+                b"define" => TokenType::Define,
+                b"ibase" => TokenType::Ibase,
+                b"if" => TokenType::If,
+                b"for" => TokenType::For,
+                b"length" => TokenType::Length,
+                b"obase" => TokenType::Obase,
+                b"quit" => TokenType::Quit,
+                b"return" => TokenType::Return,
+                b"scale" => TokenType::Scale,
+                b"sqrt" => TokenType::Sqrt,
+                b"while" => TokenType::While,
                 _ => TokenType::Letter,
             };
 
             return Ok(Token {
                 token_type,
-                value: word,
+                value: letters,
                 line: self.line,
             });
         }
 
-        self.illegal_character(c)
+        let len = verified_utf8_char_len(&self.text, self.pos);
+        self.illegal_character(&self.text[self.pos..self.pos + len])
     }
 
     /// Obtains the next token, returning Err on lexical error.
@@ -683,7 +686,7 @@ pub struct FunctionDef {
 pub enum Stmt {
     Block(Vec<Stmt>),
     Expr(Expr),
-    StringLiteral(String),
+    StringLiteral(Vec<u8>),
     Break,
     Quit,
     Return(Option<Expr>),
@@ -917,7 +920,7 @@ impl Parser {
 
     /// Consumes an identifier, recording it if it is longer than one letter (an extension).
     fn eat_name(&mut self) -> Result<String, BcError> {
-        let name = self.current_token.value.clone();
+        let name = self.current_token.text();
         self.eat(TokenType::Letter)?;
         self.note_name(&name);
         Ok(name)
@@ -1182,7 +1185,7 @@ impl Parser {
         if self.current_token.token_type != TokenType::Letter {
             return self.error("expected function name (letter)");
         }
-        let name = self.current_token.value.clone();
+        let name = self.current_token.text();
         self.eat(TokenType::Letter)?;
 
         self.eat(TokenType::Lparen)?;
@@ -1272,7 +1275,7 @@ impl Parser {
     fn parse_relational_expression(&mut self) -> Result<Expr, BcError> {
         let (left, left_h) = self.parse_expression_h()?;
         if self.current_token.token_type == TokenType::RelOp {
-            let op = self.current_token.value.clone();
+            let op = self.current_token.text();
             self.eat(TokenType::RelOp)?;
             let (right, right_h) = self.parse_expression_h()?;
             self.check_height(1 + left_h.max(right_h))?;
@@ -1320,7 +1323,7 @@ impl Parser {
                 return self.error("assignment to an expression that is not a named expression");
             }
 
-            let op_val = self.current_token.value.clone();
+            let op_val = self.current_token.text();
             self.eat(self.current_token.token_type)?;
 
             let (right, right_height) = self.parse_expr_precedence(next_min_prec)?;
@@ -1352,7 +1355,7 @@ impl Parser {
             let (expr, h) = self.parse_expr_precedence(5)?;
             Ok((Expr::Negate(Box::new(expr)), h + 1))
         } else if t == TokenType::IncrDecr {
-            let op = self.current_token.value.clone();
+            let op = self.current_token.text();
             self.eat(TokenType::IncrDecr)?;
             let (target, h) = self.parse_named_expression()?;
             Ok((
@@ -1377,7 +1380,7 @@ impl Parser {
         let t = self.current_token.token_type;
         match t {
             TokenType::Number => {
-                let val = self.current_token.value.clone();
+                let val = self.current_token.text();
                 self.eat(TokenType::Number)?;
                 Ok((Expr::Number(val), 1))
             }
@@ -1411,7 +1414,7 @@ impl Parser {
                 let (target, target_h) = self.parse_named_expression()?;
                 match self.current_token.token_type {
                     TokenType::IncrDecr => {
-                        let op = self.current_token.value.clone();
+                        let op = self.current_token.text();
                         self.eat(TokenType::IncrDecr)?;
                         Ok((
                             Expr::Update(op.starts_with('+'), false, Box::new(target)),
@@ -1422,7 +1425,7 @@ impl Parser {
                     // expression right before it: `a + b = 3` is `a + (b = 3)` and `-a = 5`
                     // is `-(a = 5)`. The right-hand side extends as far as possible.
                     TokenType::AssignOp => {
-                        let op = self.current_token.value.clone();
+                        let op = self.current_token.text();
                         self.eat(TokenType::AssignOp)?;
                         let (_, _, rhs_min_prec) = verified_pratt_infix_info(TOK_ASSIGN_OP);
                         let (value, value_h) = self.parse_expr_precedence(rhs_min_prec)?;
@@ -1517,7 +1520,7 @@ mod tests {
 
     #[test]
     fn test_lexer_basic() {
-        let mut lexer = Lexer::new("a = 10 + 20; /* comment */ a");
+        let mut lexer = Lexer::new(b"a = 10 + 20; /* comment */ a");
         let tokens = vec![
             (TokenType::Letter, "a"),
             (TokenType::AssignOp, "="),
@@ -1531,38 +1534,38 @@ mod tests {
         for (expected_type, expected_val) in tokens {
             let tok = lexer.get_next_token();
             assert_eq!(tok.token_type, expected_type);
-            assert_eq!(tok.value, expected_val);
+            assert_eq!(tok.value, expected_val.as_bytes());
         }
     }
 
     #[test]
     fn test_lexer_backslash_newline() {
-        let mut lexer = Lexer::new("1.2\\\n34 + \\\n  5.0");
+        let mut lexer = Lexer::new(b"1.2\\\n34 + \\\n  5.0");
         let tok1 = lexer.get_next_token();
         assert_eq!(tok1.token_type, TokenType::Number);
-        assert_eq!(tok1.value, "1.234");
+        assert_eq!(tok1.value, b"1.234");
 
         let tok2 = lexer.get_next_token();
         assert_eq!(tok2.token_type, TokenType::Plus);
 
         let tok3 = lexer.get_next_token();
         assert_eq!(tok3.token_type, TokenType::Number);
-        assert_eq!(tok3.value, "5.0");
+        assert_eq!(tok3.value, b"5.0");
     }
 
     #[test]
     fn test_lexer_crlf_and_carriage_return() {
-        let mut lexer = Lexer::new("a = 10\r\n + \r20");
+        let mut lexer = Lexer::new(b"a = 10\r\n + \r20");
         let tok1 = lexer.get_next_token();
         assert_eq!(tok1.token_type, TokenType::Letter);
-        assert_eq!(tok1.value, "a");
+        assert_eq!(tok1.value, b"a");
 
         let tok2 = lexer.get_next_token();
         assert_eq!(tok2.token_type, TokenType::AssignOp);
 
         let tok3 = lexer.get_next_token();
         assert_eq!(tok3.token_type, TokenType::Number);
-        assert_eq!(tok3.value, "10");
+        assert_eq!(tok3.value, b"10");
 
         let tok4 = lexer.get_next_token();
         assert_eq!(tok4.token_type, TokenType::Newline);
@@ -1572,30 +1575,43 @@ mod tests {
 
         let tok6 = lexer.get_next_token();
         assert_eq!(tok6.token_type, TokenType::Number);
-        assert_eq!(tok6.value, "20");
+        assert_eq!(tok6.value, b"20");
 
-        let mut lexer2 = Lexer::new("1.2\\\r\n34");
+        let mut lexer2 = Lexer::new(b"1.2\\\r\n34");
         let tok_num = lexer2.get_next_token();
         assert_eq!(tok_num.token_type, TokenType::Number);
-        assert_eq!(tok_num.value, "1.234");
+        assert_eq!(tok_num.value, b"1.234");
 
-        let mut lexer3 = Lexer::new("\"hello \\\r\nworld\"");
+        // A number ends before a lone backslash and before an operator followed by CRLF.
+        for (input, next_ok) in [(&b"12\\ 3"[..], false), (&b"12+\r\n"[..], true)] {
+            let mut lexer = Lexer::new(input);
+            let tok = lexer.get_next_token();
+            assert_eq!(tok.token_type, TokenType::Number);
+            assert_eq!(tok.value, b"12");
+            let next = lexer.try_get_next_token();
+            assert_eq!(next.is_ok(), next_ok);
+            if let Ok(tok) = next {
+                assert_eq!(tok.token_type, TokenType::Plus);
+            }
+        }
+
+        let mut lexer3 = Lexer::new(b"\"hello \\\r\nworld\"");
         let tok_str = lexer3.get_next_token();
         assert_eq!(tok_str.token_type, TokenType::String);
-        assert_eq!(tok_str.value, "hello \\\r\nworld");
+        assert_eq!(tok_str.value, b"hello \\\r\nworld");
     }
 
     #[test]
     fn test_lexer_string_backslash_newline() {
-        let mut lexer = Lexer::new("\"hello \\\nworld\"");
+        let mut lexer = Lexer::new(b"\"hello \\\nworld\"");
         let tok = lexer.get_next_token();
         assert_eq!(tok.token_type, TokenType::String);
-        assert_eq!(tok.value, "hello \\\nworld");
+        assert_eq!(tok.value, b"hello \\\nworld");
     }
 
     #[test]
     fn test_parser_arithmetic_precedence() {
-        let lexer = Lexer::new("2 + 3 * 4");
+        let lexer = Lexer::new(b"2 + 3 * 4");
         let mut parser = Parser::new(lexer);
         let prog = parser.parse_program();
         assert_eq!(prog.len(), 1);
@@ -1616,12 +1632,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "unterminated comment")]
     fn test_lexer_unterminated_comment() {
-        let mut lexer = Lexer::new("/* unterminated");
+        let mut lexer = Lexer::new(b"/* unterminated");
         let _ = lexer.get_next_token();
     }
 
     fn parse_err(src: &str) -> BcError {
-        Parser::try_new(Lexer::new(src))
+        Parser::try_new(Lexer::new(src.as_bytes()))
             .and_then(|mut p| p.try_parse_program())
             .unwrap_err()
     }
@@ -1646,12 +1662,12 @@ mod tests {
             }
         }
         // POSIX allows `return ()`, which returns 0.
-        let empty = Parser::new(Lexer::new("define f() {\nreturn ()\n}\n")).parse_program();
+        let empty = Parser::new(Lexer::new(b"define f() {\nreturn ()\n}\n")).parse_program();
         assert!(matches!(&empty[0], Stmt::FunctionDef(f) if f.body == vec![Stmt::Return(None)]));
         // Allowed: break in a loop inside a function, return inside a loop in a function.
         let ok = "define f() { while (1) { break }; for (i = 0; 1; i++) return (1) }\n";
         assert!(
-            Parser::try_new(Lexer::new(ok))
+            Parser::try_new(Lexer::new(ok.as_bytes()))
                 .and_then(|mut p| p.try_parse_program())
                 .is_ok()
         );
@@ -1660,7 +1676,7 @@ mod tests {
     #[test]
     fn test_assignment_binds_to_preceding_named_expression() {
         let parse = |src: &str| {
-            let stmts = Parser::new(Lexer::new(src)).parse_program();
+            let stmts = Parser::new(Lexer::new(src.as_bytes())).parse_program();
             match &stmts[0] {
                 Stmt::Block(v) => match &v[0] {
                     Stmt::Expr(e) => e.clone(),
@@ -1712,12 +1728,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "quit")]
     fn test_parse_program_panics_with_quit() {
-        let _ = Parser::new(Lexer::new("quit\n")).parse_program();
+        let _ = Parser::new(Lexer::new(b"quit\n")).parse_program();
     }
 
     #[test]
     fn test_lexer_nul_and_control_characters_are_illegal_not_eof() {
-        let syntax_message = |src: &str| {
+        let syntax_message = |src: &[u8]| {
             let mut lexer = Lexer::new(src);
             loop {
                 match lexer.try_get_next_token() {
@@ -1729,26 +1745,52 @@ mod tests {
             }
         };
         assert_eq!(
-            syntax_message("3\u{0}4\n"),
+            syntax_message(b"3\x004\n"),
             Some((1, "illegal character: ^@".to_string()))
         );
         assert_eq!(
-            syntax_message("\u{1}"),
+            syntax_message(b"\x01"),
             Some((1, "illegal character: ^A".to_string()))
         );
         assert_eq!(
-            syntax_message("\u{7f}"),
+            syntax_message(b"\x7f"),
             Some((1, "illegal character: \\177".to_string()))
         );
         assert_eq!(
-            syntax_message("\u{e9}"),
+            syntax_message("\u{e9}".as_bytes()),
             Some((1, "illegal character: \\303\\251".to_string()))
         );
+        // A byte that does not start a well-formed UTF-8 sequence is a character of its own.
+        for (src, shown) in [
+            (&b"\xff"[..], "\\377"),
+            (b"\x80", "\\200"),
+            (b"\xc0\x80", "\\300"),
+            (b"\xed\xa0\x80", "\\355"),
+            (b"\xe2\x82", "\\342"),
+            (b"\xf4\x90\x80\x80", "\\364"),
+        ] {
+            assert_eq!(
+                syntax_message(src),
+                Some((1, format!("illegal character: {shown}")))
+            );
+        }
+        assert_eq!(
+            syntax_message("\u{20ac}\u{1f600}".as_bytes()),
+            Some((1, "illegal character: \\342\\202\\254".to_string()))
+        );
+        assert_eq!(
+            syntax_message("\u{1f600}".as_bytes()),
+            Some((1, "illegal character: \\360\\237\\230\\200".to_string()))
+        );
+        // Bytes that are not UTF-8 are kept in a string and skipped in a comment.
+        let mut lexer = Lexer::new(b"\"a\xff\xed\xa0\x80\" /* \xff */");
+        assert_eq!(lexer.get_next_token().value, b"a\xff\xed\xa0\x80");
+        assert_eq!(lexer.get_next_token().token_type, TokenType::Eof);
         // A NUL inside a string or a comment does not end it.
-        assert_eq!(syntax_message("\"a\0b\" /* \0 */ 1\n"), None);
+        assert_eq!(syntax_message(b"\"a\0b\" /* \0 */ 1\n"), None);
         // An unterminated string is reported at the line where it starts.
         assert_eq!(
-            syntax_message("1\n\"abc\nd\n"),
+            syntax_message(b"1\n\"abc\nd\n"),
             Some((2, "illegal character: \"".to_string()))
         );
     }
@@ -1756,33 +1798,33 @@ mod tests {
     #[test]
     #[should_panic(expected = "illegal character")]
     fn test_lexer_unterminated_string() {
-        let mut lexer = Lexer::new("\"unterminated");
+        let mut lexer = Lexer::new(b"\"unterminated");
         let _ = lexer.get_next_token();
     }
 
     #[test]
-    #[should_panic(expected = "unexpected character")]
+    #[should_panic(expected = "illegal character: @")]
     fn test_lexer_unexpected_char() {
-        let mut lexer = Lexer::new("@");
+        let mut lexer = Lexer::new(b"@");
         let _ = lexer.get_next_token();
     }
 
     #[test]
-    #[should_panic(expected = "unexpected character '!'")]
+    #[should_panic(expected = "illegal character: !")]
     fn test_lexer_unexpected_bang() {
-        let mut lexer = Lexer::new("!3");
+        let mut lexer = Lexer::new(b"!3");
         let _ = lexer.get_next_token();
     }
 
     #[test]
     fn test_lexer_advance_past_end() {
-        let mut lexer = Lexer::new("abc");
+        let mut lexer = Lexer::new(b"abc");
         lexer.advance_char(10);
     }
 
     #[test]
     fn test_lexer_peek_past_eof() {
-        let mut lexer = Lexer::new("123");
+        let mut lexer = Lexer::new(b"123");
         let tok = lexer.peek_token(5);
         assert_eq!(tok.token_type, TokenType::Eof);
     }
@@ -1790,42 +1832,42 @@ mod tests {
     #[test]
     #[should_panic(expected = "expected")]
     fn test_parser_eat_mismatch() {
-        let mut parser = Parser::new(Lexer::new("define f 123"));
+        let mut parser = Parser::new(Lexer::new(b"define f 123"));
         let _ = parser.parse_program();
     }
 
     #[test]
     #[should_panic(expected = "expected separator")]
     fn test_parser_expected_separator() {
-        let mut parser = Parser::new(Lexer::new("{ a = 5 b = 10 }"));
+        let mut parser = Parser::new(Lexer::new(b"{ a = 5 b = 10 }"));
         let _ = parser.parse_program();
     }
 
     #[test]
     #[should_panic(expected = "expected function name")]
     fn test_parser_expected_function_name() {
-        let mut parser = Parser::new(Lexer::new("define 123() {}"));
+        let mut parser = Parser::new(Lexer::new(b"define 123() {}"));
         let _ = parser.parse_program();
     }
 
     #[test]
     #[should_panic(expected = "expected parameter name")]
     fn test_parser_expected_parameter_name() {
-        let mut parser = Parser::new(Lexer::new("define f(123) {}"));
+        let mut parser = Parser::new(Lexer::new(b"define f(123) {}"));
         let _ = parser.parse_program();
     }
 
     #[test]
     #[should_panic(expected = "expected newline or semicolon")]
     fn test_parser_expected_auto_separator() {
-        let mut parser = Parser::new(Lexer::new("define f() { auto a 123; }"));
+        let mut parser = Parser::new(Lexer::new(b"define f() { auto a 123; }"));
         let _ = parser.parse_program();
     }
 
     #[test]
     fn test_lexer_and_parser_mutant_edge_cases() {
         // 1. CRLF line tracking across comments and multi-line strings
-        let mut lexer = Lexer::new("/* line 1\r\n line 2 */\r\n123");
+        let mut lexer = Lexer::new(b"/* line 1\r\n line 2 */\r\n123");
         let tok1 = lexer.get_next_token();
         assert_eq!(tok1.token_type, TokenType::Newline);
         let tok2 = lexer.get_next_token();
@@ -1833,18 +1875,18 @@ mod tests {
         assert_eq!(tok2.line, 3);
 
         // 2. Semicolons and empty statement list parsing
-        let mut parser = Parser::new(Lexer::new("; ; a = 1; ; b = 2; ;"));
+        let mut parser = Parser::new(Lexer::new(b"; ; a = 1; ; b = 2; ;"));
         let prog = parser.parse_program();
         assert!(!prog.is_empty());
 
         // 3. Complex argument list with expressions and array parameters
-        let mut parser2 = Parser::new(Lexer::new("f(1 + 2, a[])"));
+        let mut parser2 = Parser::new(Lexer::new(b"f(1 + 2, a[])"));
         let prog2 = parser2.parse_program();
         assert_eq!(prog2.len(), 1);
 
         // 4. Tokenizer operator coverage
         let ops = "+= -= *= /= %= ^= == != <= >= ++ --";
-        let mut lexer_ops = Lexer::new(ops);
+        let mut lexer_ops = Lexer::new(ops.as_bytes());
         let mut tok_count = 0;
         loop {
             let tok = lexer_ops.get_next_token();
@@ -1859,30 +1901,30 @@ mod tests {
     #[test]
     fn test_string_backslash_newline_continuation_variations() {
         // String literal with backslash-LF and backslash-CRLF
-        let mut lexer_lf = Lexer::new("\"hello \\\nworld\"");
+        let mut lexer_lf = Lexer::new(b"\"hello \\\nworld\"");
         let tok_lf = lexer_lf.get_next_token();
         assert_eq!(tok_lf.token_type, TokenType::String);
 
-        let mut lexer_crlf = Lexer::new("\"hello \\\r\nworld\"");
+        let mut lexer_crlf = Lexer::new(b"\"hello \\\r\nworld\"");
         let tok_crlf = lexer_crlf.get_next_token();
         assert_eq!(tok_crlf.token_type, TokenType::String);
 
         // Number token with backslash-newline continuation inside digits
-        let mut lexer_num = Lexer::new("123\\\n456");
+        let mut lexer_num = Lexer::new(b"123\\\n456");
         let tok_num = lexer_num.get_next_token();
         assert_eq!(tok_num.token_type, TokenType::Number);
-        assert_eq!(tok_num.value, "123456");
+        assert_eq!(tok_num.value, b"123456");
 
-        let mut lexer_num_crlf = Lexer::new("123\\\r\n456");
+        let mut lexer_num_crlf = Lexer::new(b"123\\\r\n456");
         let tok_num_crlf = lexer_num_crlf.get_next_token();
         assert_eq!(tok_num_crlf.token_type, TokenType::Number);
-        assert_eq!(tok_num_crlf.value, "123456");
+        assert_eq!(tok_num_crlf.value, b"123456");
     }
 
     #[test]
     fn test_parser_precedence_associativity_and_bare_return() {
         // 1. Right-associativity of exponentiation operator '^'
-        let mut parser_pow = Parser::new(Lexer::new("2^3^2"));
+        let mut parser_pow = Parser::new(Lexer::new(b"2^3^2"));
         let stmts_pow = parser_pow.parse_program();
         assert_eq!(stmts_pow.len(), 1);
         let target_stmt = match &stmts_pow[0] {
@@ -1904,7 +1946,7 @@ mod tests {
         }
 
         // 2. Bare GNU return statement parsing
-        let mut parser_ret = Parser::new(Lexer::new("define f() { return }"));
+        let mut parser_ret = Parser::new(Lexer::new(b"define f() { return }"));
         let stmts_ret = parser_ret.parse_program();
         assert_eq!(stmts_ret.len(), 1);
         if let Stmt::FunctionDef(fdef) = &stmts_ret[0] {
@@ -1915,7 +1957,7 @@ mod tests {
         }
 
         // 3. Multi-argument call with array and expression arguments
-        let mut parser_call = Parser::new(Lexer::new("f(1, a[], 3)"));
+        let mut parser_call = Parser::new(Lexer::new(b"f(1, a[], 3)"));
         let stmts_call = parser_call.parse_program();
         assert_eq!(stmts_call.len(), 1);
         let call_stmt = match &stmts_call[0] {
@@ -1933,26 +1975,26 @@ mod tests {
     #[test]
     fn test_lexer_token_boundaries_and_comment_transitions() {
         // 1. Comment-to-token transition scanning
-        let mut lexer_comment = Lexer::new("/* comment */ x = 5");
+        let mut lexer_comment = Lexer::new(b"/* comment */ x = 5");
         let tok1 = lexer_comment.get_next_token();
         assert_eq!(tok1.token_type, TokenType::Letter);
-        assert_eq!(tok1.value, "x");
+        assert_eq!(tok1.value, b"x");
 
         // 2. Minus operator vs negative numbers
-        let mut lexer_minus = Lexer::new("x - 5");
+        let mut lexer_minus = Lexer::new(b"x - 5");
         let _ = lexer_minus.get_next_token(); // x
         let tok_op = lexer_minus.get_next_token(); // -
         assert_eq!(tok_op.token_type, TokenType::Minus);
 
         // 3. Argument list parsing with multiple expressions
-        let mut parser_args = Parser::new(Lexer::new("f(1 + 2, 3 * 4)"));
+        let mut parser_args = Parser::new(Lexer::new(b"f(1 + 2, 3 * 4)"));
         let stmts_args = parser_args.parse_program();
         assert_eq!(stmts_args.len(), 1);
     }
 
     #[test]
     fn test_multi_array_parameter_call_parsing() {
-        let mut parser_arrays = Parser::new(Lexer::new("f(x[], y[], z[])"));
+        let mut parser_arrays = Parser::new(Lexer::new(b"f(x[], y[], z[])"));
         let stmts = parser_arrays.parse_program();
         assert_eq!(stmts.len(), 1);
         let call_stmt = match &stmts[0] {
@@ -1973,29 +2015,29 @@ mod tests {
     #[test]
     fn test_lexer_crlf_continuation_and_newline_token_line() {
         // 1. A newline token reports the line after it, as GNU bc does for diagnostics
-        let mut lexer_nl = Lexer::new("a\n");
+        let mut lexer_nl = Lexer::new(b"a\n");
         let _ = lexer_nl.get_next_token(); // a
         let tok_nl = lexer_nl.get_next_token(); // \n
         assert_eq!(tok_nl.token_type, TokenType::Newline);
         assert_eq!(tok_nl.line, 2);
 
         // 2. String token with CRLF backslash continuation
-        let mut lexer_str = Lexer::new("\"hello \\\r\n world\"");
+        let mut lexer_str = Lexer::new(b"\"hello \\\r\n world\"");
         let tok_str = lexer_str.get_next_token();
         assert_eq!(tok_str.token_type, TokenType::String);
-        assert_eq!(tok_str.value, "hello \\\r\n world");
+        assert_eq!(tok_str.value, b"hello \\\r\n world");
 
         // 3. Number token with CRLF backslash continuation
-        let mut lexer_num = Lexer::new("123\\\r\n456");
+        let mut lexer_num = Lexer::new(b"123\\\r\n456");
         let tok_num = lexer_num.get_next_token();
         assert_eq!(tok_num.token_type, TokenType::Number);
-        assert_eq!(tok_num.value, "123456");
+        assert_eq!(tok_num.value, b"123456");
     }
 
     #[test]
     fn test_argument_list_invalid_syntax_error_message() {
         let panic_res =
-            std::panic::catch_unwind(|| Parser::new(Lexer::new("f(a + ])")).parse_program());
+            std::panic::catch_unwind(|| Parser::new(Lexer::new(b"f(a + ])")).parse_program());
         assert!(panic_res.is_err());
         let payload = panic_res.unwrap_err();
         let msg = if let Some(s) = payload.downcast_ref::<String>() {
@@ -2011,14 +2053,14 @@ mod tests {
     #[test]
     fn test_comment_slash_in_body_and_standalone_dot_token() {
         // 1. Comment with slash inside comment body: /* a / b */ 42
-        let mut lexer_comment = Lexer::new("/* a / b */ 42");
+        let mut lexer_comment = Lexer::new(b"/* a / b */ 42");
         let tok_comment = lexer_comment.get_next_token();
         assert_eq!(tok_comment.token_type, TokenType::Number);
-        assert_eq!(tok_comment.value, "42");
+        assert_eq!(tok_comment.value, b"42");
 
         // 2. Standalone dot without trailing digit panics with unexpected character
         let panic_dot = std::panic::catch_unwind(|| {
-            let mut lexer_dot = Lexer::new(". + 1");
+            let mut lexer_dot = Lexer::new(b". + 1");
             let _ = lexer_dot.get_next_token();
         });
         assert!(panic_dot.is_err());
@@ -2027,79 +2069,79 @@ mod tests {
     #[test]
     fn test_number_and_string_scan_token_crlf_short_circuit_precedence() {
         // Number token ending before newline: 123+\n
-        let mut lexer_num = Lexer::new("123+\n");
+        let mut lexer_num = Lexer::new(b"123+\n");
         let tok_num = lexer_num.get_next_token();
         assert_eq!(tok_num.token_type, TokenType::Number);
-        assert_eq!(tok_num.value, "123");
+        assert_eq!(tok_num.value, b"123");
 
         // String token with plus newline: "abc+\n"
-        let mut lexer_str = Lexer::new("\"abc+\n\"");
+        let mut lexer_str = Lexer::new(b"\"abc+\n\"");
         let tok_str = lexer_str.get_next_token();
         assert_eq!(tok_str.token_type, TokenType::String);
-        assert_eq!(tok_str.value, "abc+\n");
+        assert_eq!(tok_str.value, b"abc+\n");
 
         // String token with unescaped CRLF (kills == vs != mutants on line 416)
-        let mut lexer_raw_crlf = Lexer::new("\"a\r\nb\"");
+        let mut lexer_raw_crlf = Lexer::new(b"\"a\r\nb\"");
         let tok_raw_crlf = lexer_raw_crlf.get_next_token();
         assert_eq!(tok_raw_crlf.token_type, TokenType::String);
-        assert_eq!(tok_raw_crlf.value, "a\r\nb");
+        assert_eq!(tok_raw_crlf.value, b"a\r\nb");
 
         // Non-dot identifier followed by digit: x5 (kills == vs != on line 435)
-        let mut lexer_x5 = Lexer::new("x5");
+        let mut lexer_x5 = Lexer::new(b"x5");
         let tok_x5 = lexer_x5.get_next_token();
         assert_eq!(tok_x5.token_type, TokenType::Letter);
-        assert_eq!(tok_x5.value, "x5");
+        assert_eq!(tok_x5.value, b"x5");
 
         // Number token followed by space plus newline: 123 + \n (kills && vs || on line 449)
-        let mut lexer_num_space = Lexer::new("123 + \n");
+        let mut lexer_num_space = Lexer::new(b"123 + \n");
         let tok_num_space = lexer_num_space.get_next_token();
         assert_eq!(tok_num_space.token_type, TokenType::Number);
-        assert_eq!(tok_num_space.value, "123");
+        assert_eq!(tok_num_space.value, b"123");
 
         // String token with backslash non-CRLF (kills line 416:59 and line 416:88)
-        let mut lexer_str_bs_x = Lexer::new("\"a \\x\nb\"");
+        let mut lexer_str_bs_x = Lexer::new(b"\"a \\x\nb\"");
         let tok_str_bs_x = lexer_str_bs_x.get_next_token();
         assert_eq!(tok_str_bs_x.token_type, TokenType::String);
-        assert_eq!(tok_str_bs_x.value, "a \\x\nb");
+        assert_eq!(tok_str_bs_x.value, b"a \\x\nb");
 
-        let mut lexer_str_bs_rx = Lexer::new("\"a \\\rxb\"");
+        let mut lexer_str_bs_rx = Lexer::new(b"\"a \\\rxb\"");
         let tok_str_bs_rx = lexer_str_bs_rx.get_next_token();
         assert_eq!(tok_str_bs_rx.token_type, TokenType::String);
-        assert_eq!(tok_str_bs_rx.value, "a \\\rxb");
+        assert_eq!(tok_str_bs_rx.value, b"a \\\rxb");
 
         // Number token followed by backslash x newline: 123 \x\n (kills line 449:38)
-        let mut lexer_num_bs_x = Lexer::new("123 \\x\n");
+        let mut lexer_num_bs_x = Lexer::new(b"123 \\x\n");
         let tok_num_bs_x = lexer_num_bs_x.get_next_token();
         assert_eq!(tok_num_bs_x.token_type, TokenType::Number);
-        assert_eq!(tok_num_bs_x.value, "123");
+        assert_eq!(tok_num_bs_x.value, b"123");
     }
 
     #[test]
     fn test_fallible_parser_and_lexer() {
-        let mut lexer_err = Lexer::new("@");
+        let mut lexer_err = Lexer::new(b"@");
         assert!(lexer_err.try_get_next_token().is_err());
 
-        let mut lexer_peek_err = Lexer::new("1 @");
+        let mut lexer_peek_err = Lexer::new(b"1 @");
         assert!(lexer_peek_err.try_peek_token(1).is_err());
 
-        assert!(Parser::try_new(Lexer::new("/* unterminated")).is_err());
+        assert!(Parser::try_new(Lexer::new(b"/* unterminated")).is_err());
 
-        let mut parser_syntax = Parser::try_new(Lexer::new("1 + * 2\n")).unwrap();
+        let mut parser_syntax = Parser::try_new(Lexer::new(b"1 + * 2\n")).unwrap();
         assert!(parser_syntax.try_parse_program().is_err());
 
-        let mut parser_quit = Parser::try_new(Lexer::new("quit\n")).unwrap();
+        let mut parser_quit = Parser::try_new(Lexer::new(b"quit\n")).unwrap();
         assert_eq!(parser_quit.try_parse_program(), Err(BcError::Quit));
 
         // Verify statement & primary expression variants in try_parse_program
         let mut parser_variants = Parser::try_new(Lexer::new(
-            "\"hello\"\nwhile (0) break\nif (1) x = 2\nlength(123)\nscale(1.23)\nobase = 16\nscale = 4\n",
+            b"\"hello\"\nwhile (0) break\nif (1) x = 2\nlength(123)\nscale(1.23)\nobase = 16\nscale = 4\n",
         ))
         .unwrap();
         let stmts = parser_variants.try_parse_program().unwrap();
         assert_eq!(stmts.len(), 7);
         assert_eq!(
             stmts[0],
-            Stmt::Block(vec![Stmt::StringLiteral("hello".to_string())])
+            Stmt::Block(vec![Stmt::StringLiteral(b"hello".to_vec())])
         );
         assert!(
             matches!(&stmts[1], Stmt::Block(v) if matches!(&v[0], Stmt::While(_, body) if **body == Stmt::Break))

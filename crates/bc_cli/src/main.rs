@@ -87,13 +87,13 @@ pub fn setup_ctrlc_handler() {
 }
 
 /// Counts the number of open braces outside of strings and comments.
-pub fn count_open_braces(text: &str) -> i32 {
-    verified_repl_block_completeness(text.as_bytes()).0
+pub fn count_open_braces(text: &[u8]) -> i32 {
+    verified_repl_block_completeness(text).0
 }
 
 /// Checks if the block is incomplete (e.g. has open braces, or is inside an unterminated comment or string).
-pub fn is_block_incomplete(text: &str) -> bool {
-    verified_repl_block_completeness(text.as_bytes()).1
+pub fn is_block_incomplete(text: &[u8]) -> bool {
+    verified_repl_block_completeness(text).1
 }
 
 thread_local! {
@@ -114,7 +114,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
 /// an internal bug; it is reported as such and counted as a failed unit instead of aborting.
 fn run_unit_guarded(
     evaluator: &mut Evaluator,
-    unit: &str,
+    unit: &[u8],
     source: &str,
     first_line: usize,
 ) -> UnitOutcome {
@@ -161,13 +161,13 @@ fn decode_input(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
 /// Processes a complete file or standard-input text, continuing after errors until its end
 /// or `quit` (`docs/COMPATIBILITY.md` §3.1).
 pub fn run_non_interactive_block(
-    content: &str,
+    content: &[u8],
     source: &str,
     evaluator: &mut Evaluator,
 ) -> RunSummary {
     let mut summary = RunSummary::default();
     let mut acc = UnitAccumulator::new();
-    for line in content.split_inclusive('\n') {
+    for line in content.split_inclusive(|&b| b == b'\n') {
         if let Some((unit, first_line)) = acc.push_line(line)
             && record(
                 &mut summary,
@@ -209,7 +209,7 @@ pub fn run_interactive_loop<R: BufRead>(mut reader: R, evaluator: &mut Evaluator
             continue;
         }
 
-        if let Some((unit, first_line)) = acc.push_line(&line)
+        if let Some((unit, first_line)) = acc.push_line(line.as_bytes())
             && record(
                 &mut summary,
                 run_unit_guarded(evaluator, &unit, STDIN_SOURCE, first_line),
@@ -287,7 +287,8 @@ where
         match std::fs::read(filename) {
             Ok(bytes) => {
                 let content = decode_input(&bytes);
-                let summary = run_non_interactive_block(&content, filename, &mut evaluator);
+                let summary =
+                    run_non_interactive_block(content.as_bytes(), filename, &mut evaluator);
                 errors += summary.errors;
                 if summary.quit {
                     return i32::from(errors > 0);
@@ -316,7 +317,11 @@ where
             );
             return 1;
         }
-        run_non_interactive_block(&decode_input(&bytes), STDIN_SOURCE, &mut evaluator)
+        run_non_interactive_block(
+            decode_input(&bytes).as_bytes(),
+            STDIN_SOURCE,
+            &mut evaluator,
+        )
     };
     i32::from(errors + summary.errors > 0)
 }
@@ -407,30 +412,30 @@ mod tests {
 
     #[test]
     fn test_count_open_braces() {
-        assert_eq!(count_open_braces(""), 0);
-        assert_eq!(count_open_braces("{"), 1);
-        assert_eq!(count_open_braces("}"), -1);
-        assert_eq!(count_open_braces("/* { */"), 0);
-        assert_eq!(count_open_braces("\"{\""), 0);
-        assert_eq!(count_open_braces("a = 5 \\\n {"), 1);
-        assert_eq!(count_open_braces("a = 5 \\\r\n {"), 1);
-        assert_eq!(count_open_braces("a = \"hello \\\nworld\""), 0);
-        assert_eq!(count_open_braces("a = \"hello \\\r\nworld\""), 0);
+        assert_eq!(count_open_braces(b""), 0);
+        assert_eq!(count_open_braces(b"{"), 1);
+        assert_eq!(count_open_braces(b"}"), -1);
+        assert_eq!(count_open_braces(b"/* { */"), 0);
+        assert_eq!(count_open_braces(b"\"{\""), 0);
+        assert_eq!(count_open_braces(b"a = 5 \\\n {"), 1);
+        assert_eq!(count_open_braces(b"a = 5 \\\r\n {"), 1);
+        assert_eq!(count_open_braces(b"a = \"hello \\\nworld\""), 0);
+        assert_eq!(count_open_braces(b"a = \"hello \\\r\nworld\""), 0);
     }
 
     #[test]
     fn test_count_open_braces_and_block_incomplete_boundary_cases() {
-        assert_eq!(count_open_braces("/* { */ { }"), 0);
-        assert_eq!(count_open_braces("if (1) { a = 1; }"), 0);
-        assert_eq!(count_open_braces("if (1) {\n  if (2) {\n    a = 1;\n"), 2);
-        assert_eq!(count_open_braces("a = \"{\"\n"), 0);
-        assert_eq!(count_open_braces("/* comment * { */ { }"), 0);
+        assert_eq!(count_open_braces(b"/* { */ { }"), 0);
+        assert_eq!(count_open_braces(b"if (1) { a = 1; }"), 0);
+        assert_eq!(count_open_braces(b"if (1) {\n  if (2) {\n    a = 1;\n"), 2);
+        assert_eq!(count_open_braces(b"a = \"{\"\n"), 0);
+        assert_eq!(count_open_braces(b"/* comment * { */ { }"), 0);
 
-        assert!(is_block_incomplete("if (1) {"));
-        assert!(is_block_incomplete("/* comment"));
-        assert!(is_block_incomplete("\"string"));
-        assert!(!is_block_incomplete("a = 1 + 2\n"));
-        assert!(!is_block_incomplete("/* comment */ a = 1\n"));
+        assert!(is_block_incomplete(b"if (1) {"));
+        assert!(is_block_incomplete(b"/* comment"));
+        assert!(is_block_incomplete(b"\"string"));
+        assert!(!is_block_incomplete(b"a = 1 + 2\n"));
+        assert!(!is_block_incomplete(b"/* comment */ a = 1\n"));
     }
 
     #[test]
@@ -501,7 +506,7 @@ mod tests {
 
         let mut evaluator = create_evaluator(false, stdout, stderr);
 
-        let summary = run_non_interactive_block(content, "test.bc", &mut evaluator);
+        let summary = run_non_interactive_block(content.as_bytes(), "test.bc", &mut evaluator);
         assert_eq!(summary.errors, 1);
 
         let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
@@ -520,7 +525,7 @@ mod tests {
             buf: stderr_buf.clone(),
         };
         let mut evaluator = create_evaluator(false, stdout, stderr);
-        let summary = run_non_interactive_block("1 + 2\nquit\n3\n", "test.bc", &mut evaluator);
+        let summary = run_non_interactive_block(b"1 + 2\nquit\n3\n", "test.bc", &mut evaluator);
         assert_eq!(
             summary,
             RunSummary {
@@ -571,7 +576,7 @@ mod tests {
             let summary = if interactive {
                 run_interactive_loop(input.as_bytes(), &mut evaluator)
             } else {
-                run_non_interactive_block(input, STDIN_SOURCE, &mut evaluator)
+                run_non_interactive_block(input.as_bytes(), STDIN_SOURCE, &mut evaluator)
             };
             assert_eq!(summary.errors, 1);
             let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
@@ -587,7 +592,7 @@ mod tests {
             buf: stderr_buf.clone(),
         };
         let mut evaluator = create_evaluator(false, PanickingWriter, stderr);
-        let summary = run_non_interactive_block("1\n", "test.bc", &mut evaluator);
+        let summary = run_non_interactive_block(b"1\n", "test.bc", &mut evaluator);
         assert_eq!(summary.errors, 1);
         let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
         assert_eq!(err, "bc_clone: internal error: writer exploded\n");
@@ -729,18 +734,18 @@ mod tests {
             RunSummary::default()
         );
         assert_eq!(
-            run_non_interactive_block("1", "test.bc", &mut evaluator),
+            run_non_interactive_block(b"1", "test.bc", &mut evaluator),
             RunSummary::default()
         );
     }
 
     #[test]
     fn test_is_block_incomplete() {
-        assert!(!is_block_incomplete("a = 5"));
-        assert!(is_block_incomplete("/* comment"));
-        assert!(is_block_incomplete("\"string"));
-        assert!(!is_block_incomplete("a = \"hello \\\nworld\""));
-        assert!(!is_block_incomplete("a = \"hello \\\r\nworld\""));
+        assert!(!is_block_incomplete(b"a = 5"));
+        assert!(is_block_incomplete(b"/* comment"));
+        assert!(is_block_incomplete(b"\"string"));
+        assert!(!is_block_incomplete(b"a = \"hello \\\nworld\""));
+        assert!(!is_block_incomplete(b"a = \"hello \\\r\nworld\""));
     }
 
     #[test]
@@ -999,7 +1004,7 @@ mod tests {
         };
         let mut evaluator = create_evaluator(false, stdout, stderr);
         evaluator.request_quit();
-        let summary = run_non_interactive_block("1\n", "test.bc", &mut evaluator);
+        let summary = run_non_interactive_block(b"1\n", "test.bc", &mut evaluator);
         assert!(summary.quit);
     }
 
@@ -1073,66 +1078,66 @@ mod tests {
     #[test]
     fn test_repl_accumulator_comment_and_string_edge_cases() {
         // Comment boundary conditions
-        assert!(is_block_incomplete("/*"));
-        assert!(is_block_incomplete("a = 10 /* comment"));
-        assert!(!is_block_incomplete("/* comment */ a = 5"));
-        assert_eq!(count_open_braces("/* { */"), 0);
+        assert!(is_block_incomplete(b"/*"));
+        assert!(is_block_incomplete(b"a = 10 /* comment"));
+        assert!(!is_block_incomplete(b"/* comment */ a = 5"));
+        assert_eq!(count_open_braces(b"/* { */"), 0);
 
         // String boundary conditions
-        assert!(is_block_incomplete("\"hello"));
-        assert!(!is_block_incomplete("\"hello world\""));
-        assert_eq!(count_open_braces("\"{\""), 0);
+        assert!(is_block_incomplete(b"\"hello"));
+        assert!(!is_block_incomplete(b"\"hello world\""));
+        assert_eq!(count_open_braces(b"\"{\""), 0);
 
         // Block incomplete conditions
-        assert!(is_block_incomplete("if (1) {"));
-        assert!(!is_block_incomplete("a = 5\n"));
+        assert!(is_block_incomplete(b"if (1) {"));
+        assert!(!is_block_incomplete(b"a = 5\n"));
     }
 
     #[test]
     fn test_count_open_braces_and_block_incomplete_string_escapes() {
         // 1. Backslash-LF and CRLF continuation inside strings in count_open_braces
-        assert_eq!(count_open_braces("\"str \\\n {\""), 0);
-        assert_eq!(count_open_braces("\"str \\\r\n {\""), 0);
-        assert_eq!(count_open_braces("\"str \\\r {\""), 0);
-        assert_eq!(count_open_braces("/* comment \\\n { */"), 0);
-        assert_eq!(count_open_braces("/* *** { ***/"), 0);
-        assert_eq!(count_open_braces("/* * / { */"), 0);
+        assert_eq!(count_open_braces(b"\"str \\\n {\""), 0);
+        assert_eq!(count_open_braces(b"\"str \\\r\n {\""), 0);
+        assert_eq!(count_open_braces(b"\"str \\\r {\""), 0);
+        assert_eq!(count_open_braces(b"/* comment \\\n { */"), 0);
+        assert_eq!(count_open_braces(b"/* *** { ***/"), 0);
+        assert_eq!(count_open_braces(b"/* * / { */"), 0);
 
         // 2. is_block_incomplete string backslash continuation
-        assert!(is_block_incomplete("\"str \\\n"));
-        assert!(is_block_incomplete("\"str \\\r\n"));
-        assert!(is_block_incomplete("\"str \\\r"));
-        assert!(is_block_incomplete("/* ***"));
-        assert!(!is_block_incomplete("/* *** */ a = 1\n"));
-        assert!(!is_block_incomplete("\"str \\\n\" a = 1\n"));
-        assert!(!is_block_incomplete("\"str \\\r\n\" a = 1\n"));
+        assert!(is_block_incomplete(b"\"str \\\n"));
+        assert!(is_block_incomplete(b"\"str \\\r\n"));
+        assert!(is_block_incomplete(b"\"str \\\r"));
+        assert!(is_block_incomplete(b"/* ***"));
+        assert!(!is_block_incomplete(b"/* *** */ a = 1\n"));
+        assert!(!is_block_incomplete(b"\"str \\\n\" a = 1\n"));
+        assert!(!is_block_incomplete(b"\"str \\\r\n\" a = 1\n"));
     }
 
     #[test]
     fn test_offset_comment_and_string_brace_counting() {
         // Non-zero index offsets for comment and string skips (kills += vs *= mutants)
-        assert_eq!(count_open_braces("abc/* */{"), 1);
-        assert_eq!(count_open_braces("\"0123\\\n{\""), 0);
-        assert_eq!(count_open_braces("\"0123\\\r\n{\""), 0);
+        assert_eq!(count_open_braces(b"abc/* */{"), 1);
+        assert_eq!(count_open_braces(b"\"0123\\\n{\""), 0);
+        assert_eq!(count_open_braces(b"\"0123\\\r\n{\""), 0);
 
-        assert!(is_block_incomplete("abc/* */{"));
-        assert!(is_block_incomplete("\"0123\\\n"));
-        assert!(is_block_incomplete("\"0123\\\r\n"));
+        assert!(is_block_incomplete(b"abc/* */{"));
+        assert!(is_block_incomplete(b"\"0123\\\n"));
+        assert!(is_block_incomplete(b"\"0123\\\r\n"));
     }
 
     #[test]
     fn test_string_backslash_non_crlf_and_comment_slash_boundaries() {
         // String with backslash followed by ordinary non-CRLF character (e.g. \x)
-        assert_eq!(count_open_braces("\"a \\x\" {"), 1);
-        assert!(is_block_incomplete("\"a \\x\" {"));
+        assert_eq!(count_open_braces(b"\"a \\x\" {"), 1);
+        assert!(is_block_incomplete(b"\"a \\x\" {"));
 
         // Comment ending with extra asterisks: /***/ {
-        assert_eq!(count_open_braces("/***/{"), 1);
-        assert!(is_block_incomplete("/***/{"));
+        assert_eq!(count_open_braces(b"/***/{"), 1);
+        assert!(is_block_incomplete(b"/***/{"));
 
         // Comment with slash inside: /* / */ {
-        assert_eq!(count_open_braces("/* / */{"), 1);
-        assert!(is_block_incomplete("/* / */{"));
+        assert_eq!(count_open_braces(b"/* / */{"), 1);
+        assert!(is_block_incomplete(b"/* / */{"));
     }
 
     struct FailingFlushWriter;
@@ -1163,17 +1168,14 @@ mod kani_proofs {
     use super::*;
 
     /// Verifies that `count_open_braces` and `is_block_incomplete` never panic and maintain
-    /// strict consistency across arbitrary symbolic 8-byte ASCII strings.
+    /// strict consistency across arbitrary symbolic byte strings of up to 8 bytes.
     #[kani::proof]
     #[kani::unwind(9)]
     fn proof_cli_count_open_braces_and_incomplete() {
         let raw: [u8; 8] = kani::any();
         let len: usize = kani::any();
         kani::assume(len <= 8);
-        for i in 0..len {
-            kani::assume(raw[i] <= 0x7F);
-        }
-        let s = unsafe { core::str::from_utf8_unchecked(&raw[..len]) };
+        let s = &raw[..len];
 
         let braces = count_open_braces(s);
         let incomplete = is_block_incomplete(s);

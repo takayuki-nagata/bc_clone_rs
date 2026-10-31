@@ -315,9 +315,24 @@ pub open spec fn octal(b: u8) -> Seq<u8> {
     seq![92u8, (48 + b / 64) as u8, (48 + (b / 8) % 8) as u8, (48 + b % 8) as u8]
 }
 
-/// The UTF-8 length of the character whose first byte is `c` (input is valid UTF-8).
-pub open spec fn char_len(c: u8) -> usize {
-    if c < 0x80 { 1usize } else if c < 0xe0 { 2usize } else if c < 0xf0 { 3usize } else { 4usize }
+/// The length of the character at the start of `t`: the length of the well-formed UTF-8
+/// sequence that starts there, or 1 if none does (an invalid byte is a character of its own).
+pub open spec fn utf8_len(t: Seq<u8>) -> usize {
+    if t.len() == 0 {
+        1usize
+    } else {
+        let c = t[0];
+        if 0xc2 <= c && c <= 0xdf && t.len() >= 2 && is_cont(t[1]) {
+            2usize
+        } else if 0xe0 <= c && c <= 0xef && t.len() >= 3 && second_ok(c, t[1]) && is_cont(t[2]) {
+            3usize
+        } else if 0xf0 <= c && c <= 0xf4 && t.len() >= 4 && second_ok(c, t[1]) && is_cont(t[2])
+            && is_cont(t[3]) {
+            4usize
+        } else {
+            1usize
+        }
+    }
 }
 
 /// Octal escapes of the first `n` bytes of `t`.
@@ -333,7 +348,7 @@ pub open spec fn display_illegal(t: Seq<u8>) -> Seq<u8> {
     if c < 0x20 {
         seq![94u8, (c + 0x40) as u8]
     } else if c == 0x7f || c >= 0x80 {
-        octal_bytes(t, char_len(c))
+        octal_bytes(t, utf8_len(t))
     } else {
         seq![c]
     }

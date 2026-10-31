@@ -459,10 +459,11 @@ pub struct RunSummary {
 /// Accumulates input lines until they form a complete unit.
 ///
 /// A unit is complete when it does not end with a backslash-newline continuation and has no
-/// open brace, comment, or string (see `verified_repl_block_completeness`).
+/// open brace, comment, or string (see `verified_repl_block_completeness`). Lines are bytes and
+/// need not be UTF-8.
 #[derive(Debug, Clone, Default)]
 pub struct UnitAccumulator {
-    buf: String,
+    buf: Vec<u8>,
     start_line: usize,
     next_line: usize,
 }
@@ -471,7 +472,7 @@ impl UnitAccumulator {
     /// Creates an empty accumulator whose first line is line 1.
     pub fn new() -> Self {
         Self {
-            buf: String::new(),
+            buf: Vec::new(),
             start_line: 1,
             next_line: 1,
         }
@@ -479,25 +480,25 @@ impl UnitAccumulator {
 
     /// Appends one line (with its trailing newline, if any). Returns the completed unit and the
     /// line number of its first line when the accumulated text forms a complete unit.
-    pub fn push_line(&mut self, line: &str) -> Option<(String, usize)> {
+    pub fn push_line(&mut self, line: &[u8]) -> Option<(Vec<u8>, usize)> {
         if self.buf.is_empty() {
             self.start_line = self.next_line;
         }
-        self.buf.push_str(line);
-        if line.ends_with('\n') {
+        self.buf.extend_from_slice(line);
+        if line.ends_with(b"\n") {
             self.next_line += 1;
         }
-        if self.buf.ends_with("\\\n") || self.buf.ends_with("\\\r\n") {
+        if self.buf.ends_with(b"\\\n") || self.buf.ends_with(b"\\\r\n") {
             return None;
         }
-        if verified_repl_block_completeness(self.buf.as_bytes()).1 {
+        if verified_repl_block_completeness(&self.buf).1 {
             return None;
         }
         self.take()
     }
 
     /// Returns the incomplete text left at end of input, if any, so that it can be reported.
-    pub fn finish(&mut self) -> Option<(String, usize)> {
+    pub fn finish(&mut self) -> Option<(Vec<u8>, usize)> {
         self.take()
     }
 
@@ -511,7 +512,7 @@ impl UnitAccumulator {
         self.buf.clear();
     }
 
-    fn take(&mut self) -> Option<(String, usize)> {
+    fn take(&mut self) -> Option<(Vec<u8>, usize)> {
         if self.buf.is_empty() {
             None
         } else {
@@ -531,7 +532,7 @@ impl Evaluator {
     /// Trusted glue: it only runs the parser (not verified) and passes its
     /// result to the verified `run_parsed`.
     #[verifier::external_body]
-    pub fn run_unit(&mut self, unit: &str, source: &str, first_line: usize) -> UnitOutcome {
+    pub fn run_unit(&mut self, unit: &[u8], source: &str, first_line: usize) -> UnitOutcome {
         let policy = self.extension_policy;
         let max_depth = self.max_depth;
         let mut extension_uses = Vec::new();
@@ -552,12 +553,12 @@ impl Evaluator {
 
 impl Evaluator {
     /// Splits `text` into units and runs each one, continuing after errors until the end of
-    /// the text or `quit`.
-    pub fn run_source(&mut self, text: &str, source: &str) -> RunSummary {
+    /// the text or `quit`. `text` is bytes and need not be UTF-8.
+    pub fn run_source(&mut self, text: &[u8], source: &str) -> RunSummary {
         let mut summary = RunSummary::default();
         let mut acc = UnitAccumulator::new();
         let units = text
-            .split_inclusive('\n')
+            .split_inclusive(|&b| b == b'\n')
             .filter_map(|line| acc.push_line(line))
             .collect::<alloc::vec::Vec<_>>();
         for (unit, line) in units.into_iter().chain(acc.finish()) {
@@ -580,7 +581,6 @@ mod tests {
     use crate::parser::DEFAULT_MAX_DEPTH;
     use alloc::boxed::Box;
     use alloc::rc::Rc;
-    use alloc::string::ToString;
     use core::cell::RefCell;
     use core::fmt;
 
@@ -603,7 +603,7 @@ mod tests {
         let out = Shared::default();
         let err = Shared::default();
         let mut ev = Evaluator::new(false, Box::new(out.clone()), Box::new(err.clone()));
-        let summary = ev.run_source(text, STDIN_SOURCE);
+        let summary = ev.run_source(text.as_bytes(), STDIN_SOURCE);
         let out = out.0.borrow().clone();
         let err = err.0.borrow().clone();
         (summary, out, err)
@@ -684,17 +684,23 @@ mod tests {
     fn accumulator_groups_continuations_and_blocks() {
         let mut acc = UnitAccumulator::new();
         assert!(!acc.is_pending());
-        assert_eq!(acc.push_line("1 + \\\n"), None);
-        assert_eq!(acc.push_line("2\n"), Some(("1 + \\\n2\n".to_string(), 1)));
-        assert_eq!(acc.push_line("{\n"), None);
+        assert_eq!(acc.push_line(b"1 + \\\n"), None);
+        assert_eq!(
+            acc.push_line(b"2\n"),
+            Some(("1 + \\\n2\n".as_bytes().to_vec(), 1))
+        );
+        assert_eq!(acc.push_line(b"{\n"), None);
         assert!(acc.is_pending());
-        assert_eq!(acc.push_line("3\n"), None);
-        assert_eq!(acc.push_line("}\n"), Some(("{\n3\n}\n".to_string(), 3)));
+        assert_eq!(acc.push_line(b"3\n"), None);
+        assert_eq!(
+            acc.push_line(b"}\n"),
+            Some(("{\n3\n}\n".as_bytes().to_vec(), 3))
+        );
         assert!(!acc.is_pending());
-        assert_eq!(acc.push_line("4"), Some(("4".to_string(), 6)));
+        assert_eq!(acc.push_line(b"4"), Some(("4".as_bytes().to_vec(), 6)));
         assert_eq!(acc.finish(), None);
 
-        assert_eq!(acc.push_line("/* open\n"), None);
+        assert_eq!(acc.push_line(b"/* open\n"), None);
         acc.clear();
         assert_eq!(acc.finish(), None);
     }
@@ -707,7 +713,7 @@ mod tests {
             Box::new(Shared::default()),
         );
         assert_eq!((ev.scale(), ev.ibase(), ev.obase()), (0, 10, 10));
-        ev.run_source("scale = 5; obase = 8; ibase = 3\n", STDIN_SOURCE);
+        ev.run_source(b"scale = 5; obase = 8; ibase = 3\n", STDIN_SOURCE);
         assert_eq!((ev.scale(), ev.ibase(), ev.obase()), (5, 3, 8));
         ev.set_scale(usize::MAX);
         assert_eq!(ev.scale(), crate::verified_kernels::BC_SCALE_MAX);

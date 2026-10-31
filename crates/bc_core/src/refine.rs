@@ -7,8 +7,8 @@
 //!   `bc_spec::values` and `bc_spec::format` show that the specification uses numbers only
 //!   through their values).
 //! - `r_expr` / `r_stmt`: a production syntax tree (`Box` and `Vec`) is the subtree at index `n`
-//!   of a specification arena (`Seq<Node>` with `usize` children). Names and string texts are
-//!   related through their UTF-8 bytes (`text_view`); operators through the specification's
+//!   of a specification arena (`Seq<Node>` with `usize` children). Names are related
+//!   through their UTF-8 bytes (`text_view`), string texts byte for byte; operators through the specification's
 //!   operator codes, which the production enums list in the same order.
 //! - `r_vars`, `r_arrays`, `r_funcs`: the evaluator's maps against the specification's
 //!   association lists, by lookup: a name has a binding in one exactly when it has one in the
@@ -48,7 +48,7 @@ broadcast use vstd::std_specs::vec::group_vec_axioms;
 // Values, names and operators
 // ---------------------------------------------------------------------------------------------
 
-/// The UTF-8 bytes of a name or a string's text.
+/// The UTF-8 bytes of a name or a message.
 pub open spec fn text_view(s: String) -> Seq<u8> {
     encode_utf8(s@)
 }
@@ -201,7 +201,7 @@ pub open spec fn r_stmt(s: Stmt, nodes: Seq<Node>, n: usize) -> bool
             Node::ExprStmt(j) => r_expr(e, nodes, j),
             _ => false,
         },
-        Stmt::StringLiteral(t) => nodes[n as int] == Node::Str(text_view(t)),
+        Stmt::StringLiteral(t) => nodes[n as int] == Node::Str(t@),
         Stmt::Break => nodes[n as int] == Node::Break,
         Stmt::Quit => false,
         Stmt::Return(v) => match nodes[n as int] {

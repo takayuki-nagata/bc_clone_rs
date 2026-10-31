@@ -272,7 +272,7 @@ pub const TEST_CASES: &[TestCase] = &[
 
 /// Evaluates `code` on `ev` without panicking, writing diagnostics to its diagnostic stream.
 pub fn eval_bc_non_panicking(code: &str, ev: &mut Evaluator) {
-    if ev.run_source(code, STDIN_SOURCE).quit {
+    if ev.run_source(code.as_bytes(), STDIN_SOURCE).quit {
         ev.request_quit();
     }
 }
@@ -393,7 +393,7 @@ pub fn run_repl_with<G, P, S, W>(
                 // Lines are grouped into input units exactly as in the CLI, so multi-line
                 // blocks and POSIX function definitions work.
                 let outcome = acc
-                    .push_line(&line_buf)
+                    .push_line(line_buf.as_bytes())
                     .map(|(unit, first_line)| evaluator.run_unit(&unit, STDIN_SOURCE, first_line));
                 line_buf.clear();
                 for buf in [&out_buf, &err_buf] {

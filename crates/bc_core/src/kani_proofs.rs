@@ -354,3 +354,41 @@ fn proof_verified_nesting_within_limit() {
         expected
     );
 }
+
+/// `verified_utf8_char_len` (with `verified_utf8_second_ok`) agrees with `core`'s UTF-8 encoder
+/// on every byte string of up to four bytes: it returns `k >= 2` exactly when the `k` bytes at
+/// `pos` are the encoding of a `char`, and 1 otherwise. (`core::str::from_utf8` is not used as
+/// the reference: its word-at-a-time loop does not unwind under a symbolic length.)
+#[kani::proof]
+#[kani::unwind(6)]
+fn proof_verified_utf8_char_len() {
+    let text: [u8; 4] = kani::any();
+    let len: usize = kani::any();
+    let pos: usize = kani::any();
+    kani::assume(len <= 4);
+    kani::assume(pos < len);
+    let n = verified_utf8_char_len(&text[..len], pos);
+    assert!((1..=4).contains(&n) && pos + n <= len);
+    // Whether the `k` bytes at `pos` (2 <= k <= 4) encode a `char`: decode the payload bits and
+    // check that encoding the result gives the same bytes back.
+    let encodes = |k: usize| {
+        if pos + k > len {
+            return false;
+        }
+        let b = &text[pos..pos + k];
+        let lead_bits = u32::from(b[0]) & (0x7f >> k);
+        let cp = b[1..]
+            .iter()
+            .fold(lead_bits, |acc, &c| (acc << 6) | (u32::from(c) & 0x3f));
+        let mut buf = [0u8; 4];
+        char::from_u32(cp).is_some_and(|ch| ch.encode_utf8(&mut buf).as_bytes() == b)
+    };
+    if n >= 2 {
+        assert!(encodes(n));
+    }
+    for k in 2..=4 {
+        if k != n {
+            assert!(!encodes(k));
+        }
+    }
+}

@@ -33,7 +33,7 @@ impl BcWriter for SharedBuffer {
 }
 
 fn eval_into_wasm(code: &str, ev: &mut Evaluator) {
-    ev.run_source(code, STDIN_SOURCE);
+    ev.run_source(code.as_bytes(), STDIN_SOURCE);
 }
 
 /// One-shot evaluation function for simple calculations.
