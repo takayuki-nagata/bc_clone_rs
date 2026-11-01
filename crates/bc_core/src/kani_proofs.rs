@@ -355,6 +355,13 @@ fn proof_verified_nesting_within_limit() {
     );
 }
 
+/// `verified_unit_within_limit` is the comparison with `BC_UNIT_MAX`, for all `usize` inputs.
+#[kani::proof]
+fn proof_verified_unit_within_limit() {
+    let len: usize = kani::any();
+    assert_eq!(verified_unit_within_limit(len), len <= BC_UNIT_MAX);
+}
+
 /// `verified_utf8_char_len` (with `verified_utf8_second_ok`) agrees with `core`'s UTF-8 encoder
 /// on every byte string of up to four bytes: it returns `k >= 2` exactly when the `k` bytes at
 /// `pos` are the encoding of a `char`, and 1 otherwise. (`core::str::from_utf8` is not used as

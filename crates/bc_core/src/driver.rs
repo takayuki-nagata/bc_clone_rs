@@ -19,7 +19,7 @@ use crate::format::push_dec;
 use crate::parser::{ExtensionPolicy, Lexer, Parser, Stmt};
 #[cfg(verus_keep_ghost)]
 use crate::refine::{r_err, r_stmts, text_view};
-use crate::verified_kernels::verified_repl_block_completeness;
+use crate::verified_kernels::{verified_repl_block_completeness, verified_unit_within_limit};
 #[cfg(verus_keep_ghost)]
 use bc_spec::eval::{EState, with_call, with_depth, with_err, with_flags};
 #[cfg(verus_keep_ghost)]
@@ -29,7 +29,7 @@ use bc_spec::lexer::{Unit, tokenize};
 #[cfg(verus_keep_ghost)]
 use bc_spec::parser::{ExtUse, PCfg, PR, parse_unit};
 #[cfg(verus_keep_ghost)]
-use bc_spec::top::{Options, RunState, at_line, ext_diags, run_unit};
+use bc_spec::top::{Options, RunState, at_line, ext_diags, run_parsed_unit};
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin::Ghost;
 #[cfg(not(verus_keep_ghost))]
@@ -41,6 +41,9 @@ use vstd::string::StringSliceAdditionalSpecFns;
 
 /// Source name used in syntax diagnostics for standard input, as in GNU bc.
 pub const STDIN_SOURCE: &str = "(standard_in)";
+
+/// Diagnostic for an input unit longer than `BC_UNIT_MAX` (`docs/COMPATIBILITY.md` §2).
+pub const UNIT_TOO_LONG: &str = "input unit too long";
 
 verus! {
 
@@ -328,13 +331,13 @@ impl Evaluator {
             final(self).inv(),
             (r_top(*old(self), rs.st) && r_opts(*old(self), opts) && u.line == first_line as u64
                 && r_parsed(parsed, ext@, parse_unit(tokenize(u.text), unit_cfg(opts))))
-                ==> r_outcome(r, *final(self), rs, run_unit(opts, rs, source.spec_bytes(), u)),
+                ==> r_outcome(r, *final(self), rs, run_parsed_unit(opts, rs, source.spec_bytes(), u)),
     {
         let ghost hyp = r_top(*self, rs.st) && r_opts(*self, opts) && u.line == first_line as u64
             && r_parsed(parsed, ext@, parse_unit(tokenize(u.text), unit_cfg(opts)));
         let ghost p = parse_unit(tokenize(u.text), unit_cfg(opts));
         let ghost src = source.spec_bytes();
-        let ghost rs2 = run_unit(opts, rs, src, u);
+        let ghost rs2 = run_parsed_unit(opts, rs, src, u);
         let ghost st0 = with_call(with_depth(rs.st, 0), rs.st.calls, false, rs.st.inv_ibase);
         let ghost e_old = *self;
         // A unit starts at the top level; this also recovers if a front end caught a panic in
@@ -459,8 +462,8 @@ pub struct RunSummary {
 /// Accumulates input lines until they form a complete unit.
 ///
 /// A unit is complete when it does not end with a backslash-newline continuation and has no
-/// open brace, comment, or string (see `verified_repl_block_completeness`). Lines are bytes and
-/// need not be UTF-8.
+/// open brace, comment, or string (see `verified_repl_block_completeness`), or when it is longer
+/// than `BC_UNIT_MAX`. Lines are bytes and need not be UTF-8.
 #[derive(Debug, Clone, Default)]
 pub struct UnitAccumulator {
     buf: Vec<u8>,
@@ -488,10 +491,12 @@ impl UnitAccumulator {
         if line.ends_with(b"\n") {
             self.next_line += 1;
         }
-        if self.buf.ends_with(b"\\\n") || self.buf.ends_with(b"\\\r\n") {
-            return None;
-        }
-        if verified_repl_block_completeness(&self.buf).1 {
+        // Text beyond the limit is passed on as it is, and `run_unit` rejects it.
+        if verified_unit_within_limit(self.buf.len())
+            && (self.buf.ends_with(b"\\\n")
+                || self.buf.ends_with(b"\\\r\n")
+                || verified_repl_block_completeness(&self.buf).1)
+        {
             return None;
         }
         self.take()
@@ -533,6 +538,10 @@ impl Evaluator {
     /// result to the verified `run_parsed`.
     #[verifier::external_body]
     pub fn run_unit(&mut self, unit: &[u8], source: &str, first_line: usize) -> UnitOutcome {
+        if !verified_unit_within_limit(unit.len()) {
+            let too_long = Err(BcError::syntax_with_message(1, String::from(UNIT_TOO_LONG)));
+            return self.run_parsed(too_long, &Vec::new(), source, first_line, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()));
+        }
         let policy = self.extension_policy;
         let max_depth = self.max_depth;
         let mut extension_uses = Vec::new();
@@ -607,6 +616,32 @@ mod tests {
         let out = out.0.borrow().clone();
         let err = err.0.borrow().clone();
         (summary, out, err)
+    }
+
+    #[cfg(all(not(miri), target_pointer_width = "64"))]
+    #[test]
+    fn unit_beyond_the_limit_is_rejected_without_being_scanned() {
+        use crate::verified_kernels::BC_UNIT_MAX;
+        // An open brace and a final continuation would both keep the unit waiting, but the text
+        // is over the limit. The rest of these bytes are NUL, illegal characters if ever lexed.
+        let mut line = alloc::vec![0u8; BC_UNIT_MAX + 1];
+        line[0] = b'{';
+        line[BC_UNIT_MAX - 1] = b'\\';
+        line[BC_UNIT_MAX] = b'\n';
+        let mut acc = UnitAccumulator::new();
+        let (unit, first_line) = acc.push_line(&line).expect("a complete unit");
+        assert_eq!((unit.len(), first_line), (BC_UNIT_MAX + 1, 1));
+        assert!(!acc.is_pending());
+
+        let out = Shared::default();
+        let err = Shared::default();
+        let mut ev = Evaluator::new(false, Box::new(out.clone()), Box::new(err.clone()));
+        assert_eq!(ev.run_unit(&unit, STDIN_SOURCE, 7), UnitOutcome::Failed);
+        assert_eq!(out.0.borrow().as_str(), "");
+        assert_eq!(
+            err.0.borrow().as_str(),
+            "(standard_in) 7: input unit too long\n"
+        );
     }
 
     #[test]

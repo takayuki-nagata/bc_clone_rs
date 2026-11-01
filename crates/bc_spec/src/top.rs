@@ -100,8 +100,23 @@ pub open spec fn exec_items(nodes: Seq<Node>, items: Seq<usize>, st: EState, fue
     }
 }
 
-/// `Evaluator::run_unit`.
+/// `input unit too long`.
+pub open spec fn unit_too_long_msg() -> Seq<u8> {
+    seq![105u8, 110, 112, 117, 116, 32, 117, 110, 105, 116, 32, 116, 111, 111, 32, 108, 111, 110, 103]
+}
+
+/// `Evaluator::run_unit`: a unit longer than `BC_UNIT_MAX` fails without being parsed.
 pub open spec fn run_unit(opts: Options, rs: RunState, source: Seq<u8>, u: Unit) -> RunState {
+    if u.text.len() > 1000000000 {
+        let st0 = with_call(with_depth(rs.st, 0u64), rs.st.calls, false, rs.st.inv_ibase);
+        failed(rs, with_err(st0, st0.err.add(at_line(source, u.line, 1u64)).add(unit_too_long_msg()).push(10u8)))
+    } else {
+        run_parsed_unit(opts, rs, source, u)
+    }
+}
+
+/// `Evaluator::run_unit` after the length check.
+pub open spec fn run_parsed_unit(opts: Options, rs: RunState, source: Seq<u8>, u: Unit) -> RunState {
     let st0 = with_call(with_depth(rs.st, 0u64), rs.st.calls, false, rs.st.inv_ibase);
     let reject = opts.reject_extensions;
     let cfg = PCfg { record_extensions: reject || opts.warn_extensions, max_depth: opts.max_depth };

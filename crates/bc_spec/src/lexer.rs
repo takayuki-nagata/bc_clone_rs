@@ -104,13 +104,15 @@ pub open spec fn block_scan(t: Seq<u8>, st: BlockScan) -> BlockScan
 }
 
 /// Whether accumulated text must wait for more lines: a trailing backslash-newline, or an open
-/// brace, comment or string.
+/// brace, comment or string. Text longer than `BC_UNIT_MAX` never waits (`run_unit` rejects it).
 pub open spec fn unit_pending(buf: Seq<u8>) -> bool {
     let n = buf.len();
+    if n > 1000000000 { false } else {
     let cont = (n >= 2 && buf[n - 1] == 10u8 && buf[n - 2] == 92u8)
         || (n >= 3 && buf[n - 1] == 10u8 && buf[n - 2] == 13u8 && buf[n - 3] == 92u8);
     let st = block_scan(buf, BlockScan { count: 0i64, in_comment: false, in_string: false });
     cont || st.count > 0 || st.in_comment || st.in_string
+    }
 }
 
 /// The next line of `t` including its newline, and the rest.

@@ -56,6 +56,8 @@ against the specification. AGENTS.md lists what the proofs assume.
   the range whose result is not provably 0, are the new runtime error `argument too large`.
 
 ### Behavior changes and fixes
+- An input unit longer than 1 000 000 000 bytes is now the syntax error `input unit too long`
+  (`docs/COMPATIBILITY.md` §2), instead of leaving the range the lexer's bounds were checked for.
 - **Input.** A NUL character no longer ends the input unit silently: it is reported as
   `illegal character: ^@` and processing continues. Other control characters are shown as `^X`,
   and DEL and non-ASCII characters as octal escapes (`\177`), as in GNU `bc`. Input that is not

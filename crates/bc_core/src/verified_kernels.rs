@@ -93,6 +93,9 @@ dual_verified! {
     // `BC_SCALE_MAX` (`docs/COMPATIBILITY.md` §2): every `BCNum` scale stays within this bound,
     // which establishes the `MAX_VERIFIED_SCALE` preconditions of the scale kernels.
     pub const BC_SCALE_MAX: usize = MAX_VERIFIED_SCALE;
+    // The longest input unit (`docs/COMPATIBILITY.md` §2), which establishes the length
+    // preconditions of the lexer kernels and of `verified_repl_block_completeness`.
+    pub const BC_UNIT_MAX: usize = 1_000_000_000;
     // `BC_BASE_MAX`: the largest valid `obase`.
     pub const BC_BASE_MAX: usize = 2_147_483_647;
     // `BC_DIM_MAX`: array subscripts range over `0..BC_DIM_MAX`.
@@ -492,6 +495,15 @@ dual_verified! {
         ]
     {
         height <= max_depth && depth <= max_depth - height
+    }
+
+    /// Whether an input unit of `len` bytes is within `BC_UNIT_MAX`.
+    pub fn verified_unit_within_limit(len: usize) -> (res: bool)
+        ensures [
+            res == (len <= BC_UNIT_MAX),
+        ]
+    {
+        len <= BC_UNIT_MAX
     }
 
     /// Verified control-flow short-circuit check (`eval/stmt.rs`).

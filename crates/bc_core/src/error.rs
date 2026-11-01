@@ -88,6 +88,15 @@ pub enum BcError {
 }
 
 impl BcError {
+    /// Creates a syntax diagnostic with its own message.
+    pub fn syntax_with_message(line: usize, message: String) -> Self {
+        Self::Syntax {
+            line,
+            detail: message.clone(),
+            message,
+        }
+    }
+
     /// Creates a generic `syntax error` diagnostic.
     pub fn syntax(line: usize, detail: String) -> Self {
         Self::Syntax {

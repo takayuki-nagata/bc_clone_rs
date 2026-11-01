@@ -9,10 +9,12 @@ use core::fmt::Write as FmtWrite;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[cfg(any(test, kani))]
+use bc_core::verified_kernels::verified_repl_block_completeness;
 use bc_core::verified_kernels::{
     CLI_ARG_END_OF_OPTIONS, CLI_ARG_OPT_CLUSTER, CLI_ARG_OPT_INVALID, CLI_ARG_OPT_L, CLI_ARG_OPT_S,
     CLI_ARG_OPT_W, verified_cli_classify_arg, verified_cli_classify_option_char,
-    verified_cli_initial_scale, verified_repl_block_completeness,
+    verified_cli_initial_scale,
 };
 use bc_core::{
     BcWriter, DEFAULT_MAX_DEPTH, Evaluator, ExtensionPolicy, RunSummary, STDIN_SOURCE,
@@ -87,11 +89,13 @@ pub fn setup_ctrlc_handler() {
 }
 
 /// Counts the number of open braces outside of strings and comments.
+#[cfg(any(test, kani))]
 pub fn count_open_braces(text: &[u8]) -> i32 {
     verified_repl_block_completeness(text).0
 }
 
 /// Checks if the block is incomplete (e.g. has open braces, or is inside an unterminated comment or string).
+#[cfg(any(test, kani))]
 pub fn is_block_incomplete(text: &[u8]) -> bool {
     verified_repl_block_completeness(text).1
 }
