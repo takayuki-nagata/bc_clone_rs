@@ -19,7 +19,7 @@ use crate::format::push_dec;
 use crate::parser::{ExtensionPolicy, Lexer, Parser, Stmt};
 #[cfg(verus_keep_ghost)]
 use crate::refine::{r_err, r_stmts, text_view};
-use crate::verified_kernels::{verified_repl_block_completeness, verified_unit_within_limit};
+use crate::verified_kernels::{verified_repl_block_scan, verified_unit_within_limit};
 #[cfg(verus_keep_ghost)]
 use bc_spec::eval::{EState, with_call, with_depth, with_err, with_flags};
 #[cfg(verus_keep_ghost)]
@@ -469,6 +469,11 @@ pub struct UnitAccumulator {
     buf: Vec<u8>,
     start_line: usize,
     next_line: usize,
+    /// `buf[..scanned]` is whole lines, already scanned to the state `scan`. A step of the scan
+    /// looks ahead only within a line, so scanning can resume there and the result is that of
+    /// scanning all of `buf`.
+    scanned: usize,
+    scan: (i32, bool, bool),
 }
 
 impl UnitAccumulator {
@@ -478,6 +483,8 @@ impl UnitAccumulator {
             buf: Vec::new(),
             start_line: 1,
             next_line: 1,
+            scanned: 0,
+            scan: (0, false, false),
         }
     }
 
@@ -492,12 +499,18 @@ impl UnitAccumulator {
             self.next_line += 1;
         }
         // Text beyond the limit is passed on as it is, and `run_unit` rejects it.
-        if verified_unit_within_limit(self.buf.len())
-            && (self.buf.ends_with(b"\\\n")
-                || self.buf.ends_with(b"\\\r\n")
-                || verified_repl_block_completeness(&self.buf).1)
-        {
-            return None;
+        if verified_unit_within_limit(self.buf.len()) {
+            if self.buf.ends_with(b"\\\n") || self.buf.ends_with(b"\\\r\n") {
+                return None;
+            }
+            let scan = verified_repl_block_scan(&self.buf, self.scanned, self.scan);
+            if scan.0 > 0 || scan.1 || scan.2 {
+                if line.ends_with(b"\n") {
+                    self.scanned = self.buf.len();
+                    self.scan = scan;
+                }
+                return None;
+            }
         }
         self.take()
     }
@@ -515,9 +528,16 @@ impl UnitAccumulator {
     /// Discards any partially accumulated unit (used after an interrupt).
     pub fn clear(&mut self) {
         self.buf.clear();
+        self.reset_scan();
+    }
+
+    fn reset_scan(&mut self) {
+        self.scanned = 0;
+        self.scan = (0, false, false);
     }
 
     fn take(&mut self) -> Option<(Vec<u8>, usize)> {
+        self.reset_scan();
         if self.buf.is_empty() {
             None
         } else {

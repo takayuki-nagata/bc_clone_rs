@@ -6,7 +6,8 @@
 
 #![cfg(not(miri))]
 
-use bc_core::{BCNum, Evaluator, Lexer, Parser, STDIN_SOURCE};
+use bc_core::verified_kernels::verified_repl_block_completeness;
+use bc_core::{BCNum, Evaluator, Lexer, Parser, STDIN_SOURCE, UnitAccumulator};
 use num_bigint::BigInt;
 use proptest::prelude::*;
 
@@ -109,5 +110,44 @@ proptest! {
         // The last line always divides by zero; everything before it is valid.
         prop_assert!(summary.errors >= 1);
         prop_assert!(!summary.quit);
+    }
+}
+
+proptest! {
+    /// `push_line` scans each line once, and its answers are those of scanning the whole
+    /// accumulated text at every line, including lines that do not end in a newline.
+    #[test]
+    fn prop_push_line_matches_a_scan_of_the_whole_unit(
+        lines in prop::collection::vec(
+            (
+                prop::collection::vec(
+                    prop::sample::select(vec![
+                        &b"{"[..], b"}", b"/", b"*", b"\"", b"\\", b"\r", b"\n", b"a", b"/*", b"*/",
+                    ]),
+                    0..6,
+                ),
+                any::<bool>(),
+            ),
+            0..30,
+        )
+    ) {
+        let mut acc = UnitAccumulator::new();
+        let mut buf = Vec::new();
+        for (pieces, newline) in lines {
+            let mut line = pieces.concat();
+            if newline {
+                line.push(b'\n');
+            }
+            buf.extend_from_slice(&line);
+            let waits = buf.ends_with(b"\\\n")
+                || buf.ends_with(b"\\\r\n")
+                || verified_repl_block_completeness(&buf).1;
+            let unit = acc.push_line(&line);
+            if waits || buf.is_empty() {
+                prop_assert_eq!(unit, None);
+            } else {
+                prop_assert_eq!(unit.map(|(text, _)| text), Some(core::mem::take(&mut buf)));
+            }
+        }
     }
 }

@@ -309,6 +309,22 @@ fn proof_verified_repl_block_completeness_symbolic() {
     }
 }
 
+/// Resuming the block scan after a line that ends in a newline gives the result of scanning the
+/// whole text, which is what lets `UnitAccumulator::push_line` scan each line once.
+#[kani::proof]
+#[kani::unwind(9)]
+fn proof_verified_repl_block_scan_resumes_at_a_line_end() {
+    let buf: [u8; 8] = kani::any();
+    let len: usize = kani::any();
+    let split: usize = kani::any();
+    kani::assume(len <= 8 && 0 < split && split <= len);
+    kani::assume(buf[split - 1] == b'\n');
+    let start = (0, false, false);
+    let whole = verified_repl_block_scan(&buf[..len], 0, start);
+    let first = verified_repl_block_scan(&buf[..split], 0, start);
+    assert_eq!(verified_repl_block_scan(&buf[..len], split, first), whole);
+}
+
 /// Verifies multi-step execution of `WrappedStdout` column state machine and `Lexer` cursor/line
 /// advancement across arbitrary 8-byte streams without heap allocation overhead.
 #[kani::proof]

@@ -205,8 +205,9 @@ except the following, whose preconditions are argued here but not proved:
   `verified_lexer_peek_token_index`. Their bounds (`text_len <= MAX_VERIFIED_SCALE`,
   `pos < 10^9`) do not hold for an input unit of more than 10^9 bytes. `scan_token` calls
   `verified_utf8_char_len` only after `peek(0)` returned a byte, so `pos < text.len()`.
-- `UnitAccumulator::push_line` (`driver.rs`) and the CLI's `count_open_braces` and
-  `is_block_incomplete` call `verified_repl_block_completeness`, which requires at most 10^9
+- `UnitAccumulator::push_line` (`driver.rs`) calls `verified_repl_block_scan`, which requires at
+  most 10^9 bytes and a state reached by scanning up to its start. The CLI's `count_open_braces`
+  and `is_block_incomplete` call `verified_repl_block_completeness`, which requires at most 10^9
   bytes.
 - The trusted glue. `WrappedStdout::write_str` passes its column to `format::wrap_output`; the
   column is 0 or a column that `wrap_output` returned, so at most `POSIX_WRAP_COL_LIMIT`.

@@ -56,6 +56,8 @@ against the specification. AGENTS.md lists what the proofs assume.
   the range whose result is not provably 0, are the new runtime error `argument too large`.
 
 ### Behavior changes and fixes
+- A unit of many lines is split in linear time. Each line used to rescan the whole unit, so that
+  the time grew with the square of the number of lines (a function of 60000 lines took minutes).
 - An input unit longer than 1 000 000 000 bytes is now the syntax error `input unit too long`
   (`docs/COMPATIBILITY.md` §2), instead of leaving the range the lexer's bounds were checked for.
 - **Input.** A NUL character no longer ends the input unit silently: it is reported as

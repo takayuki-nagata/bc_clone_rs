@@ -855,7 +855,7 @@ dual_verified! {
 macro_rules! dual_verified_repl_scanner {
     (
         $(#[$meta:meta])*
-        pub fn $name:ident($arg:ident : $arg_ty:ty) -> ($ret_name:ident : $ret_ty:ty)
+        $vis:vis fn $name:ident($($arg:ident : $arg_ty:ty),*) -> ($ret_name:ident : $ret_ty:ty)
             requires [ $($req:tt)* ]
             ensures [ $($ens:tt)* ]
             locals [ $($loc_tt:tt)* ]
@@ -867,7 +867,7 @@ macro_rules! dual_verified_repl_scanner {
     ) => {
         verus! {
             $(#[$meta])*
-            pub fn $name($arg : $arg_ty) -> ($ret_name : $ret_ty)
+            $vis fn $name($($arg : $arg_ty),*) -> ($ret_name : $ret_ty)
                 requires $($req)*
                 ensures $($ens)*
             {
@@ -886,7 +886,7 @@ macro_rules! dual_verified_repl_scanner {
 macro_rules! dual_verified_repl_scanner {
     (
         $(#[$meta:meta])*
-        pub fn $name:ident($arg:ident : $arg_ty:ty) -> ($ret_name:ident : $ret_ty:ty)
+        $vis:vis fn $name:ident($($arg:ident : $arg_ty:ty),*) -> ($ret_name:ident : $ret_ty:ty)
             requires [ $($req:tt)* ]
             ensures [ $($ens:tt)* ]
             locals [ $($loc_tt:tt)* ]
@@ -899,7 +899,7 @@ macro_rules! dual_verified_repl_scanner {
         $(#[$meta])*
         #[inline]
         #[allow(clippy::assign_op_pattern)]
-        pub fn $name($arg : $arg_ty) -> $ret_ty {
+        $vis fn $name($($arg : $arg_ty),*) -> $ret_ty {
             $($loc_tt)*
             while $cond $loop_body
             $ret_expr
@@ -908,25 +908,27 @@ macro_rules! dual_verified_repl_scanner {
 }
 
 dual_verified_repl_scanner! {
-    /// Verified CLI REPL `count_open_braces` & `is_block_incomplete` state machine
-    /// (`crates/bc_cli/src/main.rs`).
+    /// The state machine of `verified_repl_block_completeness`, resumed at `start` in the state
+    /// `state` = (open brace count, in a comment, in a string).
     ///
     /// Scans an arbitrary byte slice tracking `/* ... */` comments, `"..."` strings
     /// (including `\\\n` and `\\\r\n` continuations), and `{` / `}` brace nesting depth.
-    pub fn verified_repl_block_completeness(text: &[u8]) -> (res: (i32, bool))
+    pub(crate) fn verified_repl_block_scan(text: &[u8], start: usize, state: (i32, bool, bool)) -> (res: (i32, bool, bool))
         requires [
             text@.len() <= 1_000_000_000,
+            start <= text@.len(),
+            -(start as int) <= (state.0 as int) && (state.0 as int) <= (start as int),
+            !(state.1 && state.2),
         ]
         ensures [
-            // res = (open_brace_count, is_incomplete)
             -(text@.len() as int) <= (res.0 as int) && (res.0 as int) <= (text@.len() as int),
-            res.0 > 0 ==> res.1,
+            !(res.1 && res.2),
         ]
         locals [
-            let mut count: i32 = 0;
-            let mut in_comment: bool = false;
-            let mut in_string: bool = false;
-            let mut i: usize = 0;
+            let mut count: i32 = state.0;
+            let mut in_comment: bool = state.1;
+            let mut in_string: bool = state.2;
+            let mut i: usize = start;
             let len: usize = text.len();
         ]
         while (i < len)
@@ -974,5 +976,26 @@ dual_verified_repl_scanner! {
                 i = i + 1;
             }
         }
-        return (count, count > 0 || in_comment || in_string);
+        return (count, in_comment, in_string);
+}
+
+dual_verified! {
+    /// Verified CLI REPL `count_open_braces` & `is_block_incomplete` state machine
+    /// (`crates/bc_cli/src/main.rs`).
+    ///
+    /// Scans an arbitrary byte slice tracking `/* ... */` comments, `"..."` strings
+    /// (including `\\\n` and `\\\r\n` continuations), and `{` / `}` brace nesting depth.
+    pub fn verified_repl_block_completeness(text: &[u8]) -> (res: (i32, bool))
+        requires [
+            text@.len() <= 1_000_000_000,
+        ]
+        ensures [
+            // res = (open_brace_count, is_incomplete)
+            -(text@.len() as int) <= (res.0 as int) && (res.0 as int) <= (text@.len() as int),
+            res.0 > 0 ==> res.1,
+        ]
+    {
+        let (count, in_comment, in_string) = verified_repl_block_scan(text, 0, (0, false, false));
+        (count, count > 0 || in_comment || in_string)
+    }
 }
