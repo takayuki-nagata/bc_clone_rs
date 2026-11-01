@@ -25,13 +25,17 @@ use bc_spec::eval::{EState, with_call, with_depth, with_err, with_flags};
 #[cfg(verus_keep_ghost)]
 use bc_spec::fuel::done;
 #[cfg(verus_keep_ghost)]
-use bc_spec::lexer::{Unit, tokenize};
+use bc_spec::lexer::{
+    BlockScan, Unit, block_scan, split_units, split_units_from, take_line, tokenize, unit_pending,
+};
+#[cfg(verus_keep_ghost)]
+use bc_spec::lexer_lemmas::lemma_block_scan_split;
 #[cfg(verus_keep_ghost)]
 use bc_spec::parser::{ExtUse, PCfg, PErr, PR, PState, parse_unit, pr_err};
 #[cfg(verus_keep_ghost)]
 use bc_spec::top::{
     Options, RunState, at_line, ext_diags, run_parse_result, run_parsed_unit,
-    run_unit as spec_run_unit, unit_too_long_msg,
+    run_unit as spec_run_unit, run_units, unit_too_long_msg,
 };
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin::Ghost;
@@ -100,9 +104,14 @@ pub(crate) open spec fn r_top(e: Evaluator, st: EState) -> bool {
 
 /// The options of the specification are the evaluator's extension policy and nesting limit.
 pub(crate) open spec fn r_opts(e: Evaluator, opts: Options) -> bool {
-    &&& opts.reject_extensions == (e.extension_policy == ExtensionPolicy::Reject)
-    &&& opts.warn_extensions == (e.extension_policy == ExtensionPolicy::Warn)
-    &&& opts.max_depth == e.max_depth as u64
+    r_settings(e.extension_policy, e.max_depth, opts)
+}
+
+/// The options of the specification are this extension policy and nesting limit.
+pub(crate) open spec fn r_settings(policy: ExtensionPolicy, max_depth: usize, opts: Options) -> bool {
+    &&& opts.reject_extensions == (policy == ExtensionPolicy::Reject)
+    &&& opts.warn_extensions == (policy == ExtensionPolicy::Warn)
+    &&& opts.max_depth == max_depth as u64
 }
 
 /// The parser configuration of the specification's `run_unit`.
@@ -135,7 +144,7 @@ pub(crate) open spec fn r_outcome(r: UnitOutcome, e: Evaluator, rs: RunState, rs
     !rs2.not_modeled ==> r_top(e, rs2.st) && !rs2.not_modeled && match r {
         UnitOutcome::Completed => !rs2.quit && rs2.errors == rs.errors,
         UnitOutcome::Failed => !rs2.quit && rs2.errors == bc_spec::top::failed(rs, rs2.st).errors,
-        UnitOutcome::Quit => rs2.quit,
+        UnitOutcome::Quit => rs2.quit && rs2.errors == rs.errors,
     }
 }
 
@@ -341,15 +350,15 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "three of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn run_parsed(&mut self, parsed: Result<Vec<Stmt>, BcError>, ext: &Vec<(usize, String)>, source: &str, first_line: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(p): Ghost<SpecParse>) -> (r: UnitOutcome)
+    pub(crate) fn run_parsed(&mut self, parsed: Result<Vec<Stmt>, BcError>, ext: &Vec<(usize, String)>, source: &str, first_line: usize, policy: ExtensionPolicy, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(p): Ghost<SpecParse>) -> (r: UnitOutcome)
         requires
             old(self).inv(),
         ensures
             final(self).inv(),
-            (r_top(*old(self), rs.st) && r_opts(*old(self), opts) && r_parsed(parsed, ext@, p))
+            (r_top(*old(self), rs.st) && opts.reject_extensions == (policy == ExtensionPolicy::Reject) && r_parsed(parsed, ext@, p))
                 ==> r_outcome(r, *final(self), rs, run_parse_result(opts, rs, source.spec_bytes(), first_line as u64, p)),
     {
-        let ghost hyp = r_top(*self, rs.st) && r_opts(*self, opts) && r_parsed(parsed, ext@, p);
+        let ghost hyp = r_top(*self, rs.st) && opts.reject_extensions == (policy == ExtensionPolicy::Reject) && r_parsed(parsed, ext@, p);
         let ghost first = first_line as u64;
         let ghost src = source.spec_bytes();
         let ghost rs2 = run_parse_result(opts, rs, src, first, p);
@@ -366,7 +375,7 @@ impl Evaluator {
                 assert(r_state(*self, st0));
             }
         }
-        let reject = matches!(self.extension_policy, ExtensionPolicy::Reject);
+        let reject = matches!(policy, ExtensionPolicy::Reject);
         self.write_ext_diags(ext, source, first_line, reject, Ghost(p.st.ext));
         let ghost st1 = with_err(st0, st0.err.add(ext_diags(p.st.ext, src, first, reject)));
         proof {
@@ -465,6 +474,56 @@ impl Evaluator {
 
 } // verus!
 
+verus! {
+
+impl Evaluator {
+    /// Parses and executes one input unit, reporting any error to `stderr_writer`.
+    ///
+    /// `source` names the input in syntax diagnostics (a file name, or [`STDIN_SOURCE`]) and
+    /// `first_line` is the line number of the unit's first line within that source.
+    #[verifier::external_body]
+    pub fn run_unit(&mut self, unit: &[u8], source: &str, first_line: usize) -> UnitOutcome {
+        let policy = self.extension_policy;
+        let max_depth = self.max_depth;
+        self.run_unit_ref(unit, source, first_line, policy, max_depth, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
+    }
+
+    /// `run_unit`: the refinement theorem of one unit, against the specification's `run_unit`.
+    /// A nesting limit that leaves no room to count is not a limit at all, and is lowered to one
+    /// that is still out of reach.
+    pub(crate) fn run_unit_ref(&mut self, unit: &[u8], source: &str, first_line: usize, policy: ExtensionPolicy, limit: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(u): Ghost<SpecUnit>) -> (r: UnitOutcome)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            (r_top(*old(self), rs.st) && r_settings(policy, limit, opts) && u.line == first_line as u64 && u.text == unit@
+                && limit < usize::MAX - 2)
+                ==> r_outcome(r, *final(self), rs, spec_run_unit(opts, rs, source.spec_bytes(), u)),
+    {
+        if !verified_unit_within_limit(unit.len()) {
+            let ghost e0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: seq![] };
+            let ghost p = pr_err(e0, PErr { quit: false, out_of_fuel: false, line: 1u64, msg: unit_too_long_msg() });
+            let too_long = Err(BcError::Syntax { line: 1, message: unit_too_long_text() });
+            let none = Vec::new();
+            proof { assert(r_ext(none@, e0.ext)); }
+            let r = self.run_parsed(too_long, &none, source, first_line, policy, Ghost(opts), Ghost(rs), Ghost(p));
+            proof {
+                let st0 = with_call(with_depth(rs.st, 0u64), rs.st.calls, false, rs.st.inv_ibase);
+                let src = source.spec_bytes();
+                assert(ext_diags(e0.ext, src, first_line as u64, opts.reject_extensions) == Seq::<u8>::empty());
+                assert(st0.err.add(Seq::<u8>::empty()) =~= st0.err);
+                assert(with_err(st0, st0.err) == st0);
+            }
+            return r;
+        }
+        let max_depth = if limit < usize::MAX - 2 { limit } else { usize::MAX - 3 };
+        let ghost cfg = PCfg { record_extensions: policy != ExtensionPolicy::Allow, max_depth: max_depth as u64 };
+        let (parsed, extension_uses) = parse_unit_ref(unit, policy, max_depth, Ghost(cfg));
+        let ghost p = parse_unit(tokenize(unit@), cfg);
+        self.run_parsed(parsed, &extension_uses, source, first_line, policy, Ghost(opts), Ghost(rs), Ghost(p))
+    }
+}
+
 /// Summary of processing a whole source text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RunSummary {
@@ -479,50 +538,135 @@ pub struct RunSummary {
 /// A unit is complete when it does not end with a backslash-newline continuation and has no
 /// open brace, comment, or string (see `verified_repl_block_completeness`), or when it is longer
 /// than `BC_UNIT_MAX`. Lines are bytes and need not be UTF-8.
-#[derive(Debug, Clone, Default)]
 pub struct UnitAccumulator {
     buf: Vec<u8>,
     start_line: usize,
     next_line: usize,
     /// `buf[..scanned]` is whole lines, already scanned to the state `scan`. A step of the scan
     /// looks ahead only within a line, so scanning can resume there and the result is that of
-    /// scanning all of `buf`.
+    /// scanning all of `buf` (`lemma_block_scan_split`).
     scanned: usize,
     scan: (i32, bool, bool),
 }
 
+/// The state of a scan from the start of a unit.
+pub(crate) open spec fn scan_start() -> BlockScan {
+    BlockScan { count: 0i64, in_comment: false, in_string: false }
+}
+
+/// The accumulator's state after a line, as in the specification's `split_units_from`.
+pub(crate) open spec fn acc_step(old: UnitAccumulator, new: UnitAccumulator, line: Seq<u8>, r: Option<(Vec<u8>, usize)>) -> bool {
+    let b2 = old.buf_view().add(line);
+    let start2 = if old.buf_view().len() == 0 { old.next_view() } else { old.start_view() };
+    let next2 = if line.len() > 0 && line[line.len() - 1] == 10u8 && old.next_view() < 0xffff_ffff_ffff_ffffu64 { (old.next_view() + 1) as u64 } else { old.next_view() };
+    &&& new.next_view() == next2
+    &&& new.start_view() == start2
+    &&& if unit_pending(b2) {
+        new.buf_view() == b2 && r is None
+    } else {
+        new.buf_view().len() == 0 && (r matches Some((text, first)) && text@ == b2 && first as u64 == start2)
+    }
+}
+
 impl UnitAccumulator {
+    pub closed spec fn buf_view(self) -> Seq<u8> {
+        self.buf@
+    }
+
+    pub closed spec fn start_view(self) -> u64 {
+        self.start_line as u64
+    }
+
+    pub closed spec fn next_view(self) -> u64 {
+        self.next_line as u64
+    }
+
+    /// Whether the line count can still grow without saturating.
+    pub closed spec fn next_ok(self, n: int) -> bool {
+        self.next_line + n < usize::MAX
+    }
+
+    /// The scan state is that of the whole lines at the start of the buffer.
+    pub closed spec fn inv(self) -> bool {
+        &&& self.scanned <= self.buf@.len()
+        &&& self.scanned <= 1_000_000_000
+        &&& -(self.scanned as int) <= (self.scan.0 as int) && (self.scan.0 as int) <= (self.scanned as int)
+        &&& !(self.scan.1 && self.scan.2)
+        &&& self.scanned == 0 || self.buf@[self.scanned - 1] == 10u8
+        &&& (BlockScan { count: self.scan.0 as i64, in_comment: self.scan.1, in_string: self.scan.2 })
+            == block_scan(self.buf@.subrange(0, self.scanned as int), scan_start())
+    }
+
     /// Creates an empty accumulator whose first line is line 1.
-    pub fn new() -> Self {
-        Self {
-            buf: Vec::new(),
-            start_line: 1,
-            next_line: 1,
-            scanned: 0,
-            scan: (0, false, false),
-        }
+    pub fn new() -> (r: Self)
+        ensures
+            r.inv(),
+            r.buf_view().len() == 0,
+            r.start_view() == 1,
+            r.next_view() == 1,
+            r.next_ok(0),
+    {
+        let r = Self { buf: Vec::new(), start_line: 1, next_line: 1, scanned: 0, scan: (0, false, false) };
+        proof { assert(r.buf@.subrange(0, 0) =~= Seq::<u8>::empty()); }
+        r
     }
 
     /// Appends one line (with its trailing newline, if any). Returns the completed unit and the
     /// line number of its first line when the accumulated text forms a complete unit.
+    #[verifier::external_body]
     pub fn push_line(&mut self, line: &[u8]) -> Option<(Vec<u8>, usize)> {
-        if self.buf.is_empty() {
+        self.push_line_ref(line)
+    }
+
+    /// `push_line`: one step of the specification's `split_units_from`, for a line that is not
+    /// empty.
+    pub(crate) fn push_line_ref(&mut self, line: &[u8]) -> (r: Option<(Vec<u8>, usize)>)
+        requires
+            old(self).inv(),
+            line@.len() > 0 ==> old(self).buf_view().len() + line@.len() < usize::MAX,
+        ensures
+            final(self).inv(),
+            line@.len() > 0 && old(self).next_ok(0) ==> acc_step(*old(self), *final(self), line@, r),
+            forall|n: int| old(self).next_ok(n + 1) ==> final(self).next_ok(n),
+    {
+        if self.buf.len() == 0 {
             self.start_line = self.next_line;
         }
-        self.buf.extend_from_slice(line);
-        if line.ends_with(b"\n") {
-            self.next_line += 1;
+        let ghost before = self.buf@;
+        append_bytes(&mut self.buf, line);
+        proof {
+            if self.scanned > 0 { assert(self.buf@[self.scanned - 1] == before[self.scanned - 1]); }
+            assert(self.buf@.subrange(0, self.scanned as int) =~= before.subrange(0, self.scanned as int));
+        }
+        let ends_nl = line.len() > 0 && line[line.len() - 1] == b'\n';
+        if ends_nl && self.next_line < usize::MAX {
+            self.next_line = self.next_line + 1;
         }
         // Text beyond the limit is passed on as it is, and `run_unit` rejects it.
         if verified_unit_within_limit(self.buf.len()) {
-            if self.buf.ends_with(b"\\\n") || self.buf.ends_with(b"\\\r\n") {
+            let n = self.buf.len();
+            if (n >= 2 && self.buf[n - 1] == b'\n' && self.buf[n - 2] == b'\\')
+                || (n >= 3 && self.buf[n - 1] == b'\n' && self.buf[n - 2] == b'\r' && self.buf[n - 3] == b'\\')
+            {
                 return None;
             }
-            let scan = verified_repl_block_scan(&self.buf, self.scanned, self.scan);
+            let scan = verified_repl_block_scan(self.buf.as_slice(), self.scanned, self.scan);
+            proof {
+                let k = self.scanned as int;
+                let a = self.buf@.subrange(0, k);
+                let b = self.buf@.skip(k);
+                assert(a + b =~= self.buf@);
+                if a.len() > 0 { assert(a[a.len() - 1] == self.buf@[k - 1]); }
+                lemma_block_scan_split(a, b, scan_start());
+            }
             if scan.0 > 0 || scan.1 || scan.2 {
-                if line.ends_with(b"\n") {
-                    self.scanned = self.buf.len();
+                if ends_nl {
+                    self.scanned = n;
                     self.scan = scan;
+                    proof {
+                        assert(self.buf@.subrange(0, n as int) =~= self.buf@);
+                        assert(self.buf@.skip(0) =~= self.buf@);
+                    }
                 }
                 return None;
             }
@@ -531,108 +675,375 @@ impl UnitAccumulator {
     }
 
     /// Returns the incomplete text left at end of input, if any, so that it can be reported.
+    #[verifier::external_body]
     pub fn finish(&mut self) -> Option<(Vec<u8>, usize)> {
         self.take()
     }
 
     /// Whether lines of an incomplete unit are waiting for more input (e.g. an open `{`).
+    #[verifier::external_body]
     pub fn is_pending(&self) -> bool {
         !self.buf.is_empty()
     }
 
     /// Discards any partially accumulated unit (used after an interrupt).
+    #[verifier::external_body]
     pub fn clear(&mut self) {
         self.buf.clear();
-        self.reset_scan();
-    }
-
-    fn reset_scan(&mut self) {
         self.scanned = 0;
         self.scan = (0, false, false);
     }
 
-    fn take(&mut self) -> Option<(Vec<u8>, usize)> {
-        self.reset_scan();
-        if self.buf.is_empty() {
-            None
-        } else {
-            Some((core::mem::take(&mut self.buf), self.start_line))
-        }
-    }
-}
-
-verus! {
-
-impl Evaluator {
-    /// Parses and executes one input unit, reporting any error to `stderr_writer`.
-    ///
-    /// `source` names the input in syntax diagnostics (a file name, or [`STDIN_SOURCE`]) and
-    /// `first_line` is the line number of the unit's first line within that source.
-    #[verifier::external_body]
-    pub fn run_unit(&mut self, unit: &[u8], source: &str, first_line: usize) -> UnitOutcome {
-        self.run_unit_ref(unit, source, first_line, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
-    }
-
-    /// `run_unit`: the refinement theorem of one unit, against the specification's `run_unit`.
-    /// A nesting limit that leaves no room to count is not a limit at all, and is lowered to one
-    /// that is still out of reach.
-    pub(crate) fn run_unit_ref(&mut self, unit: &[u8], source: &str, first_line: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(u): Ghost<SpecUnit>) -> (r: UnitOutcome)
+    fn take(&mut self) -> (r: Option<(Vec<u8>, usize)>)
         requires
-            old(self).inv(),
+            old(self).inv() || old(self).buf@.len() >= 0,
         ensures
             final(self).inv(),
-            (r_top(*old(self), rs.st) && r_opts(*old(self), opts) && u.line == first_line as u64 && u.text == unit@
-                && old(self).max_depth < usize::MAX - 2)
-                ==> r_outcome(r, *final(self), rs, spec_run_unit(opts, rs, source.spec_bytes(), u)),
+            final(self).buf@.len() == 0,
+            final(self).start_line == old(self).start_line,
+            final(self).next_line == old(self).next_line,
+            if old(self).buf@.len() == 0 {
+                r is None
+            } else {
+                r matches Some((text, first)) && text@ == old(self).buf@ && first == old(self).start_line
+            },
     {
-        if !verified_unit_within_limit(unit.len()) {
-            let ghost e0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: seq![] };
-            let ghost p = pr_err(e0, PErr { quit: false, out_of_fuel: false, line: 1u64, msg: unit_too_long_msg() });
-            let too_long = Err(BcError::Syntax { line: 1, message: unit_too_long_text() });
-            let none = Vec::new();
-            proof { assert(r_ext(none@, e0.ext)); }
-            let r = self.run_parsed(too_long, &none, source, first_line, Ghost(opts), Ghost(rs), Ghost(p));
-            proof {
-                let st0 = with_call(with_depth(rs.st, 0u64), rs.st.calls, false, rs.st.inv_ibase);
-                let src = source.spec_bytes();
-                assert(ext_diags(e0.ext, src, first_line as u64, opts.reject_extensions) == Seq::<u8>::empty());
-                assert(st0.err.add(Seq::<u8>::empty()) =~= st0.err);
-                assert(with_err(st0, st0.err) == st0);
-            }
-            return r;
+        self.scanned = 0;
+        self.scan = (0, false, false);
+        let mut out = Vec::new();
+        core::mem::swap(&mut self.buf, &mut out);
+        proof { assert(self.buf@.subrange(0, 0) =~= Seq::<u8>::empty()); }
+        if out.len() == 0 {
+            None
+        } else {
+            Some((out, self.start_line))
         }
-        let policy = self.extension_policy;
-        let max_depth = if self.max_depth < usize::MAX - 2 { self.max_depth } else { usize::MAX - 3 };
-        let ghost cfg = PCfg { record_extensions: policy != ExtensionPolicy::Allow, max_depth: max_depth as u64 };
-        let (parsed, extension_uses) = parse_unit_ref(unit, policy, max_depth, Ghost(cfg));
-        let ghost p = parse_unit(tokenize(unit@), cfg);
-        self.run_parsed(parsed, &extension_uses, source, first_line, Ghost(opts), Ghost(rs), Ghost(p))
+    }
+
+    /// `finish`, with its theorem.
+    pub(crate) fn finish_ref(&mut self) -> (r: Option<(Vec<u8>, usize)>)
+        ensures
+            if old(self).buf_view().len() == 0 {
+                r is None
+            } else {
+                r matches Some((text, first)) && text@ == old(self).buf_view() && first as u64 == old(self).start_view()
+            },
+    {
+        self.take()
     }
 }
 
-} // verus!
+/// Trusted: `extend_from_slice` appends the slice.
+#[verifier::external_body]
+fn append_bytes(buf: &mut Vec<u8>, line: &[u8])
+    ensures
+        final(buf)@ == old(buf)@.add(line@),
+{
+    buf.extend_from_slice(line);
+}
+
+/// Trusted: the subslice of `text` from `a` to `b`.
+#[verifier::external_body]
+fn subslice(text: &[u8], a: usize, b: usize) -> (r: &[u8])
+    requires
+        a <= b <= text@.len(),
+    ensures
+        r@ == text@.subrange(a as int, b as int),
+{
+    &text[a..b]
+}
+
+/// The first line of the text from `pos`.
+proof fn lemma_take_line(t: Seq<u8>, pos: int, end: int)
+    requires
+        0 <= pos < end <= t.len(),
+        forall|k: int| pos <= k < end - 1 ==> t[k] != 10u8,
+        t[end - 1] == 10u8 || end == t.len(),
+    ensures
+        take_line(t.skip(pos)) == (t.subrange(pos, end), t.skip(end)),
+    decreases end - pos,
+{
+    let u = t.skip(pos);
+    assert(u[0] == t[pos]);
+    assert(u.drop_first() =~= t.skip(pos + 1));
+    reveal_with_fuel(take_line, 2);
+    if t[pos] == 10u8 {
+        assert(end == pos + 1);
+        assert(t.subrange(pos, end) =~= seq![10u8]);
+    } else if pos + 1 == end {
+        assert(end == t.len());
+        assert(t.skip(end).len() == 0);
+        assert(t.skip(end) =~= Seq::<u8>::empty());
+        assert(t.subrange(pos, end) =~= seq![t[pos]].add(Seq::<u8>::empty()));
+    } else {
+        lemma_take_line(t, pos + 1, end);
+        assert(t.subrange(pos, end) =~= seq![t[pos]].add(t.subrange(pos + 1, end)));
+    }
+}
+
+/// The units in `units` are those of the specification's `us`.
+spec fn r_units(units: Seq<(Vec<u8>, usize)>, us: Seq<Unit>) -> bool {
+    &&& units.len() == us.len()
+    &&& forall|i: int| 0 <= i < units.len() ==> (#[trigger] units[i]).0@ == us[i].text && units[i].1 as u64 == us[i].line
+}
+
+/// Splits `text` into its units.
+fn split_source(text: &[u8]) -> (r: Vec<(Vec<u8>, usize)>)
+    requires
+        text@.len() < usize::MAX - 2,
+    ensures
+        r_units(r@, split_units(text@)),
+{
+    let mut units: Vec<(Vec<u8>, usize)> = Vec::new();
+    let mut acc = UnitAccumulator::new();
+    let mut pos: usize = 0;
+    let ghost mut out = Seq::<Unit>::empty();
+    proof { assert(text@.skip(0) =~= text@); }
+    while pos < text.len()
+        invariant
+            pos <= text@.len(),
+            text@.len() < usize::MAX - 2,
+            acc.inv(),
+            acc.buf_view().len() <= pos,
+            acc.next_ok(text@.len() - pos),
+            r_units(units@, out),
+            split_units_from(text@.skip(pos as int), acc.buf_view(), acc.start_view(), acc.next_view(), out) == split_units(text@),
+        decreases text@.len() - pos,
+    {
+        let mut end = pos + 1;
+        while end < text.len() && text[end - 1] != b'\n'
+            invariant
+                pos < end <= text@.len(),
+                forall|k: int| pos <= k < end - 1 ==> text@[k] != 10u8,
+            decreases text@.len() - end,
+        {
+            end = end + 1;
+        }
+        let line = subslice(text, pos, end);
+        let ghost b0 = acc.buf_view();
+        let ghost (st0, nx0) = (acc.start_view(), acc.next_view());
+        proof {
+            lemma_take_line(text@, pos as int, end as int);
+            assert(line@[line@.len() - 1] == text@[end - 1]);
+        }
+        let ghost o_before = out;
+        let ghost a0 = acc;
+        let r = acc.push_line_ref(line);
+        proof {
+            let t = text@.skip(pos as int);
+            assert(t.len() > 0);
+            assert(take_line(t).1.len() < t.len());
+            assert(acc_step(a0, acc, line@, r));
+            if !unit_pending(b0.add(line@)) { assert(acc.buf_view() =~= Seq::<u8>::empty()); }
+            assert(a0.next_ok((text@.len() - end) + 1));
+        }
+        match r {
+            Some(u) => {
+                proof {
+                    let x = Unit { text: u.0@, line: u.1 as u64 };
+                    let o0 = out;
+                    out = out.push(x);
+                    assert forall|i: int| 0 <= i < units@.push(u).len() implies (#[trigger] units@.push(u)[i]).0@ == out[i].text && units@.push(u)[i].1 as u64 == out[i].line by {
+                        if i < o0.len() { assert(units@.push(u)[i] == units@[i]); assert(out[i] == o0[i]); }
+                    }
+                }
+                units.push(u);
+            },
+            None => {},
+        }
+        proof { assert(acc.next_ok(text@.len() - end)); }
+        pos = end;
+    }
+    let ghost b0 = acc.buf_view();
+    let ghost st0 = acc.start_view();
+    match acc.finish_ref() {
+        Some(u) => {
+            proof {
+                let x = Unit { text: u.0@, line: u.1 as u64 };
+                let o0 = out;
+                out = out.push(x);
+                assert forall|i: int| 0 <= i < units@.push(u).len() implies (#[trigger] units@.push(u)[i]).0@ == out[i].text && units@.push(u)[i].1 as u64 == out[i].line by {
+                    if i < o0.len() { assert(units@.push(u)[i] == units@[i]); assert(out[i] == o0[i]); }
+                }
+            }
+            units.push(u);
+        },
+        None => {},
+    }
+    proof { assert(text@.skip(pos as int).len() == 0); assert(out == split_units(text@)); }
+    units
+}
+
+/// `quit` stops `run_units`.
+proof fn lemma_run_units_step(opts: Options, rs: RunState, src: Seq<u8>, us: Seq<Unit>, i: int)
+    requires
+        0 <= i < us.len(),
+        !rs.quit,
+    ensures
+        run_units(opts, rs, src, us.skip(i)) == run_units(opts, spec_run_unit(opts, rs, src, us[i]), src, us.skip(i + 1)),
+{
+    assert(us.skip(i)[0] == us[i]);
+    assert(us.skip(i).drop_first() =~= us.skip(i + 1));
+}
 
 impl Evaluator {
     /// Splits `text` into units and runs each one, continuing after errors until the end of
     /// the text or `quit`. `text` is bytes and need not be UTF-8.
+    #[verifier::external_body]
     pub fn run_source(&mut self, text: &[u8], source: &str) -> RunSummary {
-        let mut summary = RunSummary::default();
-        let mut acc = UnitAccumulator::new();
-        let units = text
-            .split_inclusive(|&b| b == b'\n')
-            .filter_map(|line| acc.push_line(line))
-            .collect::<alloc::vec::Vec<_>>();
-        for (unit, line) in units.into_iter().chain(acc.finish()) {
-            match self.run_unit(&unit, source, line) {
-                UnitOutcome::Completed => {}
-                UnitOutcome::Failed => summary.errors += 1,
+        self.run_source_ref(text, source, Ghost(arbitrary()), Ghost(arbitrary()))
+    }
+
+    /// `run_source`: the refinement theorem of one input. The error count is related only as far
+    /// as it matters for the exit status, because the specification's count saturates.
+    pub(crate) fn run_source_ref(&mut self, text: &[u8], source: &str, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>) -> (r: RunSummary)
+        requires
+            old(self).inv(),
+            text@.len() < usize::MAX - 2,
+        ensures
+            final(self).inv(),
+            r_source(r, *old(self), *final(self), opts, rs, source.spec_bytes(), text@),
+    {
+        let ghost src = source.spec_bytes();
+        let ghost us = split_units(text@);
+        let ghost goal = run_units(opts, rs, src, us);
+        let ghost hyp = r_source_pre(*self, opts, rs);
+        let units = split_source(text);
+        let policy = self.extension_policy;
+        let limit = self.max_depth;
+        let mut summary = RunSummary { errors: 0, quit: false };
+        let ghost mut cur = rs;
+        let mut i: usize = 0;
+        proof { assert(us.skip(0) =~= us); }
+        while i < units.len()
+            invariant
+                self.inv(),
+                i <= units@.len(),
+                r_units(units@, us),
+                !summary.quit,
+                hyp == r_source_pre(*old(self), opts, rs),
+                goal == run_units(opts, rs, src, us),
+                us == split_units(text@),
+                src == source.spec_bytes(),
+                hyp ==> r_settings(policy, limit, opts) && limit < usize::MAX - 2,
+                (hyp && !goal.not_modeled) ==> r_top(*self, cur.st) && !cur.quit && !cur.not_modeled
+                    && run_units(opts, cur, src, us.skip(i as int)) == goal
+                    && (cur.errors > 0) == (rs.errors > 0 || summary.errors > 0),
+            decreases units@.len() - i,
+        {
+            let ghost u = us[i as int];
+            let ghost next = spec_run_unit(opts, cur, src, u);
+            let unit_i = &units[i];
+            let outcome = self.run_unit_ref(unit_i.0.as_slice(), source, unit_i.1, policy, limit, Ghost(opts), Ghost(cur), Ghost(u));
+            proof {
+                if hyp && !goal.not_modeled {
+                    lemma_run_units_step(opts, cur, src, us, i as int);
+                    assert(units@[i as int].0@ == u.text);
+                    if next.not_modeled {
+                        lemma_run_units_stop(opts, next, src, us.skip(i + 1));
+                    }
+                }
+            }
+            match outcome {
+                UnitOutcome::Completed => {},
+                UnitOutcome::Failed => {
+                    if summary.errors < usize::MAX {
+                        summary.errors = summary.errors + 1;
+                    }
+                },
                 UnitOutcome::Quit => {
                     summary.quit = true;
-                    break;
-                }
+                    proof {
+                        if hyp && !goal.not_modeled {
+                            lemma_run_units_step(opts, cur, src, us, i as int);
+                            assert(units@[i as int].0@ == u.text);
+                            if next.not_modeled {
+                                lemma_run_units_stop(opts, next, src, us.skip(i + 1));
+                            }
+                            assert(!next.not_modeled);
+                            assert(next.quit);
+                            lemma_run_units_stop(opts, next, src, us.skip(i + 1));
+                            assert(goal == next);
+                            assert(next.errors == cur.errors);
+                        }
+                    }
+                    return summary;
+                },
+            }
+            proof { if hyp && !goal.not_modeled { cur = next; } }
+            i = i + 1;
+        }
+        proof {
+            if hyp && !goal.not_modeled {
+                assert(us.skip(i as int).len() == 0);
             }
         }
         summary
+    }
+}
+
+/// What the theorem of `run_source_ref` assumes of the state before a unit.
+pub(crate) open spec fn r_source_pre(e: Evaluator, opts: Options, rs: RunState) -> bool {
+    &&& r_top(e, rs.st)
+    &&& r_opts(e, opts)
+    &&& e.max_depth < usize::MAX - 2
+    &&& !rs.quit
+    &&& !rs.not_modeled
+}
+
+/// The theorem of `run_source_ref`: unless the specification leaves its model, the state and the
+/// error status are those of `run_units` on the units of the text.
+pub(crate) open spec fn r_source(r: RunSummary, e0: Evaluator, e: Evaluator, opts: Options, rs: RunState, src: Seq<u8>, text: Seq<u8>) -> bool {
+    let goal = run_units(opts, rs, src, split_units(text));
+    (r_source_pre(e0, opts, rs) && !goal.not_modeled) ==> {
+        &&& r_top(e, goal.st)
+        &&& goal.quit == r.quit
+        &&& (goal.errors > 0) == (rs.errors > 0 || r.errors > 0)
+    }
+}
+
+/// `run_units` stops at `quit`.
+proof fn lemma_run_units_stop(opts: Options, rs: RunState, src: Seq<u8>, us: Seq<Unit>)
+    requires
+        rs.quit,
+    ensures
+        run_units(opts, rs, src, us) == rs,
+{
+}
+
+} // verus!
+
+impl Default for UnitAccumulator {
+    fn default() -> Self {
+        Self {
+            buf: Vec::new(),
+            start_line: 0,
+            next_line: 0,
+            scanned: 0,
+            scan: (0, false, false),
+        }
+    }
+}
+
+impl Clone for UnitAccumulator {
+    fn clone(&self) -> Self {
+        Self {
+            buf: self.buf.clone(),
+            start_line: self.start_line,
+            next_line: self.next_line,
+            scanned: self.scanned,
+            scan: self.scan,
+        }
+    }
+}
+
+impl core::fmt::Debug for UnitAccumulator {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("UnitAccumulator")
+            .field("buf", &self.buf)
+            .field("start_line", &self.start_line)
+            .field("next_line", &self.next_line)
+            .finish()
     }
 }
 

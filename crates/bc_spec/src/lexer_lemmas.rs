@@ -439,4 +439,66 @@ pub proof fn lemma_lex_shape(t: Seq<u8>, st: LexState, out: Seq<Token>)
     }
 }
 
+/// A block scan can stop at the end of a line and resume there: a step looks ahead only within
+/// a line, so what follows the newline does not change it.
+pub proof fn lemma_block_scan_split(a: Seq<u8>, b: Seq<u8>, st: BlockScan)
+    requires
+        a.len() == 0 || a[a.len() - 1] == 10u8,
+    ensures
+        block_scan(a + b, st) == block_scan(b, block_scan(a, st)),
+    decreases a.len(),
+{
+    if a.len() == 0 {
+        assert(a + b =~= b);
+    } else {
+        let t = a + b;
+        let c = a[0];
+        assert(t[0] == c);
+        let r1 = a.drop_first();
+        assert(t.drop_first() =~= r1 + b);
+        // The bytes that a step looks at, when they are in `a`.
+        if a.len() >= 2 { assert(t[1] == a[1]); }
+        if a.len() >= 3 { assert(t[2] == a[2]); }
+        if a.len() >= 2 {
+            let r2 = r1.drop_first();
+            assert((r1 + b).drop_first() =~= r2 + b);
+            if a.len() >= 3 {
+                assert((r2 + b).drop_first() =~= r2.drop_first() + b);
+                if a.len() > 3 { assert(r2.drop_first()[r2.drop_first().len() - 1] == 10u8); }
+                assert(r2[r2.len() - 1] == 10u8);
+            }
+            assert(r1[r1.len() - 1] == 10u8);
+        }
+        let n = if st.count < 0x7fff_ffff_ffff_ffffi64 { (st.count + 1) as i64 } else { st.count };
+        let d = if st.count > -0x7fff_ffff_ffff_ffffi64 { (st.count - 1) as i64 } else { st.count };
+        if st.in_comment {
+            if c == 42u8 && t.len() >= 2 && t[1] == 47u8 {
+                lemma_block_scan_split(r1.drop_first(), b, BlockScan { count: st.count, in_comment: false, in_string: false });
+            } else {
+                lemma_block_scan_split(r1, b, st);
+            }
+        } else if st.in_string {
+            if c == 34u8 {
+                lemma_block_scan_split(r1, b, BlockScan { count: st.count, in_comment: false, in_string: false });
+            } else if c == 92u8 && t.len() >= 2 && t[1] == 10u8 {
+                lemma_block_scan_split(r1.drop_first(), b, st);
+            } else if c == 92u8 && t.len() >= 3 && t[1] == 13u8 && t[2] == 10u8 {
+                lemma_block_scan_split(r1.drop_first().drop_first(), b, st);
+            } else {
+                lemma_block_scan_split(r1, b, st);
+            }
+        } else if c == 47u8 && t.len() >= 2 && t[1] == 42u8 {
+            lemma_block_scan_split(r1.drop_first(), b, BlockScan { count: st.count, in_comment: true, in_string: false });
+        } else if c == 34u8 {
+            lemma_block_scan_split(r1, b, BlockScan { count: st.count, in_comment: false, in_string: true });
+        } else if c == 123u8 {
+            lemma_block_scan_split(r1, b, BlockScan { count: n, in_comment: false, in_string: false });
+        } else if c == 125u8 {
+            lemma_block_scan_split(r1, b, BlockScan { count: d, in_comment: false, in_string: false });
+        } else {
+            lemma_block_scan_split(r1, b, st);
+        }
+    }
+}
+
 } // verus!

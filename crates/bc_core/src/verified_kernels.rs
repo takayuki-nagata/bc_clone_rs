@@ -25,6 +25,8 @@
     reason = "proved lossless by the Verus contracts (see the module documentation)"
 )]
 
+#[cfg(not(verus_keep_ghost))]
+use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
@@ -851,133 +853,93 @@ dual_verified! {
     }
 }
 
-#[cfg(verus_keep_ghost)]
-macro_rules! dual_verified_repl_scanner {
-    (
-        $(#[$meta:meta])*
-        $vis:vis fn $name:ident($($arg:ident : $arg_ty:ty),*) -> ($ret_name:ident : $ret_ty:ty)
-            requires [ $($req:tt)* ]
-            ensures [ $($ens:tt)* ]
-            locals [ $($loc_tt:tt)* ]
-            while ($cond:expr)
-                invariant [ $($inv:tt)* ]
-                decreases ($dec:expr)
-            $loop_body:block
-            return $ret_expr:expr;
-    ) => {
-        verus! {
-            $(#[$meta])*
-            $vis fn $name($($arg : $arg_ty),*) -> ($ret_name : $ret_ty)
-                requires $($req)*
-                ensures $($ens)*
-            {
-                $($loc_tt)*
-                while $cond
-                    invariant $($inv)*
-                    decreases $dec
-                $loop_body
-                $ret_expr
+verus! {
+
+/// The state machine of `verified_repl_block_completeness`, resumed at `start` in the state
+/// `state` = (open brace count, in a comment, in a string).
+pub(crate) fn verified_repl_block_scan(text: &[u8], start: usize, state: (i32, bool, bool)) -> (res: (i32, bool, bool))
+    requires
+        text@.len() <= 1_000_000_000,
+        start <= text@.len(),
+        -(start as int) <= (state.0 as int) && (state.0 as int) <= (start as int),
+        !(state.1 && state.2),
+    ensures
+        -(text@.len() as int) <= (res.0 as int) && (res.0 as int) <= (text@.len() as int),
+        !(res.1 && res.2),
+        (bc_spec::lexer::BlockScan { count: res.0 as i64, in_comment: res.1, in_string: res.2 })
+            == bc_spec::lexer::block_scan(text@.skip(start as int), bc_spec::lexer::BlockScan { count: state.0 as i64, in_comment: state.1, in_string: state.2 }),
+{
+    let mut count: i32 = state.0;
+    let mut in_comment: bool = state.1;
+    let mut in_string: bool = state.2;
+    let mut i: usize = start;
+    let len: usize = text.len();
+    while i < len
+        invariant
+            0 <= i <= len,
+            len == text@.len(),
+            len <= 1_000_000_000,
+            !(in_comment && in_string),
+            -(i as int) <= (count as int) && (count as int) <= (i as int),
+            bc_spec::lexer::block_scan(text@.skip(i as int), bc_spec::lexer::BlockScan { count: count as i64, in_comment, in_string })
+                == bc_spec::lexer::block_scan(text@.skip(start as int), bc_spec::lexer::BlockScan { count: state.0 as i64, in_comment: state.1, in_string: state.2 }),
+        decreases len - i
+    {
+        let c = text[i];
+        proof {
+            let t = text@.skip(i as int);
+            assert(t[0] == c);
+            assert(t.drop_first() =~= text@.skip(i + 1));
+            if i + 1 < len {
+                assert(t[1] == text@[i + 1]);
+                assert(text@.skip(i + 1).drop_first() =~= text@.skip(i + 2));
+            }
+            if i + 2 < len {
+                assert(t[2] == text@[i + 2]);
+                assert(text@.skip(i + 2).drop_first() =~= text@.skip(i + 3));
             }
         }
-    };
-}
-
-#[cfg(not(verus_keep_ghost))]
-macro_rules! dual_verified_repl_scanner {
-    (
-        $(#[$meta:meta])*
-        $vis:vis fn $name:ident($($arg:ident : $arg_ty:ty),*) -> ($ret_name:ident : $ret_ty:ty)
-            requires [ $($req:tt)* ]
-            ensures [ $($ens:tt)* ]
-            locals [ $($loc_tt:tt)* ]
-            while ($cond:expr)
-                invariant [ $($inv:tt)* ]
-                decreases ($dec:expr)
-            $loop_body:block
-            return $ret_expr:expr;
-    ) => {
-        $(#[$meta])*
-        #[inline]
-        #[allow(clippy::assign_op_pattern)]
-        $vis fn $name($($arg : $arg_ty),*) -> $ret_ty {
-            $($loc_tt)*
-            while $cond $loop_body
-            $ret_expr
-        }
-    };
-}
-
-dual_verified_repl_scanner! {
-    /// The state machine of `verified_repl_block_completeness`, resumed at `start` in the state
-    /// `state` = (open brace count, in a comment, in a string).
-    ///
-    /// Scans an arbitrary byte slice tracking `/* ... */` comments, `"..."` strings
-    /// (including `\\\n` and `\\\r\n` continuations), and `{` / `}` brace nesting depth.
-    pub(crate) fn verified_repl_block_scan(text: &[u8], start: usize, state: (i32, bool, bool)) -> (res: (i32, bool, bool))
-        requires [
-            text@.len() <= 1_000_000_000,
-            start <= text@.len(),
-            -(start as int) <= (state.0 as int) && (state.0 as int) <= (start as int),
-            !(state.1 && state.2),
-        ]
-        ensures [
-            -(text@.len() as int) <= (res.0 as int) && (res.0 as int) <= (text@.len() as int),
-            !(res.1 && res.2),
-        ]
-        locals [
-            let mut count: i32 = state.0;
-            let mut in_comment: bool = state.1;
-            let mut in_string: bool = state.2;
-            let mut i: usize = start;
-            let len: usize = text.len();
-        ]
-        while (i < len)
-            invariant [
-                0 <= i <= len,
-                len == text@.len(),
-                len <= 1_000_000_000,
-                !(in_comment && in_string),
-                -(i as int) <= (count as int) && (count as int) <= (i as int),
-            ]
-            decreases (len - i)
-        {
-            let c = text[i];
-            if in_comment {
-                if c == b'*' && len - i >= 2 && text[i + 1] == b'/' {
-                    in_comment = false;
-                    i = i + 2;
-                } else {
-                    i = i + 1;
-                }
-            } else if in_string {
-                if c == b'"' {
-                    in_string = false;
-                    i = i + 1;
-                } else if c == b'\\' && len - i >= 2 && text[i + 1] == b'\n' {
-                    i = i + 2;
-                } else if c == b'\\' && len - i >= 3 && text[i + 1] == b'\r' && text[i + 2] == b'\n' {
-                    i = i + 3;
-                } else {
-                    i = i + 1;
-                }
-            } else if c == b'/' && len - i >= 2 && text[i + 1] == b'*' {
-                in_comment = true;
-                i = i + 2;
-            } else if c == b'"' {
-                in_string = true;
-                i = i + 1;
-            } else if c == b'{' {
-                count = count + 1;
-                i = i + 1;
-            } else if c == b'}' {
-                count = count - 1;
-                i = i + 1;
+        if in_comment {
+            if c == b'*' && len - i >= 2 && text[i + 1] == b'/' {
+                in_comment = false;
+                i += 2;
             } else {
-                i = i + 1;
+                i += 1;
             }
+        } else if in_string {
+            if c == b'"' {
+                in_string = false;
+                i += 1;
+            } else if c == b'\\' && len - i >= 2 && text[i + 1] == b'\n' {
+                i += 2;
+            } else if c == b'\\' && len - i >= 3 && text[i + 1] == b'\r' && text[i + 2] == b'\n' {
+                i += 3;
+            } else {
+                i += 1;
+            }
+        } else if c == b'/' && len - i >= 2 && text[i + 1] == b'*' {
+            in_comment = true;
+            i += 2;
+        } else if c == b'"' {
+            in_string = true;
+            i += 1;
+        } else if c == b'{' {
+            count += 1;
+            i += 1;
+        } else if c == b'}' {
+            count -= 1;
+            i += 1;
+        } else {
+            i += 1;
         }
-        return (count, in_comment, in_string);
+    }
+    proof {
+        assert(text@.skip(i as int).len() == 0);
+    }
+    (count, in_comment, in_string)
 }
+
+} // verus!
 
 dual_verified! {
     /// Verified CLI REPL `count_open_braces` & `is_block_incomplete` state machine
