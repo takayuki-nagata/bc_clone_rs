@@ -13,10 +13,10 @@
 //! - `prop_byte_inputs_match_spec` feeds invalid UTF-8, NUL and control characters.
 //! - `prop_spec_matches_gnu_bc` checks the specification itself against GNU bc on the inputs
 //!   where GNU bc follows POSIX (the generator of `differential_proptest.rs`).
-//! - `prop_parser_output_corresponds_to_*` check, in-process and without the oracle, the
-//!   assumption of the refinement theorem of `Evaluator::run_parsed`: for every unit, the
-//!   production parser's syntax tree (or error) and extension uses correspond to the compiled
-//!   specification's `parse_unit` (`driver::r_parsed`).
+//! - `prop_parser_output_corresponds_to_*` check, in-process and without the oracle, what the
+//!   parser's theorem states (`parse_unit_ref`, `driver::r_parsed`) through the public `Parser`
+//!   API, which is not itself proved: for every unit, the syntax tree (or error) and extension
+//!   uses correspond to the compiled specification's `parse_unit`.
 //!
 //! Inputs are kept small and shallow: the compiled specification copies its state at every
 //! step, so its time grows quadratically with the nesting depth. Cases where
@@ -262,7 +262,7 @@ proptest! {
 // The parser assumption of the refinement theorem
 // ---------------------------------------------------------------------------------------------
 
-/// Checks, on generated inputs, the assumption `driver::r_parsed` under which the verified
+/// Checks, on generated inputs, the relation `driver::r_parsed` under which the verified
 /// `Evaluator::run_parsed` refines the specification's `run_unit`: for each
 /// unit of the specification, the production parser's statements (or error) and extension uses
 /// correspond to the specification's `parse_unit`, as `refine::r_stmt` and `r_expr` relate

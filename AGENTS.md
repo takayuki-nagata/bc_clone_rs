@@ -63,8 +63,9 @@ graph TD
   that starts at that byte, or the byte alone (`verified_utf8_char_len`).
 - The parser is recursive descent, with Pratt precedence climbing for expressions. Assignment and
   `^` are right-associative. Precedence and associativity come from `verified_pratt_infix_info`.
-- Fallible API: `Lexer::try_get_next_token`, `Parser::try_new`, `Parser::try_parse_program`.
-  `quit` makes `try_parse_program` return `Err("quit")` so execution stops at that point, as
+- Fallible API: `Lexer::try_get_next_token`, `Lexer::try_peek_token`, `Parser::try_new`,
+  `Parser::try_parse_program`.
+  `quit` makes `try_parse_program` return `Err(BcError::Quit)` so execution stops at that point, as
   POSIX requires.
 
 ### Numbers (`src/math.rs`)
@@ -89,7 +90,7 @@ graph TD
 - Fallible API: `try_from_string`, `try_format_obase` (public), and inside the crate `try_div`,
   `try_mod_op`, `try_pow`, `try_sqrt`. The panicking wrappers (`from_string`, `format_obase`,
   `div`, `pow`, …) are compiled only under `cfg(test)`, as are `Lexer::get_next_token`,
-  `Lexer::peek_token`, `Parser::new`, `Parser::parse_program`, `Evaluator::evaluate`, and
+  `Parser::new`, `Parser::parse_program`, `Evaluator::evaluate`, and
   `Evaluator::execute`.
 - Output for `obase != 10` uses exact `BigInt` arithmetic. The number of fractional digits is the
   smallest `k` with `obase^k >= 10^scale`, so no floating point or `libm` is needed.
@@ -157,8 +158,9 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   `src/error.rs`. Do not match on message strings.
 - `src/driver.rs` is the only place that turns input into executed units. `UnitAccumulator`
   groups lines into units, `Evaluator::run_unit` / `run_source` parse and execute them, and
-  diagnostics are written in the format of `docs/COMPATIBILITY.md` §3.2. `run_unit` only runs
-  the parser; the verified `run_parsed` executes the statements and writes every diagnostic. Every front end (CLI,
+  diagnostics are written in the format of `docs/COMPATIBILITY.md` §3.2. `run_unit` parses with
+  the verified `parse_unit_ref`, and `run_parsed` executes the statements and writes every
+  diagnostic. Every front end (CLI,
   C API, Zephyr, QEMU, ESP32-C3, Wasm) uses this driver, so error recovery is identical on all
   targets. The driver takes bytes; the CLI and the C API pass their input without decoding it.
 - Recursion is bounded: `Evaluator::max_depth` limits the depth of the syntax tree (checked while
@@ -203,24 +205,26 @@ A kernel is `pub` only if a front end calls it; of those, only `verified_repl_bl
 has a precondition. Every call of a function with a `requires` clause is in verified code,
 except the following, whose preconditions are argued here but not proved:
 
-- `UnitAccumulator::push_line` (`driver.rs`) calls `verified_repl_block_scan`, which requires at
-  most 10^9 bytes and a state reached by scanning up to its start. The CLI's `count_open_braces`
-  and `is_block_incomplete` call `verified_repl_block_completeness`, which requires at most 10^9
-  bytes.
+- The CLI's `count_open_braces` and `is_block_incomplete`, compiled only for tests and Kani, call
+  `verified_repl_block_completeness`, which requires at most 10^9 bytes.
 - The trusted glue. `WrappedStdout::write_str` passes its column to `format::wrap_output`; the
   column is 0 or a column that `wrap_output` returned, so at most `POSIX_WRAP_COL_LIMIT`.
-  `run_unit` and the front ends call `run_parsed`, `try_evaluate` and `try_execute`, which
-  require `Evaluator::inv`; the invariant holds for every evaluator outside the crate (see
-  `inv`).
+  The public `run_unit`, `run_source` and `UnitAccumulator::push_line` are `external_body`
+  wrappers of `run_unit_ref`, `run_source_ref` and `push_line_ref`, and the front ends call them
+  and `try_evaluate` and `try_execute`, which require `Evaluator::inv` (or
+  `UnitAccumulator::inv`); the invariants hold for every value outside the crate, because their
+  fields are private to the crate. The public `Parser::try_new`, `set_max_depth` and
+  `try_parse_program`, used by tests only, are not related to the theorem (`run_unit_ref` calls
+  `parse_unit_ref`), and nothing establishes the preconditions of `parse_program_ref` for them.
 
 ## Verification Stack — What Is and Is Not Covered
 
 | Layer | Tool / script | What it actually establishes |
 |---|---|---|
-| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `format.rs`, `eval/`, `driver.rs`, `refine.rs`, `mathlib/`, `real_arith.rs`, the trusted `trusted_bigint.rs`, `trusted_std.rs` and `trusted_math.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`, `cmp_val` and `from_digit_values` compute the L0 operations exactly, and `format_bytes` writes `l0_format` of the value, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. Without `-l`, `try_evaluate` and `try_execute` refine the specification's `ev` and `exec` (every finishing fuel gives a corresponding result and state, including output, diagnostics and runtime errors), assuming in addition the axioms of `trusted_std.rs` and the output-stream wrappers (`WrappedStdout::write_bytes` and `flush_out`, `ErrWriter::write_bytes` and `flush_err`); this is partial correctness, relative to the syntax-tree relation `r_stmt` (the parser is not proved). `Evaluator::run_parsed` refines the specification's `run_unit` (diagnostics, `quit`, the failure count) given that the parser's output corresponds to the specification's (`driver::r_parsed`). The six functions of the math library (`mathlib/`) return the exact value truncated toward zero at `scale` digits (partial correctness over the reals, assuming the facts of real analysis stated as axioms in `trusted_math.rs`); the evaluator calls them from the verified `eval_math`, which ensures that an `Ok` result is the function's exact value at some argument values (`mathlib::math_ok`); which argument values is not stated, because the refinement theorem excludes `-l`. `verus_proofs.rs` keeps **design models that production code does not call** (the lexer's bounds, the C-FFI copy, the Zephyr line editor, CLI option parsing); its module documentation maps each model to its production counterpart. |
+| Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `format.rs`, `parser/`, `eval/`, `driver.rs`, `refine.rs`, `mathlib/`, `real_arith.rs`, the trusted `trusted_bigint.rs`, `trusted_std.rs` and `trusted_math.rs`, `verus_proofs.rs`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`, `cmp_val` and `from_digit_values` compute the L0 operations exactly, and `format_bytes` writes `l0_format` of the value, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. Without `-l`, `try_evaluate` and `try_execute` refine the specification's `ev` and `exec` (every finishing fuel gives a corresponding result and state, including output, diagnostics and runtime errors), assuming in addition the axioms of `trusted_std.rs` and the output-stream wrappers (`WrappedStdout::write_bytes` and `flush_out`, `ErrWriter::write_bytes` and `flush_err`); this is partial correctness. The lexer (`parser/lexer.rs`) produces the specification's `tokenize`, and the parser (`parser/parse.rs`) the specification's `parse_unit` (for every fuel with which the specification finishes), assuming in addition the one-line wrappers `ascii_string`, `copy_bytes`, `append_bytes` and `subslice`. `Evaluator::run_unit_ref` refines the specification's `run_unit` (diagnostics, `quit`, the failure count), and `run_source_ref` refines `run_units` on `split_units` of the text: state, output, diagnostics, `quit`, and whether a unit failed. `with_streams` gives the specification's `initial` state, and `lemma_outcome` proves that evaluators going through `run_source_ref` on the inputs in order have the specification's `run`. Not proved: the front ends' loops (reading lines or files, the order of the inputs, the exit status, `catch_unwind`), and that parsing ends (partial correctness); stack and memory exhaustion are outside the model. The embedded targets, the C API and Wasm call `run_source`; `bc_clone` does not: its loop over `UnitAccumulator::push_line` and `run_unit` (`run_non_interactive_block`) is a separate, unproved copy of `split_source` and `run_source_ref`'s loops, built from the proved `push_line_ref` and `run_unit_ref`. The six functions of the math library (`mathlib/`) return the exact value truncated toward zero at `scale` digits (partial correctness over the reals, assuming the facts of real analysis stated as axioms in `trusted_math.rs`); the evaluator calls them from the verified `eval_math`, which ensures that an `Ok` result is the function's exact value at some argument values (`mathlib::math_ok`); which argument values is not stated, because the refinement theorem excludes `-l`. `verus_proofs.rs` keeps **design models that production code does not call** (the C-FFI copy, the Zephyr line editor, CLI option parsing); its module documentation maps each model to its production counterpart. |
 | Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only; the 32-bit targets are exercised by the QEMU and Zephyr self-tests). The production C-FFI output helper `write_c_string` never writes at or beyond `buf_size` and always NUL-terminates. C-API NULL and zero-size guards hold. The CLI brace scanner is consistent. |
 | UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, and `bc_cli` (strict provenance, symbolic alignment, Stacked Borrows), and `bc_c_api` again under Tree Borrows. |
-| Executable specification | Verus — `crates/bc_spec`, `scripts/build_spec_oracle.sh`; `crates/bc_cli/tests/spec_differential.rs` | `bc_spec` defines the observable behavior of `bc_clone` without `-l` (units, tokens, parsing, evaluation, output, diagnostics, exit status), mirroring the production structure. `exec_spec_verified!` proves that the compiled oracle equals the `spec fn`s, except for `vstd`'s unverified `Seq` translations; lemmas prove that its arithmetic (`+ - * / % ^ sqrt`, comparison, `length`, constants under `ibase`) computes the integer definitions of `spec_num.rs` exactly. The differential tests then show that `bc_clone` matches the specification **on the generated inputs only**. Deductively, the execution of a unit after parsing refines the specification (the Verus row above), but the unit splitting, lexer and parser do not: their correspondence `driver::r_parsed` is checked on generated inputs by `prop_parser_output_corresponds_to_*`. The specification itself is checked against POSIX only by review, the POSIX suite, and GNU bc. The oracle is slow for deep nesting (its state is copied at every step), so the tests stay a few hundred levels deep. |
+| Executable specification | Verus — `crates/bc_spec`, `scripts/build_spec_oracle.sh`; `crates/bc_cli/tests/spec_differential.rs` | `bc_spec` defines the observable behavior of `bc_clone` without `-l` (units, tokens, parsing, evaluation, output, diagnostics, exit status), mirroring the production structure. `exec_spec_verified!` proves that the compiled oracle equals the `spec fn`s, except for `vstd`'s unverified `Seq` translations; lemmas prove that its arithmetic (`+ - * / % ^ sqrt`, comparison, `length`, constants under `ibase`) computes the integer definitions of `spec_num.rs` exactly. The differential tests then show that `bc_clone` matches the specification **on the generated inputs only**. Deductively, a whole input given to `run_source` refines the specification, and each line and unit of `bc_clone`'s own loop does (the Verus row above). `prop_parser_output_corresponds_to_*` still compares the parser's output with the specification's on generated inputs, which also checks the unproved public wrappers around the parser. The specification itself is checked against POSIX only by review, the POSIX suite, and GNU bc. The oracle is slow for deep nesting (its state is copied at every step), so the tests stay a few hundred levels deep. |
 | Property tests | proptest — `crates/bc_core/tests/proptest_suite.rs` | `+ - * / % ^ sqrt` against an exact `BigInt` reference truncated to the POSIX result scale (scales up to 40, negative values). Also checks the scale and exponent limits, integer and fractional base conversion, and that the parser and evaluator never panic. |
 | Differential fuzzing | proptest — `crates/bc_cli/tests/differential_proptest.rs` | Random programs (expressions, registers, arrays, control flow, recursion, runtime errors) produce the same stdout, diagnostics, and exit status as GNU bc. A second generator produces deeply nested programs (operator chains, parentheses, blocks, recursion thousands of levels deep, functions that change `ibase`). 300 + 40 cases per `cargo test`; set `PROPTEST_CASES` for long runs. Inputs where GNU knowingly deviates from POSIX are not generated. |
 | Differential tests | `crates/bc_cli/tests/integration_tests.rs` (helpers in `tests/common`), `scripts/run_gnu_reference_tests.sh` | stdout, diagnostics (GNU's text without `adr=N`), and exit status match GNU bc, except for the documented differences. The math library is checked against GNU bc at `scale + 100`, truncated. |
@@ -325,15 +329,17 @@ as possible and state the reason next to it.
   function calls (`eval_call`, `run_call_ref`). The functions of `-l` go through `eval_math`, which is
   verified (it keeps `Evaluator::inv` and the depth, and its result satisfies `mathlib::math_ok`)
   but is outside the refinement theorem: `r_state` excludes `-l`.
-- The trusted base of the refinement theorems (`run_parsed`, `try_evaluate`, `try_execute`) is:
+- The trusted base of the refinement theorems (`run_source_ref`, `run_unit_ref`, `try_evaluate`, `try_execute`) is:
   Verus, Z3, rustc and `vstd` (including its specifications of `Vec`, `BTreeMap`, `String` and
   `str`); the `num-bigint` wrappers and `axiom_bigint_size` in `trusted_bigint.rs`; the axioms of
   `trusted_std.rs`; the output-stream wrappers in `eval/` (`WrappedStdout::write_bytes`,
-  `flush_out`, `ErrWriter::write_bytes`, `flush_err`: a failing writer is outside the model).
-  `-l` is excluded by `r_state`. Not covered: the lexer and parser
-  (`driver::r_parsed`), `UnitAccumulator` and the front ends' loops over units
-  (unit splitting, error count, exit status), and the correspondence of `Evaluator::new` with the
-  specification's `initial` (only that `new` establishes `Evaluator::inv` is proved).
+  `flush_out`, `ErrWriter::write_bytes`, `flush_err`: a failing writer is outside the model, and a writer is taken to store exactly the bytes it receives, which the default `BcWriter::write_bytes` does not do for invalid UTF-8, nor the bare-metal UART, which turns `\n` into `\r\n`); and
+  the one-line wrappers `ascii_string` and `copy_bytes` (`parser/`), `append_bytes` and `subslice`
+  (`driver.rs`). `WrappedStdout::new` and `ErrWriter::new` are taken to start with an empty log.
+  The theorems assume a text shorter than `usize::MAX - 2` bytes and a nesting limit below
+  `usize::MAX - 2`. `-l` is excluded by `r_state`. Not covered: the front ends' loops over lines
+  and inputs (reading files, the exit status, `catch_unwind`), which `lemma_run_inputs_step`
+  and `lemma_outcome` describe but do not prove of those loops.
 - The trusted base of the math-library theorems (`bc_sin`, …, `bc_bessel` in `mathlib/`) is:
   Verus, Z3, rustc and `vstd`; the `num-bigint` wrappers in `trusted_bigint.rs`; and the facts of
   real analysis in `trusted_math.rs`. Facts about the real functions go only in

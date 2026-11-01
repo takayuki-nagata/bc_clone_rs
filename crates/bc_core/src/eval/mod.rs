@@ -290,7 +290,7 @@ impl Evaluator {
     /// stored number with a scale of at most `BC_SCALE_MAX`.
     ///
     /// It holds for every `Evaluator` outside this crate, which establishes the precondition of
-    /// `try_evaluate`, `try_execute` and `run_parsed` for their unverified callers (the front
+    /// `try_evaluate`, `try_execute` and `run_unit_ref` for their unverified callers (the front
     /// ends, and the glue `run_unit`): `new` establishes it (`with_streams`); every public
     /// method that changes a field it reads is verified to keep it (`set_scale`, `try_*`, …);
     /// and those fields are `pub(crate)` and written only by verified code. The public fields
@@ -807,8 +807,14 @@ impl Evaluator {
     pub(crate) fn with_streams(math_enabled: bool, stdout_writer: WrappedStdout, stderr_writer: ErrWriter, max_depth: usize) -> (r: Self)
         ensures
             r.inv(),
+            r.math_enabled == math_enabled,
+            r.max_depth == max_depth,
+            r.extension_policy == ExtensionPolicy::Allow,
+            (!math_enabled && out_log(&stdout_writer) == Seq::<u8>::empty() && out_col(&stdout_writer) == 0
+                && err_log(&stderr_writer) == Seq::<u8>::empty())
+                ==> crate::driver::r_top(r, bc_spec::top::initial(max_depth as u64)),
     {
-        Self {
+        let r = Self {
             variables: BTreeMap::new(),
             arrays: BTreeMap::new(),
             functions: BTreeMap::new(),
@@ -827,7 +833,14 @@ impl Evaluator {
             max_depth,
             eval_depth: 0,
             invocation_ibase: None,
+        };
+        proof {
+            assert(r.variables@ =~= Map::<String, Vec<BCNum>>::empty());
+            assert(r.arrays@ =~= Map::<String, Vec<BTreeMap<usize, BCNum>>>::empty());
+            assert(r.functions@ =~= Map::<String, FunctionDef>::empty());
+            assert(r.call_stack@ =~= Seq::<String>::empty());
         }
+        r
     }
 
     /// Sets the `scale` register (e.g. a front end's default scale), clamped to `BC_SCALE_MAX`.

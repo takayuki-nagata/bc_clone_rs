@@ -11,8 +11,8 @@
 //! documentation), not that the production code implements it. Production code is covered by:
 //! - the kernels in `verified_kernels.rs`, which production code calls directly and which are
 //!   verified with their real bodies;
-//! - the production `BCNum` operations (`math.rs`), output formatting (`format.rs`), the
-//!   evaluator and unit driver (`eval/`, `driver.rs`), verified in place against the
+//! - the production `BCNum` operations (`math.rs`), output formatting (`format.rs`), the lexer
+//!   and parser (`parser/`), the evaluator and unit driver (`eval/`, `driver.rs`), verified in place against the
 //!   executable specification `crates/bc_spec` (relations in `refine.rs`), and the math library
 //!   (`mathlib/`), verified in place over the reals;
 //! - Kani harnesses on production helpers (e.g. `bc_c_api::write_c_string`);
@@ -20,7 +20,7 @@
 //!   the GNU differential and oracle tests in `bc_cli`).
 //!
 //! Model → production correspondence (production line numbers are not tracked):
-//! `verified_lexer_*` → `parser::Lexer`; `verified_c_ffi_copy_nul_terminated` →
+//! `verified_c_ffi_copy_nul_terminated` →
 //! `bc_c_api::write_c_string`; `verified_zephyr_repl_edit_step` → `bc_zephyr::run_repl_with`;
 //! `verified_cli_parse_args` → `bc_cli::run_app`. The models of algorithms that production
 //! code now proves in place (scale rules, `^`, output in other bases, line wrapping, call-frame
@@ -30,152 +30,6 @@ use crate::verified_kernels::*;
 use vstd::prelude::*;
 
 verus! {
-
-// ============================================================================
-// Lexer: lookahead, cursor advance and number scanning
-// ============================================================================
-
-/// Verified bounds-safe lookahead `Lexer::peek_char` (`crates/bc_core/src/parser/lexer.rs`).
-///
-/// Proves absence of out-of-bounds slice indexing and arithmetic overflow when peeking ahead,
-/// delegating index validation to `verified_lexer_peek_char_index` in `verified_kernels.rs`.
-pub fn verified_lexer_peek_byte(text: &[u8], pos: usize, offset: usize) -> (res: u8)
-    requires
-        pos <= text@.len(),
-        text@.len() <= MAX_VERIFIED_SCALE,
-        offset <= MAX_VERIFIED_SCALE,
-    ensures
-        pos + offset >= text@.len() ==> res == 0u8,
-        pos + offset < text@.len() ==> res == text@[pos + offset],
-{
-    let (in_bounds, idx) = verified_lexer_peek_char_index(text.len(), pos, offset);
-    if in_bounds {
-        text[idx]
-    } else {
-        0u8
-    }
-}
-
-/// Verified cursor and line advancement `Lexer::advance_char` (`crates/bc_core/src/parser/lexer.rs`).
-///
-/// Proves that:
-/// 1. Slice indexing `text[pos]` never panics (out-of-bounds is impossible).
-/// 2. `pos` advances monotonically to `min(initial_pos + steps, text.len())`.
-/// 3. `line` increases monotonically and never overflows `usize`.
-pub fn verified_lexer_advance_bytes(
-    text: &[u8],
-    initial_pos: usize,
-    initial_line: usize,
-    steps: usize,
-) -> (res: (usize, usize))
-    requires
-        initial_pos <= text@.len(),
-        text@.len() <= 500_000_000,
-        initial_line >= 1,
-        initial_line <= 500_000_000,
-    ensures
-        res.0 <= text@.len(),
-        res.0 >= initial_pos,
-        res.0 == if initial_pos + steps <= text@.len() {
-            (initial_pos + steps) as usize
-        } else {
-            text@.len() as usize
-        },
-        res.1 >= initial_line,
-        res.1 <= initial_line + (res.0 - initial_pos),
-{
-    let mut pos: usize = initial_pos;
-    let mut line: usize = initial_line;
-    let mut s: usize = 0;
-    let len: usize = text.len();
-
-    while s < steps
-        invariant
-            0 <= s <= steps,
-            len == text@.len(),
-            len <= 500_000_000,
-            initial_pos <= pos <= len,
-            initial_line <= 500_000_000,
-            pos == if initial_pos + s <= len {
-                (initial_pos + s) as usize
-            } else {
-                len
-            },
-            line >= initial_line,
-            line <= initial_line + (pos - initial_pos),
-        decreases steps - s,
-    {
-        if pos < len {
-            let (next_pos, next_line) = verified_lexer_advance_step(pos, line, text[pos] == b'\n');
-            pos = next_pos;
-            line = next_line;
-        }
-        s = s + 1;
-    }
-
-    (pos, line)
-}
-
-/// Helper predicate for valid bc numeric literal characters (`0..=9` or `A..=F`).
-pub open spec fn spec_is_bc_digit(b: u8) -> bool {
-    (b'0' <= b && b <= b'9') || (b'A' <= b && b <= b'F')
-}
-
-/// Verified `Lexer` number token scanning loop (`crates/bc_core/src/parser/lexer.rs`).
-///
-/// Scans digits (`0-9`, `A-F`), at most one decimal point (`.`), and backslash-newline
-/// continuations (`\\\n` and `\\\r\n`).
-/// Proves:
-/// 1. Loop termination (`decreases len - pos`) and 100% bounds-safe slice indexing.
-/// 2. At most one radix point `.` is ever accepted into a single number token (`res.2 <= 1`).
-/// 3. Monotonic cursor advancement (`initial_pos <= res.0 <= text.len()`).
-pub fn verified_lexer_scan_number(
-    text: &[u8],
-    initial_pos: usize,
-) -> (res: (usize, usize, usize))
-    requires
-        initial_pos <= text@.len(),
-    ensures
-        // res = (final_pos, emitted_char_count, dot_count)
-        initial_pos <= res.0 && res.0 <= text@.len(),
-        res.1 <= res.0 - initial_pos,
-        res.2 <= 1,
-{
-    let mut pos: usize = initial_pos;
-    let mut char_count: usize = 0;
-    let mut dot_count: usize = 0;
-    let mut has_dot: bool = false;
-    let len: usize = text.len();
-
-    while pos < len
-        invariant
-            initial_pos <= pos <= len,
-            len == text@.len(),
-            char_count <= pos - initial_pos,
-            dot_count <= 1,
-            has_dot <==> (dot_count == 1),
-        decreases len - pos,
-    {
-        let cc = text[pos];
-        if verified_is_bc_digit(cc as u32) {
-            char_count = char_count + 1;
-            pos = pos + 1;
-        } else if cc == b'.' && !has_dot {
-            has_dot = true;
-            dot_count = dot_count + 1;
-            char_count = char_count + 1;
-            pos = pos + 1;
-        } else if cc == b'\\' && len - pos >= 2 && text[pos + 1] == b'\n' {
-            pos = pos + 2;
-        } else if cc == b'\\' && len - pos >= 3 && text[pos + 1] == b'\r' && text[pos + 2] == b'\n' {
-            pos = pos + 3;
-        } else {
-            break;
-        }
-    }
-
-    (pos, char_count, dot_count)
-}
 
 // ============================================================================
 // C-FFI NUL-terminated output and the Zephyr line editor

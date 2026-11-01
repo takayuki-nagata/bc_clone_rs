@@ -4,12 +4,15 @@
 
 Without `-l`, the execution of every input unit after parsing is now proved with Verus to refine
 an executable formal specification of `bc`, and each `-l` function is proved to return the exact
-value truncated toward zero at `scale`. The parser is not proved; differential tests check it
-against the specification. AGENTS.md lists what the proofs assume.
+value truncated toward zero at `scale`. The lexer, the parser and the unit splitting are proved too.
+The loops of the front ends are not; `bc_clone` has its own loop over the proved parts. AGENTS.md
+lists what the proofs assume.
 
 ### Verification
-- The lexer is proved to produce the tokens of the specification's `lex`, for a unit of at most
-  10^9 bytes. It assumes two one-line wrappers, `ascii_string` and `copy_bytes`.
+- The parsing of an input is proved against the specification, so that without `-l` the theorem now
+  covers `Evaluator::run_source`, and by composition (`lemma_outcome`) a run from the initial state:
+  the lexer (`tokenize`), the parser (`parse_unit`), the unit splitting (`split_units`) and each unit
+  (`run_unit`). The front ends' loops over lines and files remain unproved (`AGENTS.md`).
 - **Executable specification.** `crates/bc_spec` defines `bc_clone`'s stdout, stderr and exit
   status for any input without `-l`: input units, tokens, parsing, evaluation, output
   and diagnostics. `exec_spec_verified!` compiles it into the reference interpreter
@@ -25,8 +28,7 @@ against the specification. AGENTS.md lists what the proofs assume.
 - **Evaluator.** Expression evaluation, statement execution, function calls and the execution of
   an input unit (`Evaluator::run_parsed`: `-w`/`-s` diagnostics, syntax and runtime diagnostics,
   `quit`, whether the unit failed) refine the specification for every program the parser builds,
-  without `-l` (partial correctness). The theorem assumes that the parser's output corresponds
-  to the specification's (`driver::r_parsed`), which the differential tests check.
+  without `-l` (partial correctness).
   `Evaluator::new` and the public setters are proved to establish and keep the invariant that
   these theorems assume.
 - **Math library.** Verus proves, over the reals, that the ball operations contain their exact
@@ -58,6 +60,7 @@ against the specification. AGENTS.md lists what the proofs assume.
   the range whose result is not provably 0, are the new runtime error `argument too large`.
 
 ### Behavior changes and fixes
+- `UnitAccumulator::default()` starts at line 1, like `new`.
 - A unit of many lines is split in linear time. Each line used to rescan the whole unit, so that
   the time grew with the square of the number of lines (a function of 60000 lines took minutes).
 - An input unit longer than 1 000 000 000 bytes is now the syntax error `input unit too long`

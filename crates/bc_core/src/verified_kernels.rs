@@ -375,7 +375,7 @@ dual_verified! {
         (b >= 48 && b <= 57) || (b >= 65 && b <= 70)
     }
 
-    /// Verified `Lexer::peek_token` buffer index clamping (`parser/lexer.rs`).
+    /// Verified `Lexer::try_peek_token` buffer index clamping (`parser/lexer.rs`).
     pub(crate) fn verified_lexer_peek_token_index(buffer_len: usize, offset: usize) -> (res: usize)
         requires [
             buffer_len >= 1,

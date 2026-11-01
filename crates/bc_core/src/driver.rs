@@ -34,8 +34,8 @@ use bc_spec::lexer_lemmas::lemma_block_scan_split;
 use bc_spec::parser::{ExtUse, PCfg, PErr, PR, PState, parse_unit, pr_err};
 #[cfg(verus_keep_ghost)]
 use bc_spec::top::{
-    Options, RunState, at_line, ext_diags, run_parse_result, run_parsed_unit,
-    run_unit as spec_run_unit, run_units, unit_too_long_msg,
+    Input, Options, RunState, at_line, ext_diags, initial, run, run_inputs, run_parse_result,
+    run_parsed_unit, run_unit as spec_run_unit, run_units, unit_too_long_msg,
 };
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin::Ghost;
@@ -342,8 +342,8 @@ impl Evaluator {
 
     /// The part of `run_unit` after parsing (the specification's `run_unit` after
     /// `parse_unit`): the `-w` / `-s` diagnostics, the statements, and the diagnostic of an
-    /// error. Its postcondition is the refinement theorem of a unit, relative to the parser's
-    /// correspondence `r_parsed`.
+    /// error. Its postcondition is the refinement theorem of a unit given the result `p` of
+    /// parsing it (`r_parsed`, which `parse_unit_ref` establishes).
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(50)]
     #[allow(
@@ -1002,6 +1002,130 @@ pub(crate) open spec fn r_source(r: RunSummary, e0: Evaluator, e: Evaluator, opt
     }
 }
 
+/// A front end may set the nesting limit of a new evaluator: the state is then the initial one
+/// for that limit.
+pub(crate) proof fn lemma_set_limit(e: Evaluator, d: u64, limit: usize)
+    requires
+        r_top(e, initial(d)),
+    ensures
+        r_top(Evaluator { max_depth: limit, ..e }, initial(limit as u64)),
+{
+}
+
+/// The specification's `run_inputs` runs the units of each input in turn.
+pub(crate) proof fn lemma_run_inputs_step(opts: Options, rs: RunState, inputs: Seq<Input>)
+    requires
+        inputs.len() > 0,
+        !rs.quit,
+    ensures
+        run_inputs(opts, rs, inputs) == run_inputs(opts, run_units(opts, rs, inputs[0].name, split_units(inputs[0].text)), inputs.drop_first()),
+{
+}
+
+/// Whether a source failed in these summaries.
+pub(crate) open spec fn any_errors(ss: Seq<RunSummary>) -> bool
+    decreases ss.len(),
+{
+    ss.len() > 0 && (ss[0].errors > 0 || any_errors(ss.drop_first()))
+}
+
+/// The evaluators `es`, with the summaries `ss`, went through `run_source_ref` on the inputs in
+/// order, and stopped at the end of the inputs or at `quit`.
+pub(crate) open spec fn r_sources(es: Seq<Evaluator>, ss: Seq<RunSummary>, opts: Options, rs: RunState, inputs: Seq<Input>) -> bool
+    decreases ss.len(),
+{
+    &&& es.len() == ss.len() + 1
+    &&& r_opts(es[0], opts)
+    &&& es[0].max_depth < usize::MAX - 2
+    &&& if ss.len() == 0 {
+        inputs.len() == 0
+    } else {
+        &&& inputs.len() > 0
+        &&& r_source(ss[0], es[0], es[1], opts, rs, inputs[0].name, inputs[0].text)
+        &&& if ss[0].quit {
+            ss.len() == 1
+        } else {
+            r_sources(es.drop_first(), ss.drop_first(), opts, run_units(opts, rs, inputs[0].name, split_units(inputs[0].text)), inputs.drop_first())
+        }
+    }
+}
+
+/// A run leaves the specification's model only by stopping.
+proof fn lemma_units_stop(opts: Options, rs: RunState, src: Seq<u8>, us: Seq<Unit>)
+    requires
+        rs.not_modeled ==> rs.quit,
+    ensures
+        run_units(opts, rs, src, us).not_modeled ==> run_units(opts, rs, src, us).quit,
+    decreases us.len(),
+{
+    if us.len() > 0 && !rs.quit {
+        lemma_units_stop(opts, spec_run_unit(opts, rs, src, us[0]), src, us.drop_first());
+    }
+}
+
+/// The theorem of `run_source_ref`, over the inputs in order.
+proof fn lemma_sources(es: Seq<Evaluator>, ss: Seq<RunSummary>, opts: Options, rs: RunState, inputs: Seq<Input>)
+    requires
+        r_sources(es, ss, opts, rs, inputs),
+        r_top(es[0], rs.st),
+        !rs.quit,
+        !rs.not_modeled,
+    ensures
+        ({
+            let g = run_inputs(opts, rs, inputs);
+            !g.not_modeled ==> {
+                &&& r_top(es.last(), g.st)
+                &&& g.quit == (ss.len() > 0 && ss.last().quit)
+                &&& (g.errors > 0) == (rs.errors > 0 || any_errors(ss))
+            }
+        }),
+    decreases ss.len(),
+{
+    if ss.len() > 0 {
+        let next = run_units(opts, rs, inputs[0].name, split_units(inputs[0].text));
+        lemma_run_inputs_step(opts, rs, inputs);
+        lemma_units_stop(opts, rs, inputs[0].name, split_units(inputs[0].text));
+        if next.quit {
+            assert(run_inputs(opts, next, inputs.drop_first()) == next);
+            if !next.not_modeled {
+                assert(ss[0].quit);
+                assert(es.last() == es[1]);
+                assert(ss.last() == ss[0]);
+                assert(any_errors(ss.drop_first()) == false);
+            }
+        } else if !next.not_modeled {
+            assert(!ss[0].quit);
+            lemma_sources(es.drop_first(), ss.drop_first(), opts, next, inputs.drop_first());
+            assert(es.drop_first().last() == es.last());
+            if ss.len() > 1 { assert(ss.drop_first().last() == ss.last()); }
+        } else {
+            assert(false);
+        }
+    }
+}
+
+/// The composition of the theorems. If evaluators start in the specification's initial state
+/// (`with_streams`, with `lemma_set_limit` for the nesting limit) and go through `run_source_ref`
+/// on the inputs in order, then the output, the diagnostics and the exit status are those of the
+/// specification's `run`, unless it leaves its model. The front ends' own loops are not proved
+/// to do this: the embedded targets call `run_source`, and `bc_clone` has its own loop over
+/// `push_line` and `run_unit`.
+pub(crate) proof fn lemma_outcome(es: Seq<Evaluator>, ss: Seq<RunSummary>, opts: Options, inputs: Seq<Input>)
+    requires
+        r_top(es[0], initial(opts.max_depth)),
+        r_sources(es, ss, opts, RunState { st: initial(opts.max_depth), errors: 0u64, quit: false, not_modeled: false }, inputs),
+        !run(opts, inputs).not_modeled,
+    ensures
+        out_log(&es.last().stdout_writer) == run(opts, inputs).stdout,
+        err_log(&es.last().stderr_writer) == run(opts, inputs).stderr,
+        run(opts, inputs).status == (if any_errors(ss) { 1u8 } else { 0u8 }),
+{
+    let rs = RunState { st: initial(opts.max_depth), errors: 0u64, quit: false, not_modeled: false };
+    lemma_sources(es, ss, opts, rs, inputs);
+    let g = run_inputs(opts, rs, inputs);
+    assert(r_state(Evaluator { eval_depth: 0, invocation_ibase: None, ..es.last() }, with_call(with_depth(g.st, 0), g.st.calls, false, g.st.inv_ibase)));
+}
+
 /// `run_units` stops at `quit`.
 proof fn lemma_run_units_stop(opts: Options, rs: RunState, src: Seq<u8>, us: Seq<Unit>)
     requires
@@ -1015,13 +1139,7 @@ proof fn lemma_run_units_stop(opts: Options, rs: RunState, src: Seq<u8>, us: Seq
 
 impl Default for UnitAccumulator {
     fn default() -> Self {
-        Self {
-            buf: Vec::new(),
-            start_line: 0,
-            next_line: 0,
-            scanned: 0,
-            scan: (0, false, false),
-        }
+        Self::new()
     }
 }
 
