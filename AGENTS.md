@@ -33,7 +33,7 @@ graph TD
     Zephyr[crates/bc_zephyr: Zephyr RTOS app logic] --> Core
     QEMU[crates/bc_qemu_riscv32: bare-metal self-test] --> Core
     Wasm[examples/wasm_web_app/crate: wasm-bindgen] --> Core
-    Core --> Parser[parser.rs: Lexer + Pratt parser]
+    Core --> Parser[parser/: Lexer + Pratt parser]
     Core --> Eval[eval/: Evaluator]
     Core --> Math[math.rs: BCNum]
     Core --> MathLib[mathlib/: certified -l library]
@@ -53,7 +53,7 @@ graph TD
 
 ## Core Engine (`crates/bc_core`)
 
-### Lexer and parser (`src/parser.rs`)
+### Lexer and parser (`src/parser/`)
 - The lexer works on bytes, which need not be UTF-8. It tracks line numbers and handles
   `/* */` comments, strings, and backslash-newline continuation. A string keeps its bytes
   (`Stmt::StringLiteral(Vec<u8>)`). An illegal character is the well-formed UTF-8 sequence
@@ -200,7 +200,7 @@ A kernel is `pub` only if a front end calls it; of those, only `verified_repl_bl
 has a precondition. Every call of a function with a `requires` clause is in verified code,
 except the following, whose preconditions are argued here but not proved:
 
-- The lexer (`parser.rs`): `peek`, `advance_char` and `try_peek_token` call
+- The lexer (`parser/lexer.rs`): `peek`, `advance_char` and `try_peek_token` call
   `verified_lexer_peek_char_index`, `verified_lexer_advance_step` and
   `verified_lexer_peek_token_index`. Their bounds (`text_len <= MAX_VERIFIED_SCALE`,
   `pos < 10^9`) do not hold for an input unit of more than 10^9 bytes. `scan_token` calls

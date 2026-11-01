@@ -35,7 +35,7 @@ verus! {
 // Lexer: lookahead, cursor advance and number scanning
 // ============================================================================
 
-/// Verified bounds-safe lookahead `Lexer::peek_char` (`crates/bc_core/src/parser.rs`).
+/// Verified bounds-safe lookahead `Lexer::peek_char` (`crates/bc_core/src/parser/lexer.rs`).
 ///
 /// Proves absence of out-of-bounds slice indexing and arithmetic overflow when peeking ahead,
 /// delegating index validation to `verified_lexer_peek_char_index` in `verified_kernels.rs`.
@@ -56,7 +56,7 @@ pub fn verified_lexer_peek_byte(text: &[u8], pos: usize, offset: usize) -> (res:
     }
 }
 
-/// Verified cursor and line advancement `Lexer::advance_char` (`crates/bc_core/src/parser.rs`).
+/// Verified cursor and line advancement `Lexer::advance_char` (`crates/bc_core/src/parser/lexer.rs`).
 ///
 /// Proves that:
 /// 1. Slice indexing `text[pos]` never panics (out-of-bounds is impossible).
@@ -121,7 +121,7 @@ pub open spec fn spec_is_bc_digit(b: u8) -> bool {
     (b'0' <= b && b <= b'9') || (b'A' <= b && b <= b'F')
 }
 
-/// Verified `Lexer` number token scanning loop (`crates/bc_core/src/parser.rs:443-468`).
+/// Verified `Lexer` number token scanning loop (`crates/bc_core/src/parser/lexer.rs`).
 ///
 /// Scans digits (`0-9`, `A-F`), at most one decimal point (`.`), and backslash-newline
 /// continuations (`\\\n` and `\\\r\n`).

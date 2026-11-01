@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 //! Dual-mode formally verified kernels shared directly between Verus SMT verification
-//! and production `#![no_std]` execution across `math.rs`, `eval/`, `parser.rs`, and `bc_cli`.
+//! and production `#![no_std]` execution across `math.rs`, `eval/`, `parser/`, and `bc_cli`.
 //!
 //! Every function in this module is a **Single Source of Truth**:
 //! - When compiled under Verus (`#[cfg(verus_keep_ghost)]`), `dual_verified!` expands inside
@@ -364,7 +364,7 @@ dual_verified! {
         }
     }
 
-    /// Verified check for valid bc numeric literal characters (`0..=9` or `A..=F`) (`parser.rs`).
+    /// Verified check for valid bc numeric literal characters (`0..=9` or `A..=F`) (`parser/lexer.rs`).
     pub(crate) fn verified_is_bc_digit(b: u32) -> (res: bool)
         ensures [
             res == ((48 <= b && b <= 57) || (65 <= b && b <= 70)),
@@ -373,7 +373,7 @@ dual_verified! {
         (b >= 48 && b <= 57) || (b >= 65 && b <= 70)
     }
 
-    /// Verified `Lexer::peek_token` buffer index clamping (`parser.rs`).
+    /// Verified `Lexer::peek_token` buffer index clamping (`parser/lexer.rs`).
     pub(crate) fn verified_lexer_peek_token_index(buffer_len: usize, offset: usize) -> (res: usize)
         requires [
             buffer_len >= 1,
@@ -392,7 +392,7 @@ dual_verified! {
         }
     }
 
-    /// Verified Pratt parser `next_min_prec` calculation (`parser.rs`).
+    /// Verified Pratt parser `next_min_prec` calculation (`parser/parse.rs`).
     pub(crate) fn verified_pratt_next_min_prec(op_prec: i8, right_assoc: bool) -> (res: i8)
         requires [
             1 <= op_prec && op_prec <= 10,
@@ -487,7 +487,7 @@ dual_verified! {
         base_prec + extra_prec + 15
     }
 
-    /// Verified nesting-limit check (`parser.rs` and `eval/`): whether `depth` enclosing
+    /// Verified nesting-limit check (`parser/parse.rs` and `eval/`): whether `depth` enclosing
     /// levels plus `height` more stay within `max_depth`, computed without overflow.
     pub(crate) fn verified_nesting_within_limit(depth: usize, height: usize, max_depth: usize) -> (res: bool)
         ensures [
@@ -536,7 +536,7 @@ dual_verified! {
         (break_flag || return_flag || quit_flag, false)
     }
 
-    /// Verified single-character cursor and line advancement (`parser.rs:Lexer::advance_char`).
+    /// Verified single-character cursor and line advancement (`parser/lexer.rs:Lexer::advance_char`).
     pub(crate) fn verified_lexer_advance_step(
         pos: usize,
         line: usize,
@@ -657,7 +657,7 @@ dual_verified! {
     }
 
     /// Verified Pratt parser infix operator precedence, associativity, and `next_min_prec`
-    /// (`parser.rs:Parser::get_infix_info`).
+    /// (`parser/parse.rs:Parser::get_infix_info`).
     ///
     /// Returns `(op_prec, right_assoc, next_min_prec)`.
     pub(crate) fn verified_pratt_infix_info(tok_kind: u8) -> (res: (i8, bool, i8))
@@ -691,7 +691,7 @@ dual_verified! {
         (op_prec, right_assoc, next_min_prec)
     }
 
-    /// Verified bounds-safe lookahead index calculation for `Lexer::peek_char` (`parser.rs`).
+    /// Verified bounds-safe lookahead index calculation for `Lexer::peek_char` (`parser/lexer.rs`).
     ///
     /// Returns `(in_bounds, valid_idx)`.
     pub(crate) fn verified_lexer_peek_char_index(
@@ -717,7 +717,7 @@ dual_verified! {
         }
     }
 
-    /// Verified identifier continuation character check (`a..=z`, `0..=9`, or `_`) (`parser.rs`).
+    /// Verified identifier continuation character check (`a..=z`, `0..=9`, or `_`) (`parser/lexer.rs`).
     pub(crate) fn verified_is_ident_continue(b: u32) -> (res: bool)
         ensures [
             res == ((97 <= b && b <= 122) || (48 <= b && b <= 57) || b == 95),
@@ -726,7 +726,7 @@ dual_verified! {
         (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95
     }
 
-    /// Verified test of the second byte of a UTF-8 sequence led by `lead` (`parser.rs`): the
+    /// Verified test of the second byte of a UTF-8 sequence led by `lead` (`parser/lexer.rs`): the
     /// specification's `second_ok` (no overlong forms, surrogates or code points above
     /// U+10FFFF).
     pub(crate) fn verified_utf8_second_ok(lead: u8, b: u8) -> (res: bool)
@@ -748,7 +748,7 @@ dual_verified! {
     }
 
     /// Verified length of the character at `text[pos]` for an `illegal character` diagnostic
-    /// (`parser.rs`): the length of the well-formed UTF-8 sequence that starts there, or 1 if
+    /// (`parser/lexer.rs`): the length of the well-formed UTF-8 sequence that starts there, or 1 if
     /// none does (the specification's `utf8_len`).
     pub(crate) fn verified_utf8_char_len(text: &[u8], pos: usize) -> (n: usize)
         requires [
