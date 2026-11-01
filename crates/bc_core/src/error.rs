@@ -74,12 +74,8 @@ pub enum BcError {
     /// `quit` was read. Not a failure: processing stops at this point.
     Quit,
     /// A lexical or syntax error. `line` is 1-based within the parsed text; `message` is the
-    /// user-facing text and `detail` describes what the parser expected (for debugging only).
-    Syntax {
-        line: usize,
-        message: String,
-        detail: String,
-    },
+    /// user-facing text.
+    Syntax { line: usize, message: String },
     /// A runtime error raised inside function `func` (`None` at top level).
     Runtime {
         kind: RuntimeError,
@@ -88,21 +84,11 @@ pub enum BcError {
 }
 
 impl BcError {
-    /// Creates a syntax diagnostic with its own message.
-    pub fn syntax_with_message(line: usize, message: String) -> Self {
-        Self::Syntax {
-            line,
-            detail: message.clone(),
-            message,
-        }
-    }
-
     /// Creates a generic `syntax error` diagnostic.
-    pub fn syntax(line: usize, detail: String) -> Self {
+    pub fn syntax(line: usize) -> Self {
         Self::Syntax {
             line,
             message: String::from("syntax error"),
-            detail,
         }
     }
 }
@@ -157,10 +143,7 @@ mod tests {
     #[test]
     fn display_formats() {
         assert_eq!(BcError::Quit.to_string(), "quit");
-        assert_eq!(
-            BcError::syntax(3, "expected Rparen".to_string()).to_string(),
-            "3: syntax error"
-        );
+        assert_eq!(BcError::syntax(3).to_string(), "3: syntax error");
         let err = BcError::from(RuntimeError::ParameterTypeMismatch("a".to_string()));
         assert_eq!(
             err.to_string(),

@@ -118,7 +118,7 @@ fn test_parser_arithmetic_precedence() {
 }
 
 #[test]
-#[should_panic(expected = "unterminated comment")]
+#[should_panic(expected = "syntax error")]
 fn test_lexer_unterminated_comment() {
     let mut lexer = Lexer::new(b"/* unterminated");
     let _ = lexer.get_next_token();
@@ -304,6 +304,18 @@ fn test_lexer_unexpected_bang() {
     let _ = lexer.get_next_token();
 }
 
+#[cfg(all(not(miri), target_pointer_width = "64"))]
+#[test]
+fn test_lexer_rejects_a_text_beyond_the_unit_limit() {
+    // The zeroed allocation is lazy: the lexer must reject the text without reading it.
+    let text = vec![0u8; crate::verified_kernels::BC_UNIT_MAX + 1];
+    let expected = BcError::Syntax {
+        line: 1,
+        message: "input unit too long".to_string(),
+    };
+    assert_eq!(Lexer::new(&text).try_peek_token(0), Err(expected));
+}
+
 #[test]
 fn test_lexer_advance_past_end() {
     let mut lexer = Lexer::new(b"abc");
@@ -313,40 +325,39 @@ fn test_lexer_advance_past_end() {
 #[test]
 fn test_lexer_peek_past_eof() {
     let mut lexer = Lexer::new(b"123");
-    let tok = lexer.peek_token(5);
-    assert_eq!(tok.token_type, TokenType::Eof);
+    assert_eq!(lexer.try_peek_token(5), Ok(TokenType::Eof));
 }
 
 #[test]
-#[should_panic(expected = "expected")]
+#[should_panic(expected = "syntax error")]
 fn test_parser_eat_mismatch() {
     let mut parser = Parser::new(Lexer::new(b"define f 123"));
     let _ = parser.parse_program();
 }
 
 #[test]
-#[should_panic(expected = "expected separator")]
+#[should_panic(expected = "syntax error")]
 fn test_parser_expected_separator() {
     let mut parser = Parser::new(Lexer::new(b"{ a = 5 b = 10 }"));
     let _ = parser.parse_program();
 }
 
 #[test]
-#[should_panic(expected = "expected function name")]
+#[should_panic(expected = "syntax error")]
 fn test_parser_expected_function_name() {
     let mut parser = Parser::new(Lexer::new(b"define 123() {}"));
     let _ = parser.parse_program();
 }
 
 #[test]
-#[should_panic(expected = "expected parameter name")]
+#[should_panic(expected = "syntax error")]
 fn test_parser_expected_parameter_name() {
     let mut parser = Parser::new(Lexer::new(b"define f(123) {}"));
     let _ = parser.parse_program();
 }
 
 #[test]
-#[should_panic(expected = "expected newline or semicolon")]
+#[should_panic(expected = "syntax error")]
 fn test_parser_expected_auto_separator() {
     let mut parser = Parser::new(Lexer::new(b"define f() { auto a 123; }"));
     let _ = parser.parse_program();

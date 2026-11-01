@@ -539,7 +539,7 @@ impl Evaluator {
     #[verifier::external_body]
     pub fn run_unit(&mut self, unit: &[u8], source: &str, first_line: usize) -> UnitOutcome {
         if !verified_unit_within_limit(unit.len()) {
-            let too_long = Err(BcError::syntax_with_message(1, String::from(UNIT_TOO_LONG)));
+            let too_long = Err(BcError::Syntax { line: 1, message: String::from(UNIT_TOO_LONG) });
             return self.run_parsed(too_long, &Vec::new(), source, first_line, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()));
         }
         let policy = self.extension_policy;

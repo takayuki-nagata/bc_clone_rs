@@ -92,6 +92,9 @@ against the specification. AGENTS.md lists what the proofs assume.
   `bc: unrecognized option '--name'`.
 
 ### API changes (`bc_core`)
+- `BcError::Syntax` no longer has the debug-only field `detail`, and `BcError::syntax` takes only
+  the line. `Lexer::try_peek_token` returns the token's kind. `Lexer::line` and `Parser::lexer` are
+  private.
 - The `Evaluator`'s state is no longer public: `variables`, `arrays`, `functions`,
   `math_enabled`, the output streams, the `break`/`return`/`quit` flags and `return_value` are
   crate-private, so that code outside `bc_core` cannot store a number that breaks the invariant

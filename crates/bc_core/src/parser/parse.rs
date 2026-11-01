@@ -12,13 +12,12 @@ use crate::verified_kernels::{
     verified_pratt_infix_info,
 };
 use alloc::boxed::Box;
-use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Recursive descent parser with operator precedence support for bc.
 pub struct Parser {
-    pub lexer: Lexer,
+    lexer: Lexer,
     current_token: Token,
     /// Number of enclosing `for`/`while` bodies, for rejecting a stray `break`.
     loop_depth: usize,
@@ -49,6 +48,20 @@ pub const NESTING_TOO_DEEP: &str = "nesting too deep";
 /// stack.
 pub const DEFAULT_MAX_DEPTH: usize = 128;
 
+/// Precedence info for binary and assignment operators: `(precedence, is_assignment,
+/// next_min_precedence)`.
+fn infix_info(token_type: TokenType) -> (i8, bool, i8) {
+    let tok_kind = match token_type {
+        TokenType::AssignOp => TOK_ASSIGN_OP,
+        TokenType::Plus | TokenType::Minus => TOK_PLUS_MINUS,
+        TokenType::MulOp => TOK_MUL_OP,
+        TokenType::Exp => TOK_EXP_OP,
+        _ => 0,
+    };
+    let (op_prec, _right_assoc, next_min_prec) = verified_pratt_infix_info(tok_kind);
+    (op_prec, token_type == TokenType::AssignOp, next_min_prec)
+}
+
 impl Parser {
     /// Creates a new Parser from the Lexer, returning Err on initial lexical error.
     pub fn try_new(mut lexer: Lexer) -> Result<Self, BcError> {
@@ -77,7 +90,6 @@ impl Parser {
         Err(BcError::Syntax {
             line: self.last_line,
             message: String::from(NESTING_TOO_DEEP),
-            detail: String::from(NESTING_TOO_DEEP),
         })
     }
 
@@ -106,8 +118,8 @@ impl Parser {
     }
 
     /// Triggers a syntax error during parsing.
-    fn error<T>(&self, msg: &str) -> Result<T, BcError> {
-        Err(BcError::syntax(self.current_token.line, String::from(msg)))
+    fn error<T>(&self) -> Result<T, BcError> {
+        Err(BcError::syntax(self.current_token.line))
     }
 
     /// Sets how uses of non-POSIX syntax are treated.
@@ -139,7 +151,9 @@ impl Parser {
 
     fn note_name(&mut self, name: &str) {
         if name.len() > 1 {
-            self.extension(format!("multiple letter name - {}", name));
+            let mut description = String::from("multiple letter name - ");
+            description.push_str(name);
+            self.extension(description);
         }
     }
 
@@ -149,7 +163,6 @@ impl Parser {
         Err(BcError::Syntax {
             line: self.current_token.line,
             message: String::from(message),
-            detail: String::from(message),
         })
     }
 
@@ -168,16 +181,13 @@ impl Parser {
             self.current_token = self.lexer.try_get_next_token()?;
             Ok(())
         } else {
-            self.error(&format!(
-                "expected {:?}, got {:?}",
-                token_type, self.current_token.token_type
-            ))
+            self.error()
         }
     }
 
     /// Peeks the token type of the token at `offset`.
     fn peek_token_type(&mut self, offset: usize) -> Result<TokenType, BcError> {
-        Ok(self.lexer.try_peek_token(offset)?.token_type)
+        self.lexer.try_peek_token(offset)
     }
 
     /// Parses the program fully, returning Err on lexical/syntax error or `"quit"`.
@@ -269,7 +279,7 @@ impl Parser {
                     self.eat(TokenType::Newline)?;
                 }
                 TokenType::Rbrace | TokenType::Eof => {}
-                _ => return self.error(&format!("expected separator, got {:?}", nt)),
+                _ => return self.error(),
             }
         }
         Ok(stmts)
@@ -394,7 +404,7 @@ impl Parser {
     fn parse_function(&mut self) -> Result<Stmt, BcError> {
         self.eat(TokenType::Define)?;
         if self.current_token.token_type != TokenType::Letter {
-            return self.error("expected function name (letter)");
+            return self.error();
         }
         let name = self.current_token.text();
         self.eat(TokenType::Letter)?;
@@ -441,7 +451,7 @@ impl Parser {
         let mut lst = Vec::new();
         loop {
             if self.current_token.token_type != TokenType::Letter {
-                return self.error("expected parameter name (letter)");
+                return self.error();
             }
             let pname = self.eat_name()?;
             let mut is_arr = false;
@@ -477,7 +487,7 @@ impl Parser {
         } else if t == TokenType::Semicolon {
             self.eat(TokenType::Semicolon)?;
         } else {
-            return self.error("expected newline or semicolon after auto declaration");
+            return self.error();
         }
         Ok(lst)
     }
@@ -523,15 +533,15 @@ impl Parser {
     fn parse_expr_precedence_inner(&mut self, min_prec: i8) -> Result<(Expr, Height), BcError> {
         let (mut left, mut height) = self.parse_prefix()?;
         loop {
-            let (op_prec, op_class, next_min_prec) = self.get_infix_info(&self.current_token);
+            let (op_prec, is_assign, next_min_prec) = infix_info(self.current_token.token_type);
             if op_prec < min_prec {
                 break;
             }
 
-            if op_class == "ASSIGN" {
+            if is_assign {
                 // Assignments to named expressions are parsed in `parse_primary`; anything
                 // else on the left (`1 = 2`, `(a) = 2`, `a = 1 = 2`) is not assignable.
-                return self.error("assignment to an expression that is not a named expression");
+                return self.error();
             }
 
             let op_val = self.current_token.text();
@@ -543,19 +553,6 @@ impl Parser {
             left = Expr::BinaryOp(BinOp::from_symbol(&op_val), Box::new(left), Box::new(right));
         }
         Ok((left, self.check_height(height)?))
-    }
-
-    /// Retrieves precedence info for binary and assignment operators.
-    fn get_infix_info(&self, token: &Token) -> (i8, &'static str, i8) {
-        let (tok_kind, op_class) = match token.token_type {
-            TokenType::AssignOp => (TOK_ASSIGN_OP, "ASSIGN"),
-            TokenType::Plus | TokenType::Minus => (TOK_PLUS_MINUS, "BINARY"),
-            TokenType::MulOp => (TOK_MUL_OP, "BINARY"),
-            TokenType::Exp => (TOK_EXP_OP, "BINARY"),
-            _ => (0, ""),
-        };
-        let (op_prec, _right_assoc, next_min_prec) = verified_pratt_infix_info(tok_kind);
-        (op_prec, op_class, next_min_prec)
     }
 
     /// Parses prefixes (unary operators).
@@ -682,7 +679,7 @@ impl Parser {
                     Ok((Expr::Variable(name), 1))
                 }
             }
-            _ => self.error(&format!("expected named expression, got {:?}", t)),
+            _ => self.error(),
         }
     }
 
