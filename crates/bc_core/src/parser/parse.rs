@@ -305,70 +305,96 @@ impl Parser {
     fn parse_statement_inner(&mut self) -> Result<Stmt, BcError> {
         let t = self.current_token.token_type;
         match t {
-            TokenType::String => {
-                let val = self.current_token.value.clone();
-                self.eat(TokenType::String)?;
-                Ok(Stmt::StringLiteral(val))
-            }
-            TokenType::Break => {
-                // GNU bc reports a stray `break` on its own line, and a stray `return` on the
-                // line of the token after it.
-                if self.loop_depth == 0 {
-                    return self.misplaced("Break outside a for/while");
-                }
-                self.eat(TokenType::Break)?;
-                Ok(Stmt::Break)
-            }
+            TokenType::String => self.parse_string_stmt(),
+            TokenType::Break => self.parse_break_stmt(),
             TokenType::Quit => Err(BcError::Quit),
-            TokenType::Return => {
-                let stmt = self.parse_return()?;
-                if !self.in_function {
-                    return self.misplaced("Return outside of a function.");
-                }
-                Ok(stmt)
-            }
-            TokenType::For => {
-                self.eat(TokenType::For)?;
-                self.eat(TokenType::Lparen)?;
-                let init = self.parse_expression()?;
-                self.eat(TokenType::Semicolon)?;
-                let cond = self.parse_relational_expression()?;
-                self.eat(TokenType::Semicolon)?;
-                let post = self.parse_expression()?;
-                self.eat(TokenType::Rparen)?;
-                let body = self.parse_loop_body()?;
-                Ok(Stmt::For(init, cond, post, Box::new(body)))
-            }
-            TokenType::If => {
-                self.eat(TokenType::If)?;
-                self.eat(TokenType::Lparen)?;
-                let cond = self.parse_relational_expression()?;
-                self.eat(TokenType::Rparen)?;
-                let body = self.parse_statement()?;
-                Ok(Stmt::If(cond, Box::new(body)))
-            }
-            TokenType::While => {
-                self.eat(TokenType::While)?;
-                self.eat(TokenType::Lparen)?;
-                let cond = self.parse_relational_expression()?;
-                self.eat(TokenType::Rparen)?;
-                let body = self.parse_loop_body()?;
-                Ok(Stmt::While(cond, Box::new(body)))
-            }
-            TokenType::Lbrace => {
-                self.eat(TokenType::Lbrace)?;
-                let stmts = self.parse_statement_list()?;
-                self.eat(TokenType::Rbrace)?;
-                Ok(Stmt::Block(stmts))
-            }
-            _ => {
-                let expr = self.parse_relational_expression()?;
-                if matches!(expr, Expr::RelationalOp(..)) {
-                    self.extension(String::from("comparison in expression"));
-                }
-                Ok(Stmt::Expr(expr))
-            }
+            TokenType::Return => self.parse_return_stmt(),
+            TokenType::For => self.parse_for(),
+            TokenType::If => self.parse_if(),
+            TokenType::While => self.parse_while(),
+            TokenType::Lbrace => self.parse_block(),
+            _ => self.parse_expr_stmt(),
         }
+    }
+
+    /// Parses a string statement.
+    fn parse_string_stmt(&mut self) -> Result<Stmt, BcError> {
+        let val = self.current_token.value.clone();
+        self.eat(TokenType::String)?;
+        Ok(Stmt::StringLiteral(val))
+    }
+
+    /// Parses `break`, which must be inside a loop. GNU bc reports a stray `break` on its own
+    /// line, and a stray `return` on the line of the token after it.
+    fn parse_break_stmt(&mut self) -> Result<Stmt, BcError> {
+        if self.loop_depth == 0 {
+            return self.misplaced("Break outside a for/while");
+        }
+        self.eat(TokenType::Break)?;
+        Ok(Stmt::Break)
+    }
+
+    /// Parses `return`, which must be inside a function.
+    fn parse_return_stmt(&mut self) -> Result<Stmt, BcError> {
+        let stmt = self.parse_return()?;
+        if !self.in_function {
+            return self.misplaced("Return outside of a function.");
+        }
+        Ok(stmt)
+    }
+
+    /// Parses `{ statement_list }`.
+    fn parse_block(&mut self) -> Result<Stmt, BcError> {
+        self.eat(TokenType::Lbrace)?;
+        let stmts = self.parse_statement_list()?;
+        self.eat(TokenType::Rbrace)?;
+        Ok(Stmt::Block(stmts))
+    }
+
+    /// Parses an expression statement; a relational one is a GNU extension.
+    fn parse_expr_stmt(&mut self) -> Result<Stmt, BcError> {
+        let expr = self.parse_relational_expression()?;
+        if matches!(expr, Expr::RelationalOp(..)) {
+            self.extension(String::from("comparison in expression"));
+        }
+        Ok(Stmt::Expr(expr))
+    }
+
+    /// Parses the `for` statement.
+    fn parse_for(&mut self) -> Result<Stmt, BcError> {
+        self.eat(TokenType::For)?;
+        self.eat(TokenType::Lparen)?;
+        let init = self.parse_expression()?;
+        self.eat(TokenType::Semicolon)?;
+        let cond = self.parse_relational_expression()?;
+        self.eat(TokenType::Semicolon)?;
+        let post = self.parse_expression()?;
+        self.eat(TokenType::Rparen)?;
+        let body = self.parse_loop_body()?;
+        Ok(Stmt::For(init, cond, post, Box::new(body)))
+    }
+
+    /// Parses the keyword `if` or `while` and the `( relational_expression )` after it.
+    fn parse_cond(&mut self) -> Result<Expr, BcError> {
+        self.eat(self.current_token.token_type)?;
+        self.eat(TokenType::Lparen)?;
+        let cond = self.parse_relational_expression()?;
+        self.eat(TokenType::Rparen)?;
+        Ok(cond)
+    }
+
+    /// Parses the `if` statement.
+    fn parse_if(&mut self) -> Result<Stmt, BcError> {
+        let cond = self.parse_cond()?;
+        let body = self.parse_statement()?;
+        Ok(Stmt::If(cond, Box::new(body)))
+    }
+
+    /// Parses the `while` statement.
+    fn parse_while(&mut self) -> Result<Stmt, BcError> {
+        let cond = self.parse_cond()?;
+        let body = self.parse_loop_body()?;
+        Ok(Stmt::While(cond, Box::new(body)))
     }
 
     /// Parses `return`, `return (e)`, or the GNU extension `return e`.
@@ -411,6 +437,11 @@ impl Parser {
 
         self.eat(TokenType::Lparen)?;
         let params = self.parse_opt_define_list()?;
+        self.parse_function_body(name, params)
+    }
+
+    /// Parses the rest of a function definition after its parameter list.
+    fn parse_function_body(&mut self, name: String, params: Vec<Param>) -> Result<Stmt, BcError> {
         self.eat(TokenType::Rparen)?;
 
         self.eat(TokenType::Lbrace)?;
@@ -422,6 +453,16 @@ impl Parser {
         self.skip_newlines()?;
 
         let autos = self.parse_opt_auto_define_list()?;
+        self.parse_function_stmts(name, params, autos)
+    }
+
+    /// Parses the statements of a function body, with `in_function` set and no enclosing loop.
+    fn parse_function_stmts(
+        &mut self,
+        name: String,
+        params: Vec<Param>,
+        autos: Vec<Param>,
+    ) -> Result<Stmt, BcError> {
         let outer = (self.loop_depth, self.in_function);
         (self.loop_depth, self.in_function) = (0, true);
         let body = self.parse_statement_list();
@@ -583,6 +624,20 @@ impl Parser {
         Ok(inner)
     }
 
+    /// Parses a keyword followed by a parenthesized expression: `length`, `sqrt` or `scale`
+    /// (`which` is 0, 1 or 2).
+    fn parse_builtin(&mut self, which: u8) -> Result<(Expr, Height), BcError> {
+        self.eat(self.current_token.token_type)?;
+        let (expr, h) = self.parse_parenthesized()?;
+        let arg = Box::new(expr);
+        let call = match which {
+            0 => Expr::LengthCall(arg),
+            1 => Expr::SqrtCall(arg),
+            _ => Expr::ScaleCall(arg),
+        };
+        Ok((call, h + 1))
+    }
+
     /// Parses primary expressions (literals, variables, built-ins, calls).
     fn parse_primary(&mut self) -> Result<(Expr, Height), BcError> {
         let t = self.current_token.token_type;
@@ -596,59 +651,55 @@ impl Parser {
                 let (expr, h) = self.parse_parenthesized()?;
                 Ok((Expr::Paren(Box::new(expr)), h + 1))
             }
-            TokenType::Length => {
-                self.eat(TokenType::Length)?;
-                let (expr, h) = self.parse_parenthesized()?;
-                Ok((Expr::LengthCall(Box::new(expr)), h + 1))
-            }
-            TokenType::Sqrt => {
-                self.eat(TokenType::Sqrt)?;
-                let (expr, h) = self.parse_parenthesized()?;
-                Ok((Expr::SqrtCall(Box::new(expr)), h + 1))
-            }
+            TokenType::Length => self.parse_builtin(0),
+            TokenType::Sqrt => self.parse_builtin(1),
             TokenType::Scale if self.peek_token_type(0)? == TokenType::Lparen => {
-                self.eat(TokenType::Scale)?;
-                let (expr, h) = self.parse_parenthesized()?;
-                Ok((Expr::ScaleCall(Box::new(expr)), h + 1))
+                self.parse_builtin(2)
             }
-            TokenType::Letter if self.peek_token_type(0)? == TokenType::Lparen => {
-                let name = self.eat_name()?;
-                self.eat(TokenType::Lparen)?;
-                let (args, h) = self.parse_opt_argument_list()?;
-                self.eat(TokenType::Rparen)?;
-                Ok((Expr::Call(name, args), h + 1))
+            TokenType::Letter if self.peek_token_type(0)? == TokenType::Lparen => self.parse_call(),
+            _ => self.parse_named_tail(),
+        }
+    }
+
+    /// Parses a function call `name(args)`.
+    fn parse_call(&mut self) -> Result<(Expr, Height), BcError> {
+        let name = self.eat_name()?;
+        self.eat(TokenType::Lparen)?;
+        let (args, h) = self.parse_opt_argument_list()?;
+        self.eat(TokenType::Rparen)?;
+        Ok((Expr::Call(name, args), h + 1))
+    }
+
+    /// Parses a named expression, then a postfix `++`/`--` or an assignment that binds to it.
+    fn parse_named_tail(&mut self) -> Result<(Expr, Height), BcError> {
+        let (target, target_h) = self.parse_named_expression()?;
+        match self.current_token.token_type {
+            TokenType::IncrDecr => {
+                let op = self.current_token.text();
+                self.eat(TokenType::IncrDecr)?;
+                Ok((
+                    Expr::Update(op.starts_with('+'), false, Box::new(target)),
+                    target_h + 1,
+                ))
             }
-            _ => {
-                let (target, target_h) = self.parse_named_expression()?;
-                match self.current_token.token_type {
-                    TokenType::IncrDecr => {
-                        let op = self.current_token.text();
-                        self.eat(TokenType::IncrDecr)?;
-                        Ok((
-                            Expr::Update(op.starts_with('+'), false, Box::new(target)),
-                            target_h + 1,
-                        ))
-                    }
-                    // As in GNU bc's grammar, an assignment operator binds to the named
-                    // expression right before it: `a + b = 3` is `a + (b = 3)` and `-a = 5`
-                    // is `-(a = 5)`. The right-hand side extends as far as possible.
-                    TokenType::AssignOp => {
-                        let op = self.current_token.text();
-                        self.eat(TokenType::AssignOp)?;
-                        let (_, _, rhs_min_prec) = verified_pratt_infix_info(TOK_ASSIGN_OP);
-                        let (value, value_h) = self.parse_expr_precedence(rhs_min_prec)?;
-                        Ok((
-                            Expr::AssignOp(
-                                AssignOp::from_symbol(&op),
-                                Box::new(target),
-                                Box::new(value),
-                            ),
-                            1 + target_h.max(value_h),
-                        ))
-                    }
-                    _ => Ok((target, target_h)),
-                }
+            // As in GNU bc's grammar, an assignment operator binds to the named
+            // expression right before it: `a + b = 3` is `a + (b = 3)` and `-a = 5`
+            // is `-(a = 5)`. The right-hand side extends as far as possible.
+            TokenType::AssignOp => {
+                let op = self.current_token.text();
+                self.eat(TokenType::AssignOp)?;
+                let (_, _, rhs_min_prec) = verified_pratt_infix_info(TOK_ASSIGN_OP);
+                let (value, value_h) = self.parse_expr_precedence(rhs_min_prec)?;
+                Ok((
+                    Expr::AssignOp(
+                        AssignOp::from_symbol(&op),
+                        Box::new(target),
+                        Box::new(value),
+                    ),
+                    1 + target_h.max(value_h),
+                ))
             }
+            _ => Ok((target, target_h)),
         }
     }
 
@@ -671,16 +722,21 @@ impl Parser {
             TokenType::Letter => {
                 let name = self.eat_name()?;
                 if self.current_token.token_type == TokenType::Lbracket {
-                    self.eat(TokenType::Lbracket)?;
-                    let (idx, h) = self.parse_expression_h()?;
-                    self.eat(TokenType::Rbracket)?;
-                    Ok((Expr::ArrayAccess(name, Box::new(idx)), h + 1))
+                    self.parse_subscript(name)
                 } else {
                     Ok((Expr::Variable(name), 1))
                 }
             }
             _ => self.error(),
         }
+    }
+
+    /// Parses `[ expression ]` after the array name `name`.
+    fn parse_subscript(&mut self, name: String) -> Result<(Expr, Height), BcError> {
+        self.eat(TokenType::Lbracket)?;
+        let (idx, h) = self.parse_expression_h()?;
+        self.eat(TokenType::Rbracket)?;
+        Ok((Expr::ArrayAccess(name, Box::new(idx)), h + 1))
     }
 
     /// Parses optional function call argument list.
