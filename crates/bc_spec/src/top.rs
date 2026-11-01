@@ -117,11 +117,15 @@ pub open spec fn run_unit(opts: Options, rs: RunState, source: Seq<u8>, u: Unit)
 
 /// `Evaluator::run_unit` after the length check.
 pub open spec fn run_parsed_unit(opts: Options, rs: RunState, source: Seq<u8>, u: Unit) -> RunState {
+    let cfg = PCfg { record_extensions: opts.reject_extensions || opts.warn_extensions, max_depth: opts.max_depth };
+    run_parse_result(opts, rs, source, u.line, parse_unit(tokenize(u.text), cfg))
+}
+
+/// What a unit that starts at line `first` does, given the result `p` of parsing it.
+pub open spec fn run_parse_result(opts: Options, rs: RunState, source: Seq<u8>, first: u64, p: PR) -> RunState {
     let st0 = with_call(with_depth(rs.st, 0u64), rs.st.calls, false, rs.st.inv_ibase);
     let reject = opts.reject_extensions;
-    let cfg = PCfg { record_extensions: reject || opts.warn_extensions, max_depth: opts.max_depth };
-    let p = parse_unit(tokenize(u.text), cfg);
-    let st1 = with_err(st0, st0.err.add(ext_diags(p.st.ext, source, u.line, reject)));
+    let st1 = with_err(st0, st0.err.add(ext_diags(p.st.ext, source, first, reject)));
     if p.err.out_of_fuel {
         RunState { st: st1, errors: rs.errors, quit: true, not_modeled: true }
     } else if reject && p.st.ext.len() > 0 && p.ok {
@@ -130,7 +134,7 @@ pub open spec fn run_parsed_unit(opts: Options, rs: RunState, source: Seq<u8>, u
         if p.err.quit {
             RunState { st: st1, errors: rs.errors, quit: true, not_modeled: false }
         } else {
-            failed(rs, with_err(st1, st1.err.add(at_line(source, u.line, p.err.line)).add(p.err.msg).push(10u8)))
+            failed(rs, with_err(st1, st1.err.add(at_line(source, first, p.err.line)).add(p.err.msg).push(10u8)))
         }
     } else {
         let r = exec_items(p.st.nodes, p.list, st1, 0x4000_0000_0000_0000u64);

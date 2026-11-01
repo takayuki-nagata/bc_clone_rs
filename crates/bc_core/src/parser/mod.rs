@@ -41,6 +41,7 @@ mod parse;
 mod tests;
 
 pub use lexer::Lexer;
+pub(crate) use parse::parse_unit_ref;
 pub use parse::{DEFAULT_MAX_DEPTH, NESTING_TOO_DEEP, Parser};
 
 /// The types of tokens supported by the bc lexer.

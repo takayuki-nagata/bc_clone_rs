@@ -262,4 +262,181 @@ pub proof fn lemma_lex_len(t: Seq<u8>, st: LexState, out: Seq<Token>)
     }
 }
 
+/// Whether all the bytes are ASCII.
+pub open spec fn ascii_bytes(b: Seq<u8>) -> bool {
+    forall|i: int| 0 <= i < b.len() ==> b[i] < 0x80
+}
+
+/// A token that may come before the last one.
+pub open spec fn tok_good(x: Token) -> bool {
+    &&& !(x.kind is Eof)
+    &&& !(x.kind is LexError)
+    &&& (x.kind is Letter || x.kind is Number) ==> ascii_bytes(x.text)
+}
+
+/// The shape of a token sequence.
+pub open spec fn toks_shape(r: Seq<Token>) -> bool {
+    &&& r.len() > 0
+    &&& r.last().kind is Eof || r.last().kind is LexError
+    &&& forall|i: int| 0 <= i < r.len() - 1 ==> #[trigger] tok_good(r[i])
+}
+
+proof fn lemma_push_end(out: Seq<Token>, x: Token)
+    requires
+        forall|i: int| 0 <= i < out.len() ==> #[trigger] tok_good(out[i]),
+        x.kind is Eof || x.kind is LexError,
+    ensures
+        toks_shape(out.push(x)),
+{
+    assert forall|i: int| 0 <= i < out.push(x).len() - 1 implies #[trigger] tok_good(out.push(x)[i]) by {
+        assert(out.push(x)[i] == out[i]);
+    }
+}
+
+proof fn lemma_push_good(out: Seq<Token>, x: Token)
+    requires
+        forall|i: int| 0 <= i < out.len() ==> #[trigger] tok_good(out[i]),
+        tok_good(x),
+    ensures
+        forall|i: int| 0 <= i < out.push(x).len() ==> #[trigger] tok_good(out.push(x)[i]),
+{
+    assert forall|i: int| 0 <= i < out.push(x).len() implies #[trigger] tok_good(out.push(x)[i]) by {
+        if i < out.len() { assert(out.push(x)[i] == out[i]); }
+    }
+}
+
+proof fn lemma_ascii_push(b: Seq<u8>, c: u8)
+    requires
+        ascii_bytes(b),
+        c < 0x80,
+    ensures
+        ascii_bytes(b.push(c)),
+{
+    assert forall|i: int| 0 <= i < b.push(c).len() implies b.push(c)[i] < 0x80 by {
+        if i < b.len() { assert(b.push(c)[i] == b[i]); }
+    }
+}
+
+/// `lex` ends with its one `Eof` or `LexError`, and names and numbers are ASCII.
+pub proof fn lemma_lex_shape(t: Seq<u8>, st: LexState, out: Seq<Token>)
+    requires
+        forall|i: int| 0 <= i < out.len() ==> #[trigger] tok_good(out[i]),
+        (st.mode is Num || st.mode is Ident) ==> ascii_bytes(st.buf),
+    ensures
+        toks_shape(lex(t, st, out)),
+    decreases t.len(), mode_rank(st.mode)
+{
+    let e = Seq::<u8>::empty();
+    assert(ascii_bytes(e));
+    match st.mode {
+        Mode::Skip => {
+            if t.len() == 0 {
+                lemma_push_end(out, tok(Tok::Eof, seq![], st.line));
+            } else {
+                let line = next_line(st.line, t[0]);
+                if st.skip > 1 {
+                    lemma_lex_shape(t.drop_first(), skipping(line, (st.skip - 1) as u8, st.to_comment), out);
+                } else if st.to_comment {
+                    lemma_lex_shape(t.drop_first(), LexState { mode: Mode::Comment, line: line, skip: 0u8, to_comment: false, buf: seq![], has_dot: false, start_line: 0u64 }, out);
+                } else {
+                    lemma_lex_shape(t.drop_first(), normal(line), out);
+                }
+            }
+        },
+        Mode::Comment => {
+            if t.len() == 0 {
+                lemma_push_end(out, tok(Tok::LexError, syntax_error_msg(), st.line));
+            } else if t[0] == 42u8 && t.len() >= 2 && t[1] == 47u8 {
+                lemma_lex_shape(t.drop_first(), skipping(st.line, 1u8, false), out);
+            } else {
+                lemma_lex_shape(t.drop_first(), LexState { mode: Mode::Comment, line: next_line(st.line, t[0]), skip: 0u8, to_comment: false, buf: seq![], has_dot: false, start_line: 0u64 }, out);
+            }
+        },
+        Mode::Str => {
+            if t.len() == 0 {
+                lemma_push_end(out, tok(Tok::LexError, illegal_msg(seq![34u8]), st.start_line));
+            } else if t[0] == 34u8 {
+                let x = tok(Tok::Str, st.buf, st.line);
+                lemma_push_good(out, x);
+                lemma_lex_shape(t.drop_first(), normal(st.line), out.push(x));
+            } else {
+                lemma_lex_shape(t.drop_first(), LexState { mode: Mode::Str, line: next_line(st.line, t[0]), skip: 0u8, to_comment: false, buf: st.buf.push(t[0]), has_dot: false, start_line: st.start_line }, out);
+            }
+        },
+        Mode::Num => {
+            if t.len() > 0 && is_bc_digit(t[0]) {
+                lemma_ascii_push(st.buf, t[0]);
+                lemma_lex_shape(t.drop_first(), LexState { mode: Mode::Num, line: st.line, skip: 0u8, to_comment: false, buf: st.buf.push(t[0]), has_dot: st.has_dot, start_line: 0u64 }, out);
+            } else if t.len() > 0 && t[0] == 46u8 && !st.has_dot {
+                lemma_ascii_push(st.buf, t[0]);
+                lemma_lex_shape(t.drop_first(), LexState { mode: Mode::Num, line: st.line, skip: 0u8, to_comment: false, buf: st.buf.push(t[0]), has_dot: true, start_line: 0u64 }, out);
+            } else if t.len() >= 2 && t[0] == 92u8 && t[1] == 10u8 {
+                lemma_lex_shape(t.drop_first().drop_first(), LexState { mode: Mode::Num, line: next_line(st.line, 10u8), skip: 0u8, to_comment: false, buf: st.buf, has_dot: st.has_dot, start_line: 0u64 }, out);
+            } else if t.len() >= 3 && t[0] == 92u8 && t[1] == 13u8 && t[2] == 10u8 {
+                lemma_lex_shape(t.drop_first().drop_first().drop_first(), LexState { mode: Mode::Num, line: next_line(st.line, 10u8), skip: 0u8, to_comment: false, buf: st.buf, has_dot: st.has_dot, start_line: 0u64 }, out);
+            } else {
+                let x = tok(Tok::Number, st.buf, st.line);
+                lemma_push_good(out, x);
+                lemma_lex_shape(t, normal(st.line), out.push(x));
+            }
+        },
+        Mode::Ident => {
+            if t.len() > 0 && is_ident_continue(t[0]) {
+                lemma_ascii_push(st.buf, t[0]);
+                lemma_lex_shape(t.drop_first(), LexState { mode: Mode::Ident, line: st.line, skip: 0u8, to_comment: false, buf: st.buf.push(t[0]), has_dot: false, start_line: 0u64 }, out);
+            } else {
+                let x = tok(keyword(st.buf), st.buf, st.line);
+                lemma_push_good(out, x);
+                lemma_lex_shape(t, normal(st.line), out.push(x));
+            }
+        },
+        Mode::Normal => {
+            if t.len() == 0 {
+                lemma_push_end(out, tok(Tok::Eof, seq![], st.line));
+            } else {
+                let c = t[0];
+                let line = st.line;
+                let r = t.drop_first();
+                if c == 32u8 || c == 9u8 || c == 13u8 {
+                    lemma_lex_shape(r, normal(line), out);
+                } else if c == 92u8 && t.len() >= 2 && t[1] == 10u8 {
+                    lemma_lex_shape(r, skipping(line, 1u8, false), out);
+                } else if c == 92u8 && t.len() >= 3 && t[1] == 13u8 && t[2] == 10u8 {
+                    lemma_lex_shape(r, skipping(line, 2u8, false), out);
+                } else if c == 47u8 && t.len() >= 2 && t[1] == 42u8 {
+                    lemma_lex_shape(r, skipping(line, 1u8, true), out);
+                } else if c == 10u8 {
+                    let l2 = next_line(line, c);
+                    let x = tok(Tok::Newline, seq![10u8], l2);
+                    lemma_push_good(out, x);
+                    lemma_lex_shape(r, normal(l2), out.push(x));
+                } else if c == 34u8 {
+                    lemma_lex_shape(r, LexState { mode: Mode::Str, line: line, skip: 0u8, to_comment: false, buf: seq![], has_dot: false, start_line: line }, out);
+                } else if is_bc_digit(c) || (c == 46u8 && t.len() >= 2 && is_bc_digit(t[1])) {
+                    lemma_ascii_push(e, c);
+                    assert(e.push(c) =~= seq![c]);
+                    lemma_lex_shape(r, LexState { mode: Mode::Num, line: line, skip: 0u8, to_comment: false, buf: seq![c], has_dot: c == 46u8, start_line: 0u64 }, out);
+                } else if 97 <= c && c <= 122 {
+                    lemma_ascii_push(e, c);
+                    assert(e.push(c) =~= seq![c]);
+                    lemma_lex_shape(r, LexState { mode: Mode::Ident, line: line, skip: 0u8, to_comment: false, buf: seq![c], has_dot: false, start_line: 0u64 }, out);
+                } else {
+                    let op = operator(t);
+                    if op.1 == 0 {
+                        lemma_push_end(out, tok(Tok::LexError, illegal_msg(t), line));
+                    } else if op.1 == 1 {
+                        let x = tok(op.0, seq![c], line);
+                        lemma_push_good(out, x);
+                        lemma_lex_shape(r, normal(line), out.push(x));
+                    } else {
+                        let x = tok(op.0, seq![c, t[1]], line);
+                        lemma_push_good(out, x);
+                        lemma_lex_shape(r, skipping(line, 1u8, false), out.push(x));
+                    }
+                }
+            }
+        },
+    }
+}
+
 } // verus!

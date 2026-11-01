@@ -16,7 +16,7 @@ use crate::eval::Evaluator;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{err_log, lemma_inv_frame, out_col, out_log, r_state, r_unit, same_but_err};
 use crate::format::push_dec;
-use crate::parser::{ExtensionPolicy, Lexer, Parser, Stmt};
+use crate::parser::{ExtensionPolicy, Stmt, ascii_string, parse_unit_ref};
 #[cfg(verus_keep_ghost)]
 use crate::refine::{r_err, r_stmts, text_view};
 use crate::verified_kernels::{verified_repl_block_scan, verified_unit_within_limit};
@@ -27,9 +27,12 @@ use bc_spec::fuel::done;
 #[cfg(verus_keep_ghost)]
 use bc_spec::lexer::{Unit, tokenize};
 #[cfg(verus_keep_ghost)]
-use bc_spec::parser::{ExtUse, PCfg, PR, parse_unit};
+use bc_spec::parser::{ExtUse, PCfg, PErr, PR, PState, parse_unit, pr_err};
 #[cfg(verus_keep_ghost)]
-use bc_spec::top::{Options, RunState, at_line, ext_diags, run_parsed_unit};
+use bc_spec::top::{
+    Options, RunState, at_line, ext_diags, run_parse_result, run_parsed_unit,
+    run_unit as spec_run_unit, unit_too_long_msg,
+};
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin::Ghost;
 #[cfg(not(verus_keep_ghost))]
@@ -46,6 +49,16 @@ pub const STDIN_SOURCE: &str = "(standard_in)";
 pub const UNIT_TOO_LONG: &str = "input unit too long";
 
 verus! {
+
+/// The diagnostic `input unit too long`.
+fn unit_too_long_text() -> (r: String)
+    ensures
+        text_view(r) == unit_too_long_msg(),
+{
+    let m = [105u8, 110, 112, 117, 116, 32, 117, 110, 105, 116, 32, 116, 111, 111, 32, 108, 111, 110, 103];
+    proof { assert(m@ =~= unit_too_long_msg()); }
+    ascii_string(m.as_slice())
+}
 
 /// Result of processing one input unit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +83,10 @@ type SpecRun = ();
 type SpecUnit = Unit;
 #[cfg(not(verus_keep_ghost))]
 type SpecUnit = ();
+#[cfg(verus_keep_ghost)]
+type SpecParse = PR;
+#[cfg(not(verus_keep_ghost))]
+type SpecParse = ();
 #[cfg(verus_keep_ghost)]
 type SpecExt = Seq<ExtUse>;
 #[cfg(not(verus_keep_ghost))]
@@ -99,8 +116,8 @@ pub(crate) open spec fn r_ext(ext: Seq<(usize, String)>, sext: Seq<ExtUse>) -> b
         && sext[i].desc == text_view(ext[i].1)
 }
 
-/// What `run_unit` assumes of the parser (the parser is not proved): the statements, or the
-/// error, and the extension uses correspond to the specification's `parse_unit`.
+/// The statements, or the error, and the extension uses correspond to the specification's
+/// result `p` of parsing the unit.
 pub(crate) open spec fn r_parsed(parsed: Result<Vec<Stmt>, BcError>, ext: Seq<(usize, String)>, p: PR) -> bool {
     &&& r_ext(ext, p.st.ext)
     &&& match parsed {
@@ -324,20 +341,18 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "three of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn run_parsed(&mut self, parsed: Result<Vec<Stmt>, BcError>, ext: &Vec<(usize, String)>, source: &str, first_line: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(u): Ghost<SpecUnit>) -> (r: UnitOutcome)
+    pub(crate) fn run_parsed(&mut self, parsed: Result<Vec<Stmt>, BcError>, ext: &Vec<(usize, String)>, source: &str, first_line: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(p): Ghost<SpecParse>) -> (r: UnitOutcome)
         requires
             old(self).inv(),
         ensures
             final(self).inv(),
-            (r_top(*old(self), rs.st) && r_opts(*old(self), opts) && u.line == first_line as u64
-                && r_parsed(parsed, ext@, parse_unit(tokenize(u.text), unit_cfg(opts))))
-                ==> r_outcome(r, *final(self), rs, run_parsed_unit(opts, rs, source.spec_bytes(), u)),
+            (r_top(*old(self), rs.st) && r_opts(*old(self), opts) && r_parsed(parsed, ext@, p))
+                ==> r_outcome(r, *final(self), rs, run_parse_result(opts, rs, source.spec_bytes(), first_line as u64, p)),
     {
-        let ghost hyp = r_top(*self, rs.st) && r_opts(*self, opts) && u.line == first_line as u64
-            && r_parsed(parsed, ext@, parse_unit(tokenize(u.text), unit_cfg(opts)));
-        let ghost p = parse_unit(tokenize(u.text), unit_cfg(opts));
+        let ghost hyp = r_top(*self, rs.st) && r_opts(*self, opts) && r_parsed(parsed, ext@, p);
+        let ghost first = first_line as u64;
         let ghost src = source.spec_bytes();
-        let ghost rs2 = run_parsed_unit(opts, rs, src, u);
+        let ghost rs2 = run_parse_result(opts, rs, src, first, p);
         let ghost st0 = with_call(with_depth(rs.st, 0), rs.st.calls, false, rs.st.inv_ibase);
         let ghost e_old = *self;
         // A unit starts at the top level; this also recovers if a front end caught a panic in
@@ -353,7 +368,7 @@ impl Evaluator {
         }
         let reject = matches!(self.extension_policy, ExtensionPolicy::Reject);
         self.write_ext_diags(ext, source, first_line, reject, Ghost(p.st.ext));
-        let ghost st1 = with_err(st0, st0.err.add(ext_diags(p.st.ext, src, u.line, reject)));
+        let ghost st1 = with_err(st0, st0.err.add(ext_diags(p.st.ext, src, first, reject)));
         proof {
             if hyp {
                 assert(r_state(*self, st1));
@@ -431,7 +446,7 @@ impl Evaluator {
                 self.flush_stderr();
                 proof {
                     if hyp {
-                        lemma_r_top(*self, with_err(st1, st1.err.add(at_line(src, u.line, p.err.line)).add(p.err.msg).push(10u8)), 0);
+                        lemma_r_top(*self, with_err(st1, st1.err.add(at_line(src, first, p.err.line)).add(p.err.msg).push(10u8)), 0);
                     }
                 }
                 UnitOutcome::Failed
@@ -553,29 +568,46 @@ impl Evaluator {
     ///
     /// `source` names the input in syntax diagnostics (a file name, or [`STDIN_SOURCE`]) and
     /// `first_line` is the line number of the unit's first line within that source.
-    ///
-    /// Trusted glue: it only runs the parser (not verified) and passes its
-    /// result to the verified `run_parsed`.
     #[verifier::external_body]
     pub fn run_unit(&mut self, unit: &[u8], source: &str, first_line: usize) -> UnitOutcome {
-        if !verified_unit_within_limit(unit.len()) {
-            let too_long = Err(BcError::Syntax { line: 1, message: String::from(UNIT_TOO_LONG) });
-            return self.run_parsed(too_long, &Vec::new(), source, first_line, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()));
-        }
-        let policy = self.extension_policy;
-        let max_depth = self.max_depth;
-        let mut extension_uses = Vec::new();
-        let parsed = Parser::try_new(Lexer::new(unit)).and_then(|mut parser| {
-            parser.set_extension_policy(policy);
-            parser.set_max_depth(max_depth);
-            let stmts = parser.try_parse_program();
-            extension_uses = parser.take_extension_uses();
-            stmts
-        });
-
-        self.run_parsed(parsed, &extension_uses, source, first_line, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
+        self.run_unit_ref(unit, source, first_line, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
     }
 
+    /// `run_unit`: the refinement theorem of one unit, against the specification's `run_unit`.
+    /// A nesting limit that leaves no room to count is not a limit at all, and is lowered to one
+    /// that is still out of reach.
+    pub(crate) fn run_unit_ref(&mut self, unit: &[u8], source: &str, first_line: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(u): Ghost<SpecUnit>) -> (r: UnitOutcome)
+        requires
+            old(self).inv(),
+        ensures
+            final(self).inv(),
+            (r_top(*old(self), rs.st) && r_opts(*old(self), opts) && u.line == first_line as u64 && u.text == unit@
+                && old(self).max_depth < usize::MAX - 2)
+                ==> r_outcome(r, *final(self), rs, spec_run_unit(opts, rs, source.spec_bytes(), u)),
+    {
+        if !verified_unit_within_limit(unit.len()) {
+            let ghost e0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: seq![] };
+            let ghost p = pr_err(e0, PErr { quit: false, out_of_fuel: false, line: 1u64, msg: unit_too_long_msg() });
+            let too_long = Err(BcError::Syntax { line: 1, message: unit_too_long_text() });
+            let none = Vec::new();
+            proof { assert(r_ext(none@, e0.ext)); }
+            let r = self.run_parsed(too_long, &none, source, first_line, Ghost(opts), Ghost(rs), Ghost(p));
+            proof {
+                let st0 = with_call(with_depth(rs.st, 0u64), rs.st.calls, false, rs.st.inv_ibase);
+                let src = source.spec_bytes();
+                assert(ext_diags(e0.ext, src, first_line as u64, opts.reject_extensions) == Seq::<u8>::empty());
+                assert(st0.err.add(Seq::<u8>::empty()) =~= st0.err);
+                assert(with_err(st0, st0.err) == st0);
+            }
+            return r;
+        }
+        let policy = self.extension_policy;
+        let max_depth = if self.max_depth < usize::MAX - 2 { self.max_depth } else { usize::MAX - 3 };
+        let ghost cfg = PCfg { record_extensions: policy != ExtensionPolicy::Allow, max_depth: max_depth as u64 };
+        let (parsed, extension_uses) = parse_unit_ref(unit, policy, max_depth, Ghost(cfg));
+        let ghost p = parse_unit(tokenize(unit@), cfg);
+        self.run_parsed(parsed, &extension_uses, source, first_line, Ghost(opts), Ghost(rs), Ghost(p))
+    }
 }
 
 } // verus!

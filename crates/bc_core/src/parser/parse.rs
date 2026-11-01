@@ -13,7 +13,7 @@ use super::{
     RelOp, Stmt, Token, TokenType,
 };
 #[cfg(verus_keep_ghost)]
-use crate::driver::r_ext;
+use crate::driver::{r_ext, r_parsed};
 use crate::error::BcError;
 #[cfg(verus_keep_ghost)]
 use crate::refine::{
@@ -30,7 +30,9 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
-use bc_spec::lexer::{Tok, Token as SToken, syntax_error_msg};
+use bc_spec::lexer::{Tok, Token as SToken, normal, syntax_error_msg, tokenize};
+#[cfg(verus_keep_ghost)]
+use bc_spec::lexer_lemmas::{ascii_bytes, lemma_lex_len, lemma_lex_shape, tok_good};
 #[cfg(verus_keep_ghost)]
 use bc_spec::parser::Param as SParam;
 #[cfg(verus_keep_ghost)]
@@ -43,9 +45,9 @@ use bc_spec::parser::{
     p_function, p_function_body, p_function_stmts, p_if, p_input_item, p_loop_body, p_named,
     p_named_tail, p_opt_auto, p_parenthesized, p_prefix, p_primary, p_program, p_relational,
     p_return, p_return_stmt, p_semicolon_list, p_skip_newlines, p_statement, p_statement_inner,
-    p_statement_list, p_string_stmt, p_subscript, p_while, peek_kind, pr_args, pr_err, pr_list,
-    pr_node, pr_ok, pr_params, rel_code as s_rel_code, return_msg, return_paren_msg, st_set_depth,
-    st_set_loop, syntax_at, token_at, too_deep, within,
+    p_statement_list, p_string_stmt, p_subscript, p_while, parse_unit, peek_kind, pr_args, pr_err,
+    pr_list, pr_node, pr_ok, pr_params, rel_code as s_rel_code, return_msg, return_paren_msg,
+    st_set_depth, st_set_loop, syntax_at, token_at, too_deep, within,
 };
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin::Ghost;
@@ -3593,6 +3595,79 @@ impl Parser {
     pub fn try_parse_program(&mut self) -> Result<Vec<Stmt>, BcError> {
         self.parse_program_ref(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
     }
+}
+
+
+/// The tokens of a unit within the limit are as the parser's proofs expect them.
+proof fn lemma_tokenize_wf(t: Seq<u8>)
+    requires
+        t.len() <= 1_000_000_000,
+    ensures
+        toks_wf(tokenize(t)),
+{
+    let r = tokenize(t);
+    lemma_lex_shape(t, normal(1u64), seq![]);
+    lemma_lex_len(t, normal(1u64), seq![]);
+    assert forall|i: int| 0 <= i < r.len() - 1 implies !(#[trigger] r[i].kind is Eof) && !(r[i].kind is LexError) by {
+        assert(tok_good(r[i]));
+    }
+    assert forall|i: int| 0 <= i < r.len() && (#[trigger] r[i].kind is Letter || r[i].kind is Number) implies all_ascii(r[i].text) by {
+        if i < r.len() - 1 {
+            assert(tok_good(r[i]));
+            assert(ascii_bytes(r[i].text));
+        }
+    }
+}
+
+/// Parses a unit of at most `BC_UNIT_MAX` bytes: the statements or the error, and the extension
+/// uses, are those of the specification's `parse_unit`, unless the specification runs out of fuel.
+pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: usize, Ghost(cfg): Ghost<GCfg>) -> (r: (Result<Vec<Stmt>, BcError>, Vec<(usize, String)>))
+    requires
+        unit@.len() <= 1_000_000_000,
+        max_depth < usize::MAX - 2,
+        (policy != ExtensionPolicy::Allow) == cfg.record_extensions,
+        max_depth as u64 == cfg.max_depth,
+    ensures
+        pdone(parse_unit(tokenize(unit@), cfg)) ==> r_parsed(r.0, r.1@, parse_unit(tokenize(unit@), cfg)),
+{
+    let ghost toks = tokenize(unit@);
+    let ghost st0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: seq![] };
+    let mut lexer = Lexer::new(unit);
+    proof { lemma_tokenize_wf(unit@); lemma_rest_step(toks, 0); }
+    let current_token = match lexer.try_get_next_token() {
+        Ok(t) => t,
+        Err(e) => {
+            let none = Vec::new();
+            proof { assert(r_ext(none@, st0.ext)); }
+            return (Err(e), none);
+        },
+    };
+    let mut parser = Parser {
+        lexer,
+        current_token,
+        loop_depth: 0,
+        in_function: false,
+        extension_policy: policy,
+        extension_uses: Vec::new(),
+        depth: 0,
+        last_line: 1,
+        max_depth,
+    };
+    proof {
+        assert(toks.skip(0) =~= toks);
+        assert(rest_of(toks, 0) == toks);
+        assert(r_ext(parser.extension_uses@, st0.ext));
+    }
+    let (res, Ghost(p)) = parser.parse_program_ref(Ghost(toks), Ghost(cfg), Ghost(st0));
+    let ext = parser.extension_uses;
+    proof {
+        let whole = parse_unit(toks, cfg);
+        if pdone(whole) {
+            assert(whole == p_program(toks, cfg, st0, seq![], 0x4000_0000_0000_0000u64));
+            assert(whole == p);
+        }
+    }
+    (res, ext)
 }
 
 } // verus!
