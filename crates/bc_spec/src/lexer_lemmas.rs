@@ -129,6 +129,42 @@ proof fn lemma_lex_push(t: Seq<u8>, st: LexState, out: Seq<Token>, x: Token)
     assert(out.push(x) + lex(t, st, seq![]) =~= out + (seq![x] + lex(t, st, seq![])));
 }
 
+/// `lex` after the single token `x`.
+pub proof fn lemma_lex_cons(t: Seq<u8>, st: LexState, x: Token)
+    ensures
+        lex(t, st, seq![].push(x)) == seq![x] + lex(t, st, seq![]),
+        lex(t, st, seq![].push(x)).len() > 0,
+        lex(t, st, seq![].push(x))[0] == x,
+        lex(t, st, seq![].push(x)).drop_first() == lex(t, st, seq![]),
+{
+    lemma_lex_out(t, st, seq![x]);
+    assert(seq![].push(x) =~= seq![x]);
+    let r = lex(t, st, seq![]);
+    assert((seq![x] + r).drop_first() =~= r);
+}
+
+/// The octal escapes of one more byte.
+pub proof fn lemma_octal_bytes_step(t: Seq<u8>, k: usize)
+    requires
+        k < t.len(),
+        k < usize::MAX,
+    ensures
+        octal_bytes(t, (k + 1) as usize) == octal_bytes(t, k) + octal(t[k as int]),
+    decreases k
+{
+    if k == 0 {
+        assert(octal_bytes(t.drop_first(), 0usize) == Seq::<u8>::empty());
+        assert(octal(t[0]) + Seq::<u8>::empty() =~= octal(t[0]));
+        assert(Seq::<u8>::empty() + octal(t[0]) =~= octal(t[0]));
+    } else {
+        let r = t.drop_first();
+        lemma_octal_bytes_step(r, (k - 1) as usize);
+        assert(r[k - 1] == t[k as int]);
+        assert(octal(t[0]) + (octal_bytes(r, (k - 1) as usize) + octal(t[k as int]))
+            =~= (octal(t[0]) + octal_bytes(r, (k - 1) as usize)) + octal(t[k as int]));
+    }
+}
+
 /// How much a pending `Num` or `Ident` token adds to the count of tokens.
 pub open spec fn lex_pending(st: LexState) -> int {
     if st.mode is Num || st.mode is Ident { 1 } else { 0 }

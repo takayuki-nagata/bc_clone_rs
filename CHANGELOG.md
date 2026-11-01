@@ -8,6 +8,8 @@ value truncated toward zero at `scale`. The parser is not proved; differential t
 against the specification. AGENTS.md lists what the proofs assume.
 
 ### Verification
+- The lexer is proved to produce the tokens of the specification's `lex`, for a unit of at most
+  10^9 bytes. It assumes two one-line wrappers, `ascii_string` and `copy_bytes`.
 - **Executable specification.** `crates/bc_spec` defines `bc_clone`'s stdout, stderr and exit
   status for any input without `-l`: input units, tokens, parsing, evaluation, output
   and diagnostics. `exec_spec_verified!` compiles it into the reference interpreter

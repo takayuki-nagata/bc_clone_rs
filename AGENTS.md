@@ -54,6 +54,9 @@ graph TD
 ## Core Engine (`crates/bc_core`)
 
 ### Lexer and parser (`src/parser/`)
+- The lexer is proved against the specification's `lex`: `Lexer::rest` is the tokens not yet
+  returned, and `try_get_next_token` and `try_peek_token` take a token off it or look into it. It
+  assumes the one-line wrappers `ascii_string` and `copy_bytes`.
 - The lexer works on bytes, which need not be UTF-8. It tracks line numbers and handles
   `/* */` comments, strings, and backslash-newline continuation. A string keeps its bytes
   (`Stmt::StringLiteral(Vec<u8>)`). An illegal character is the well-formed UTF-8 sequence
@@ -200,11 +203,6 @@ A kernel is `pub` only if a front end calls it; of those, only `verified_repl_bl
 has a precondition. Every call of a function with a `requires` clause is in verified code,
 except the following, whose preconditions are argued here but not proved:
 
-- The lexer (`parser/lexer.rs`): `peek`, `advance_char` and `try_peek_token` call
-  `verified_lexer_peek_char_index`, `verified_lexer_advance_step` and
-  `verified_lexer_peek_token_index`. Their bounds (`text_len <= MAX_VERIFIED_SCALE`,
-  `pos < 10^9`) do not hold for an input unit of more than 10^9 bytes. `scan_token` calls
-  `verified_utf8_char_len` only after `peek(0)` returned a byte, so `pos < text.len()`.
 - `UnitAccumulator::push_line` (`driver.rs`) calls `verified_repl_block_scan`, which requires at
   most 10^9 bytes and a state reached by scanning up to its start. The CLI's `count_open_braces`
   and `is_block_incomplete` call `verified_repl_block_completeness`, which requires at most 10^9

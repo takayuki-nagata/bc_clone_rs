@@ -13,6 +13,18 @@ use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
+#[cfg(verus_keep_ghost)]
+use crate::refine::text_view;
+
+#[allow(
+    clippy::len_zero,
+    clippy::manual_range_contains,
+    clippy::manual_unwrap_or,
+    clippy::manual_unwrap_or_default,
+    clippy::question_mark,
+    clippy::vec_init_then_push,
+    reason = "the code keeps the forms that the proofs reason about"
+)]
 mod lexer;
 mod parse;
 #[cfg(test)]
@@ -74,13 +86,37 @@ pub struct Token {
     pub line: usize,
 }
 
+verus! {
+
 impl Token {
-    /// The token's bytes as a `String`. Names, numbers and operators are ASCII, so each byte is
-    /// one character.
-    pub(super) fn text(&self) -> String {
-        self.value.iter().map(|&b| char::from(b)).collect()
+    /// The token's bytes as a `String`, when they are ASCII (names, numbers and operators).
+    pub(super) fn text(&self) -> (r: String)
+        requires
+            all_ascii(self.value@),
+        ensures
+            text_view(r) == self.value@,
+    {
+        ascii_string(self.value.as_slice())
     }
 }
+
+/// Whether all the bytes are ASCII, so that each one is a character.
+pub open spec fn all_ascii(b: Seq<u8>) -> bool {
+    forall|i: int| 0 <= i < b.len() ==> b[i] < 0x80
+}
+
+/// Trusted: a `char` below 0x80 is one UTF-8 byte of the same value.
+#[verifier::external_body]
+pub(crate) fn ascii_string(b: &[u8]) -> (r: String)
+    requires
+        all_ascii(b@),
+    ensures
+        text_view(r) == b@,
+{
+    b.iter().map(|&x| char::from(x)).collect()
+}
+
+} // verus!
 
 // --- AST Node Definitions ---
 
@@ -203,6 +239,14 @@ verus! {
 #[cfg(verus_keep_ghost)]
 #[verifier::external_type_specification]
 pub struct ExParam(Param);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExTokenType(TokenType);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExToken(Token);
 
 #[cfg(verus_keep_ghost)]
 #[verifier::external_type_specification]
