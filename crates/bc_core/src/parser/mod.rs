@@ -26,6 +26,11 @@ use crate::refine::text_view;
     reason = "the code keeps the forms that the proofs reason about"
 )]
 mod lexer;
+#[allow(
+    clippy::match_like_matches_macro,
+    clippy::question_mark,
+    reason = "the code keeps the forms that the proofs reason about"
+)]
 mod parse;
 #[cfg(test)]
 mod tests;

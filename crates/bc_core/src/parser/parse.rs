@@ -2,11 +2,21 @@
 
 //! The parser: recursive descent, with Pratt precedence climbing for expressions.
 
+#[cfg(verus_keep_ghost)]
+use super::all_ascii;
+use super::ascii_string;
+use super::lexer::syntax_error_text;
+#[cfg(verus_keep_ghost)]
+use super::lexer::{r_lex_err, r_next, tok_of, tok_view};
 use super::{
     AssignOp, BinOp, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Lexer, Param, Register,
     RelOp, Stmt, Token, TokenType,
 };
+#[cfg(verus_keep_ghost)]
+use crate::driver::r_ext;
 use crate::error::BcError;
+#[cfg(verus_keep_ghost)]
+use crate::refine::{r_param, r_params, text_view};
 use crate::verified_kernels::{
     TOK_ASSIGN_OP, TOK_EXP_OP, TOK_MUL_OP, TOK_PLUS_MINUS, verified_nesting_within_limit,
     verified_pratt_infix_info,
@@ -14,25 +24,22 @@ use crate::verified_kernels::{
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-
-/// Recursive descent parser with operator precedence support for bc.
-pub struct Parser {
-    lexer: Lexer,
-    current_token: Token,
-    /// Number of enclosing `for`/`while` bodies, for rejecting a stray `break`.
-    loop_depth: usize,
-    /// Whether a function body is being parsed, for rejecting a stray `return`.
-    in_function: bool,
-    extension_policy: ExtensionPolicy,
-    /// Uses of extensions as `(line, description)`, recorded unless the policy is `Allow`.
-    extension_uses: Vec<(usize, String)>,
-    /// Number of enclosing statements and expression levels being parsed.
-    depth: usize,
-    /// Line of the last consumed token.
-    last_line: usize,
-    /// Largest nesting depth of the syntax tree (`docs/COMPATIBILITY.md` §2).
-    max_depth: usize,
-}
+#[cfg(verus_keep_ghost)]
+use bc_spec::lexer::{Tok, Token as SToken, syntax_error_msg};
+#[cfg(verus_keep_ghost)]
+use bc_spec::parser::Param as SParam;
+#[cfg(verus_keep_ghost)]
+use bc_spec::parser::{
+    ExtUse, PCfg, PR, PState, cur_tok, eat as s_eat, eat_name as s_eat_name,
+    extension as s_extension, multi_letter_prefix, note_name as s_note_name, p_define_list,
+    p_opt_auto, p_skip_newlines, pr_ok, pr_params, syntax_at, token_at,
+};
+#[cfg(not(verus_keep_ghost))]
+use verus_builtin::Ghost;
+#[cfg(not(verus_keep_ghost))]
+use verus_builtin_macros::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
 
 /// The height of an expression tree: 1 for a leaf. Statements and expressions are nested at
 /// most `max_depth` levels deep, which bounds the recursion of everything that walks the tree
@@ -61,6 +68,620 @@ fn infix_info(token_type: TokenType) -> (i8, bool, i8) {
     let (op_prec, _right_assoc, next_min_prec) = verified_pratt_infix_info(tok_kind);
     (op_prec, token_type == TokenType::AssignOp, next_min_prec)
 }
+
+verus! {
+
+/// Recursive descent parser with operator precedence support for bc.
+pub struct Parser {
+    lexer: Lexer,
+    current_token: Token,
+    /// Number of enclosing `for`/`while` bodies, for rejecting a stray `break`.
+    loop_depth: usize,
+    /// Whether a function body is being parsed, for rejecting a stray `return`.
+    in_function: bool,
+    extension_policy: ExtensionPolicy,
+    /// Uses of extensions as `(line, description)`, recorded unless the policy is `Allow`.
+    extension_uses: Vec<(usize, String)>,
+    /// Number of enclosing statements and expression levels being parsed.
+    depth: usize,
+    /// Line of the last consumed token.
+    last_line: usize,
+    /// Largest nesting depth of the syntax tree (`docs/COMPATIBILITY.md` §2).
+    max_depth: usize,
+}
+
+broadcast use vstd::std_specs::vec::group_vec_axioms;
+
+#[cfg(verus_keep_ghost)]
+type GBytes = Seq<u8>;
+#[cfg(not(verus_keep_ghost))]
+type GBytes = ();
+#[cfg(verus_keep_ghost)]
+type GToks = Seq<SToken>;
+#[cfg(not(verus_keep_ghost))]
+type GToks = ();
+#[cfg(verus_keep_ghost)]
+type GCfg = PCfg;
+#[cfg(not(verus_keep_ghost))]
+type GCfg = ();
+#[cfg(verus_keep_ghost)]
+type GState = PState;
+#[cfg(not(verus_keep_ghost))]
+type GState = ();
+#[cfg(verus_keep_ghost)]
+type GResult = PR;
+#[cfg(not(verus_keep_ghost))]
+type GResult = ();
+
+/// Whether two kinds are equal: `tok_of` is injective, so this is the specification's comparison.
+fn kind_eq(a: TokenType, b: TokenType) -> (r: bool)
+    ensures
+        r == (tok_of(a) == tok_of(b)),
+{
+    match (a, b) {
+        (TokenType::Eof, TokenType::Eof) | (TokenType::Newline, TokenType::Newline) | (TokenType::Semicolon, TokenType::Semicolon)
+        | (TokenType::Comma, TokenType::Comma) | (TokenType::Lparen, TokenType::Lparen) | (TokenType::Rparen, TokenType::Rparen)
+        | (TokenType::Lbracket, TokenType::Lbracket) | (TokenType::Rbracket, TokenType::Rbracket) | (TokenType::Lbrace, TokenType::Lbrace)
+        | (TokenType::Rbrace, TokenType::Rbrace) | (TokenType::Plus, TokenType::Plus) | (TokenType::Minus, TokenType::Minus)
+        | (TokenType::Exp, TokenType::Exp) | (TokenType::MulOp, TokenType::MulOp) | (TokenType::RelOp, TokenType::RelOp)
+        | (TokenType::IncrDecr, TokenType::IncrDecr) | (TokenType::AssignOp, TokenType::AssignOp) | (TokenType::Letter, TokenType::Letter)
+        | (TokenType::Number, TokenType::Number) | (TokenType::String, TokenType::String) | (TokenType::Auto, TokenType::Auto)
+        | (TokenType::Break, TokenType::Break) | (TokenType::Define, TokenType::Define) | (TokenType::Ibase, TokenType::Ibase)
+        | (TokenType::If, TokenType::If) | (TokenType::For, TokenType::For) | (TokenType::Length, TokenType::Length)
+        | (TokenType::Obase, TokenType::Obase) | (TokenType::Quit, TokenType::Quit) | (TokenType::Return, TokenType::Return)
+        | (TokenType::Scale, TokenType::Scale) | (TokenType::Sqrt, TokenType::Sqrt) | (TokenType::While, TokenType::While) => true,
+        _ => false,
+    }
+}
+
+/// A token sequence as `tokenize` produces it.
+pub open spec fn toks_wf(toks: Seq<SToken>) -> bool {
+    &&& 0 < toks.len() < 0x7000_0000
+    &&& toks.last().kind is Eof || toks.last().kind is LexError
+    &&& forall|i: int| 0 <= i < toks.len() - 1 ==> !(#[trigger] toks[i].kind is Eof) && !(toks[i].kind is LexError)
+    &&& forall|i: int| 0 <= i < toks.len() && (#[trigger] toks[i].kind is Letter) ==> all_ascii(toks[i].text)
+}
+
+/// The tokens that the lexer has not returned when the next token is number `k`.
+pub open spec fn rest_of(toks: Seq<SToken>, k: int) -> Seq<SToken> {
+    if k < toks.len() { toks.skip(k) } else { seq![toks.last()] }
+}
+
+/// The parsing function finished: it succeeded, or it failed other than by running out of fuel.
+pub open spec fn pdone(p: PR) -> bool {
+    p.ok || !p.err.out_of_fuel
+}
+
+/// The parser corresponds to the specification's state `st` on the tokens `toks`.
+spec fn r_p(p: Parser, toks: Seq<SToken>, cfg: PCfg, st: PState) -> bool {
+    &&& toks_wf(toks)
+    &&& st.cur <= toks.len()
+    &&& st.nodes.len() <= 2 * st.cur
+    &&& p.max_depth < usize::MAX - 2
+    &&& p.lexer.inv()
+    &&& p.lexer.text_len() <= 1_000_000_000
+    &&& tok_view(p.current_token) == cur_tok(toks, st)
+    &&& !(cur_tok(toks, st).kind is LexError)
+    &&& p.lexer.rest() == rest_of(toks, st.cur + 1)
+    &&& (p.extension_policy != ExtensionPolicy::Allow) == cfg.record_extensions
+    &&& p.max_depth as u64 == cfg.max_depth
+    &&& p.depth as u64 == st.depth
+    &&& p.last_line as u64 == st.last_line
+    &&& (p.loop_depth == 0) == (st.loop_depth == 0)
+    &&& p.in_function == st.in_function
+    &&& r_ext(p.extension_uses@, st.ext)
+}
+
+/// A syntax or lexical error of the specification's result.
+spec fn r_perr(e: BcError, ext: Seq<(usize, String)>, p: PR) -> bool {
+    &&& !p.ok
+    &&& r_ext(ext, p.st.ext)
+    &&& match e {
+        BcError::Quit => p.err.quit,
+        BcError::Syntax { line, message } => !p.err.quit && !p.err.out_of_fuel && p.err.line == line as u64
+            && p.err.msg == text_view(message),
+        BcError::Runtime { .. } => false,
+    }
+}
+
+spec fn r_unit(r: Result<(), BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+    match r {
+        Ok(()) => p.ok && r_p(q, toks, cfg, p.st) && p.st.nodes == s0.nodes && p.st.cur >= s0.cur,
+        Err(x) => r_perr(x, q.extension_uses@, p),
+    }
+}
+
+spec fn r_plist(r: Result<Vec<Param>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+    match r {
+        Ok(l) => p.ok && r_p(q, toks, cfg, p.st) && p.st.nodes == s0.nodes && p.st.cur >= s0.cur && r_params(l@, p.params),
+        Err(x) => r_perr(x, q.extension_uses@, p),
+    }
+}
+
+proof fn lemma_rest_step(toks: Seq<SToken>, k: int)
+    requires
+        toks_wf(toks),
+        0 <= k <= toks.len() + 1,
+    ensures
+        rest_of(toks, k).len() > 0,
+        rest_of(toks, k)[0] == token_at(toks, k as usize),
+        !(rest_of(toks, k)[0].kind is Eof) && !(rest_of(toks, k)[0].kind is LexError) ==> rest_of(toks, k + 1) == rest_of(toks, k).drop_first(),
+        rest_of(toks, k)[0].kind is Eof ==> rest_of(toks, k) == seq![rest_of(toks, k)[0]] && rest_of(toks, k + 1) == rest_of(toks, k),
+        rest_of(toks, k).len() == 1 ==> rest_of(toks, k)[0] == toks.last(),
+{
+    if k < toks.len() {
+        assert(toks.skip(k)[0] == toks[k]);
+        if k + 1 < toks.len() {
+            assert(toks.skip(k).drop_first() =~= toks.skip(k + 1));
+            assert(!(toks[k].kind is Eof));
+        } else {
+            assert(toks.skip(k) =~= seq![toks.last()]);
+        }
+    }
+}
+
+impl Parser {
+    /// Consumes a token of the expected type, otherwise raises error.
+    fn eat(&mut self, k: TokenType, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: Result<(), BcError>)
+        requires
+            r_p(*old(self), toks, cfg, st),
+            st.cur < toks.len() || !(tok_of(k) is Eof),
+        ensures
+            r_unit(r, *final(self), toks, cfg, st, s_eat(toks, st, tok_of(k))),
+    {
+        proof { lemma_rest_step(toks, st.cur + 1); }
+        if kind_eq(self.current_token.token_type, k) {
+            let line = self.current_token.line;
+            match self.lexer.try_get_next_token() {
+                Ok(t) => {
+                    self.last_line = line;
+                    self.current_token = t;
+                    Ok(())
+                },
+                Err(e) => Err(e),
+            }
+        } else {
+            Err(BcError::Syntax { line: self.current_token.line, message: syntax_error_text() })
+        }
+    }
+
+    /// Records a use of non-POSIX syntax on the line of the current token, as GNU bc does.
+    fn extension(&mut self, description: String, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>, Ghost(desc): Ghost<GBytes>)
+        requires
+            r_p(*old(self), toks, cfg, st),
+            text_view(description) == desc,
+        ensures
+            r_p(*final(self), toks, cfg, s_extension(toks, cfg, st, desc)),
+    {
+        if !matches!(self.extension_policy, ExtensionPolicy::Allow) {
+            self.extension_uses.push((self.current_token.line, description));
+            proof {
+                let s2 = s_extension(toks, cfg, st, desc);
+                assert(s2.ext == st.ext.push(ExtUse { line: cur_tok(toks, st).line, desc }));
+                assert forall|i: int| 0 <= i < self.extension_uses@.len() implies s2.ext[i].line == (#[trigger] self.extension_uses@[i]).0 as u64
+                    && s2.ext[i].desc == text_view(self.extension_uses@[i].1) by {
+                    if i < st.ext.len() {
+                        assert(old(self).extension_uses@[i] == self.extension_uses@[i]);
+                    }
+                }
+            }
+        }
+    }
+
+    fn note_name(&mut self, name: &[u8], Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>)
+        requires
+            r_p(*old(self), toks, cfg, st),
+            all_ascii(name@),
+        ensures
+            r_p(*final(self), toks, cfg, s_note_name(toks, cfg, st, name@)),
+    {
+        if name.len() > 1 {
+            let prefix: [u8; 23] = [109u8, 117, 108, 116, 105, 112, 108, 101, 32, 108, 101, 116, 116, 101, 114, 32, 110, 97, 109, 101, 32, 45, 32];
+            let mut v: Vec<u8> = Vec::new();
+            let mut i: usize = 0;
+            proof { assert(prefix@ =~= multi_letter_prefix()); }
+            while i < 23
+                invariant
+                    0 <= i <= 23,
+                    prefix@ == multi_letter_prefix(),
+                    v@ == prefix@.subrange(0, i as int),
+                decreases 23 - i,
+            {
+                v.push(prefix[i]);
+                proof { assert(v@ =~= prefix@.subrange(0, i + 1)); }
+                i += 1;
+            }
+            let mut j: usize = 0;
+            while j < name.len()
+                invariant
+                    0 <= j <= name@.len(),
+                    prefix@ == multi_letter_prefix(),
+                    v@ == prefix@.add(name@.subrange(0, j as int)),
+                decreases name@.len() - j,
+            {
+                v.push(name[j]);
+                proof { assert(v@ =~= prefix@.add(name@.subrange(0, j + 1))); }
+                j += 1;
+            }
+            proof {
+                assert(name@.subrange(0, name@.len() as int) =~= name@);
+                assert forall|i: int| 0 <= i < v@.len() implies v@[i] < 0x80 by {
+                    if i >= 23 { assert(v@[i] == name@[i - 23]); }
+                    else { assert(v@[i] == multi_letter_prefix()[i]); }
+                }
+            }
+            let d = ascii_string(v.as_slice());
+            self.extension(d, Ghost(toks), Ghost(cfg), Ghost(st), Ghost(multi_letter_prefix().add(name@)));
+        }
+    }
+
+    /// Consumes an identifier, recording it if it is longer than one letter (an extension).
+    fn eat_name(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: Result<String, BcError>)
+        requires
+            r_p(*old(self), toks, cfg, st),
+            cur_tok(toks, st).kind is Letter,
+        ensures
+            match r {
+                Ok(s) => s_eat_name(toks, cfg, st).ok && r_p(*final(self), toks, cfg, s_eat_name(toks, cfg, st).st)
+                    && text_view(s) == s_eat_name(toks, cfg, st).name
+                    && s_eat_name(toks, cfg, st).st.nodes == st.nodes && s_eat_name(toks, cfg, st).st.cur >= st.cur,
+                Err(x) => r_perr(x, final(self).extension_uses@, s_eat_name(toks, cfg, st)),
+            },
+    {
+        let v = self.current_token.value.clone();
+        proof {
+            if st.cur < toks.len() {
+                assert(toks[st.cur as int].kind is Letter);
+            } else {
+                assert(toks[toks.len() - 1].kind is Letter);
+            }
+            assert(v@ == cur_tok(toks, st).text);
+        }
+        let name = ascii_string(v.as_slice());
+        let ghost e = s_eat(toks, st, Tok::Letter);
+        match self.eat(TokenType::Letter, Ghost(toks), Ghost(cfg), Ghost(st)) {
+            Ok(()) => {},
+            Err(x) => return Err(x),
+        }
+        self.note_name(v.as_slice(), Ghost(toks), Ghost(cfg), Ghost(e.st));
+        Ok(name)
+    }
+
+    /// Skips sequence of newline tokens.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn skip_newlines(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(), BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_unit(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) ==> p_skip_newlines(toks, st, f) == r.1@,
+    {
+        let ghost mut cur = st;
+        loop
+            invariant
+                r_p(*self, toks, cfg, cur),
+                cur.nodes == st.nodes,
+                cur.cur >= st.cur,
+                forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) ==>
+                    exists|g: u64| #![trigger p_skip_newlines(toks, cur, g)] p_skip_newlines(toks, cur, g) == p_skip_newlines(toks, st, f),
+        {
+            let ghost c0 = cur;
+            if !matches!(self.current_token.token_type, TokenType::Newline) {
+                proof { lemma_skip_done(toks, st, cur); }
+                return (Ok(()), Ghost(pr_ok(cur)));
+            }
+            let ghost e = s_eat(toks, c0, Tok::Newline);
+            proof { lemma_skip_step(toks, st, c0); }
+            match self.eat(TokenType::Newline, Ghost(toks), Ghost(cfg), Ghost(c0)) {
+                Ok(()) => { proof { cur = e.st; } },
+                Err(x) => return (Err(x), Ghost(e)),
+            }
+        }
+    }
+
+    /// Parses optional parameters.
+    fn parse_opt_define_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<Param>, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_plist(r.0, *final(self), toks, cfg, st, r.1@),
+            cur_tok(toks, st).kind is Rparen ==> r.1@ == pr_params(st, seq![]),
+            !(cur_tok(toks, st).kind is Rparen) ==>
+                forall|f: u64| #![trigger p_define_list(toks, cfg, st, seq![], f)] pdone(p_define_list(toks, cfg, st, seq![], f)) ==> p_define_list(toks, cfg, st, seq![], f) == r.1@,
+    {
+        if matches!(self.current_token.token_type, TokenType::Rparen) {
+            (Ok(Vec::new()), Ghost(pr_params(st, seq![])))
+        } else {
+            self.parse_define_list(Ghost(toks), Ghost(cfg), Ghost(st))
+        }
+    }
+
+    /// Parses a define list of parameters or auto variables.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_define_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<Param>, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_plist(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_define_list(toks, cfg, st, seq![], f)] pdone(p_define_list(toks, cfg, st, seq![], f)) ==> p_define_list(toks, cfg, st, seq![], f) == r.1@,
+    {
+        let mut lst: Vec<Param> = Vec::new();
+        let ghost mut cur = st;
+        let ghost mut acc = Seq::<SParam>::empty();
+        proof { lemma_dl_start(toks, cfg, st); }
+        loop
+            invariant
+                r_p(*self, toks, cfg, cur),
+                cur.nodes == st.nodes,
+                cur.cur >= st.cur,
+                r_params(lst@, acc),
+                dl_chain(toks, cfg, st, cur, acc),
+        {
+            let ghost c = cur;
+            let ghost a0 = acc;
+            if !matches!(self.current_token.token_type, TokenType::Letter) {
+                let ghost e = syntax_at(c, cur_tok(toks, c).line);
+                proof {
+                    assert forall|g: u64| g > 0 implies #[trigger] p_define_list(toks, cfg, c, a0, g) == e by {}
+                    lemma_dl_ret(toks, cfg, st, c, a0, e);
+                }
+                return (Err(BcError::Syntax { line: self.current_token.line, message: syntax_error_text() }), Ghost(e));
+            }
+            let ghost n = s_eat_name(toks, cfg, c);
+            let name = match self.eat_name(Ghost(toks), Ghost(cfg), Ghost(c)) {
+                Ok(x) => x,
+                Err(x) => {
+                    proof {
+                        assert forall|g: u64| g > 0 implies #[trigger] p_define_list(toks, cfg, c, a0, g) == n by {}
+                        lemma_dl_ret(toks, cfg, st, c, a0, n);
+                    }
+                    return (Err(x), Ghost(n));
+                },
+            };
+            let ghost mut s1 = n.st;
+            let mut is_arr = false;
+            if matches!(self.current_token.token_type, TokenType::Lbracket) {
+                let ghost e1 = s_eat(toks, n.st, Tok::Lbracket);
+                match self.eat(TokenType::Lbracket, Ghost(toks), Ghost(cfg), Ghost(n.st)) {
+                    Ok(()) => {},
+                    Err(x) => {
+                        proof {
+                            assert forall|g: u64| g > 0 implies #[trigger] p_define_list(toks, cfg, c, a0, g) == e1 by {}
+                            lemma_dl_ret(toks, cfg, st, c, a0, e1);
+                        }
+                        return (Err(x), Ghost(e1));
+                    },
+                }
+                let ghost e2 = s_eat(toks, e1.st, Tok::Rbracket);
+                match self.eat(TokenType::Rbracket, Ghost(toks), Ghost(cfg), Ghost(e1.st)) {
+                    Ok(()) => {},
+                    Err(x) => {
+                        proof {
+                            assert forall|g: u64| g > 0 implies #[trigger] p_define_list(toks, cfg, c, a0, g) == e2 by {}
+                            lemma_dl_ret(toks, cfg, st, c, a0, e2);
+                        }
+                        return (Err(x), Ghost(e2));
+                    },
+                }
+                is_arr = true;
+                proof { s1 = e2.st; }
+            }
+            let ghost a1 = a0.push(SParam { name: n.name, is_array: is_arr });
+            let ghost l0 = lst@;
+            let p = Param { name, is_array: is_arr };
+            lst.push(p);
+            proof {
+                assert forall|i: int| 0 <= i < lst@.len() implies #[trigger] r_param(lst@[i], a1[i]) by {
+                    if i < l0.len() { assert(lst@[i] == l0[i]); assert(a1[i] == a0[i]); assert(r_param(l0[i], a0[i])); }
+                }
+            }
+            if !matches!(self.current_token.token_type, TokenType::Comma) {
+                let ghost e = pr_params(s1, a1);
+                proof {
+                    assert forall|g: u64| g > 0 implies #[trigger] p_define_list(toks, cfg, c, a0, g) == e by {}
+                    lemma_dl_ret(toks, cfg, st, c, a0, e);
+                }
+                return (Ok(lst), Ghost(e));
+            }
+            let ghost e3 = s_eat(toks, s1, Tok::Comma);
+            match self.eat(TokenType::Comma, Ghost(toks), Ghost(cfg), Ghost(s1)) {
+                Ok(()) => {
+                    proof {
+                        assert forall|g: u64| g > 0 implies #[trigger] p_define_list(toks, cfg, c, a0, g) == p_define_list(toks, cfg, e3.st, a1, (g - 1) as u64) by {}
+                        lemma_dl_next(toks, cfg, st, c, a0, e3.st, a1);
+                        cur = e3.st;
+                        acc = a1;
+                    }
+                },
+                Err(x) => {
+                    proof {
+                        assert forall|g: u64| g > 0 implies #[trigger] p_define_list(toks, cfg, c, a0, g) == e3 by {}
+                        lemma_dl_ret(toks, cfg, st, c, a0, e3);
+                    }
+                    return (Err(x), Ghost(e3));
+                },
+            }
+        }
+    }
+
+    /// Parses auto list declarations `auto a, b[]`.
+    fn parse_opt_auto_define_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<Param>, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_plist(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_opt_auto(toks, cfg, st, f)] pdone(p_opt_auto(toks, cfg, st, f)) ==> p_opt_auto(toks, cfg, st, f) == r.1@,
+    {
+        if !matches!(self.current_token.token_type, TokenType::Auto) {
+            return (Ok(Vec::new()), Ghost(pr_params(st, seq![])));
+        }
+        let ghost e = s_eat(toks, st, Tok::Auto);
+        match self.eat(TokenType::Auto, Ghost(toks), Ghost(cfg), Ghost(st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e)),
+        }
+        let (res, Ghost(l)) = self.parse_define_list(Ghost(toks), Ghost(cfg), Ghost(e.st));
+        let lst = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_opt_auto(toks, cfg, st, f)] pdone(p_opt_auto(toks, cfg, st, f)) implies p_opt_auto(toks, cfg, st, f) == l by {
+                        assert(f > 0);
+                        assert(pdone(p_define_list(toks, cfg, e.st, seq![], (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(l));
+            },
+        };
+        let ghost lk = cur_tok(toks, l.st).kind;
+        let ghost e2 = if lk is Newline { s_eat(toks, l.st, Tok::Newline) }
+            else if lk is Semicolon { s_eat(toks, l.st, Tok::Semicolon) }
+            else { syntax_at(l.st, cur_tok(toks, l.st).line) };
+        let res2 = if matches!(self.current_token.token_type, TokenType::Newline) {
+            self.eat(TokenType::Newline, Ghost(toks), Ghost(cfg), Ghost(l.st))
+        } else if matches!(self.current_token.token_type, TokenType::Semicolon) {
+            self.eat(TokenType::Semicolon, Ghost(toks), Ghost(cfg), Ghost(l.st))
+        } else {
+            Err(BcError::Syntax { line: self.current_token.line, message: syntax_error_text() })
+        };
+        let ghost g = if e2.ok { pr_params(e2.st, l.params) } else { e2 };
+        proof {
+            assert forall|f: u64| #![trigger p_opt_auto(toks, cfg, st, f)] pdone(p_opt_auto(toks, cfg, st, f)) implies p_opt_auto(toks, cfg, st, f) == g by {
+                assert(f > 0);
+                assert(pdone(p_define_list(toks, cfg, e.st, seq![], (f - 1) as u64)));
+            }
+        }
+        match res2 {
+            Ok(()) => (Ok(lst), Ghost(g)),
+            Err(x) => (Err(x), Ghost(g)),
+        }
+    }
+
+    #[verifier::external_body]
+    fn eat_(&mut self, k: TokenType) -> Result<(), BcError> {
+        self.eat(k, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
+    }
+
+    #[verifier::external_body]
+    fn extension_(&mut self, description: String) {
+        self.extension(description, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
+    }
+
+    #[verifier::external_body]
+    fn note_name_(&mut self, name: &str) {
+        self.note_name(name.as_bytes(), Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
+    }
+
+    #[verifier::external_body]
+    fn eat_name_(&mut self) -> Result<String, BcError> {
+        self.eat_name(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
+    }
+
+    #[verifier::external_body]
+    fn skip_newlines_(&mut self) -> Result<(), BcError> {
+        self.skip_newlines(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
+    }
+
+    #[verifier::external_body]
+    fn parse_opt_define_list_(&mut self) -> Result<Vec<Param>, BcError> {
+        self.parse_opt_define_list(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
+    }
+
+    #[verifier::external_body]
+    fn parse_opt_auto_define_list_(&mut self) -> Result<Vec<Param>, BcError> {
+        self.parse_opt_auto_define_list(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
+    }
+}
+
+spec fn dl_chain(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<SParam>) -> bool {
+    forall|f: u64| #![trigger p_define_list(toks, cfg, st, seq![], f)] pdone(p_define_list(toks, cfg, st, seq![], f)) ==>
+        exists|g: u64| #![trigger p_define_list(toks, cfg, cur, acc, g)] p_define_list(toks, cfg, cur, acc, g) == p_define_list(toks, cfg, st, seq![], f)
+}
+
+proof fn lemma_dl_start(toks: Seq<SToken>, cfg: PCfg, st: PState)
+    ensures
+        dl_chain(toks, cfg, st, st, Seq::<SParam>::empty()),
+{
+    let e = Seq::<SParam>::empty();
+    assert(seq![] == e);
+    assert forall|f: u64| #![trigger p_define_list(toks, cfg, st, seq![], f)] pdone(p_define_list(toks, cfg, st, seq![], f)) implies
+        exists|g: u64| #![trigger p_define_list(toks, cfg, st, e, g)] p_define_list(toks, cfg, st, e, g) == p_define_list(toks, cfg, st, seq![], f) by {
+        assert(p_define_list(toks, cfg, st, e, f) == p_define_list(toks, cfg, st, seq![], f));
+    }
+}
+
+proof fn lemma_dl_ret(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<SParam>, r: PR)
+    requires
+        dl_chain(toks, cfg, st, cur, acc),
+        forall|g: u64| g > 0 ==> #[trigger] p_define_list(toks, cfg, cur, acc, g) == r,
+    ensures
+        forall|f: u64| #![trigger p_define_list(toks, cfg, st, seq![], f)] pdone(p_define_list(toks, cfg, st, seq![], f)) ==> p_define_list(toks, cfg, st, seq![], f) == r,
+{
+    assert forall|f: u64| #![trigger p_define_list(toks, cfg, st, seq![], f)] pdone(p_define_list(toks, cfg, st, seq![], f)) implies p_define_list(toks, cfg, st, seq![], f) == r by {
+        let g = choose|g: u64| #![trigger p_define_list(toks, cfg, cur, acc, g)] p_define_list(toks, cfg, cur, acc, g) == p_define_list(toks, cfg, st, seq![], f);
+        assert(g > 0);
+    }
+}
+
+proof fn lemma_dl_next(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<SParam>, cur2: PState, acc2: Seq<SParam>)
+    requires
+        dl_chain(toks, cfg, st, cur, acc),
+        forall|g: u64| g > 0 ==> #[trigger] p_define_list(toks, cfg, cur, acc, g) == p_define_list(toks, cfg, cur2, acc2, (g - 1) as u64),
+    ensures
+        dl_chain(toks, cfg, st, cur2, acc2),
+{
+    assert forall|f: u64| #![trigger p_define_list(toks, cfg, st, seq![], f)] pdone(p_define_list(toks, cfg, st, seq![], f)) implies
+        exists|g: u64| #![trigger p_define_list(toks, cfg, cur2, acc2, g)] p_define_list(toks, cfg, cur2, acc2, g) == p_define_list(toks, cfg, st, seq![], f) by {
+        let g = choose|g: u64| #![trigger p_define_list(toks, cfg, cur, acc, g)] p_define_list(toks, cfg, cur, acc, g) == p_define_list(toks, cfg, st, seq![], f);
+        assert(g > 0);
+        assert(p_define_list(toks, cfg, cur2, acc2, (g - 1) as u64) == p_define_list(toks, cfg, st, seq![], f));
+    }
+}
+
+/// `p_skip_newlines` stops at a token other than a newline.
+proof fn lemma_skip_done(toks: Seq<SToken>, st: PState, cur: PState)
+    requires
+        !(cur_tok(toks, cur).kind is Newline),
+        forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) ==>
+            exists|g: u64| #![trigger p_skip_newlines(toks, cur, g)] p_skip_newlines(toks, cur, g) == p_skip_newlines(toks, st, f),
+    ensures
+        forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) ==> p_skip_newlines(toks, st, f) == pr_ok(cur),
+{
+    assert forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) implies p_skip_newlines(toks, st, f) == pr_ok(cur) by {
+        let g = choose|g: u64| #![trigger p_skip_newlines(toks, cur, g)] p_skip_newlines(toks, cur, g) == p_skip_newlines(toks, st, f);
+        assert(g > 0);
+    }
+}
+
+/// `p_skip_newlines` takes a newline and continues, or stops with the error of `eat`.
+proof fn lemma_skip_step(toks: Seq<SToken>, st: PState, cur: PState)
+    requires
+        cur_tok(toks, cur).kind is Newline,
+        forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) ==>
+            exists|g: u64| #![trigger p_skip_newlines(toks, cur, g)] p_skip_newlines(toks, cur, g) == p_skip_newlines(toks, st, f),
+    ensures
+        ({
+            let e = s_eat(toks, cur, Tok::Newline);
+            if e.ok {
+                forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) ==>
+                    exists|g: u64| #![trigger p_skip_newlines(toks, e.st, g)] p_skip_newlines(toks, e.st, g) == p_skip_newlines(toks, st, f)
+            } else {
+                forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) ==> p_skip_newlines(toks, st, f) == e
+            }
+        }),
+{
+    let e = s_eat(toks, cur, Tok::Newline);
+    assert forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) implies
+        (if e.ok { exists|g: u64| #![trigger p_skip_newlines(toks, e.st, g)] p_skip_newlines(toks, e.st, g) == p_skip_newlines(toks, st, f) } else { p_skip_newlines(toks, st, f) == e }) by {
+        let g = choose|g: u64| #![trigger p_skip_newlines(toks, cur, g)] p_skip_newlines(toks, cur, g) == p_skip_newlines(toks, st, f);
+        assert(g > 0);
+        if e.ok {
+            assert(p_skip_newlines(toks, e.st, (g - 1) as u64) == p_skip_newlines(toks, st, f));
+        }
+    }
+}
+
+} // verus!
 
 impl Parser {
     /// Creates a new Parser from the Lexer, returning Err on initial lexical error.
@@ -133,30 +754,6 @@ impl Parser {
         core::mem::take(&mut self.extension_uses)
     }
 
-    /// Records a use of non-POSIX syntax on the line of the current token, as GNU bc does.
-    fn extension(&mut self, description: String) {
-        if self.extension_policy != ExtensionPolicy::Allow {
-            self.extension_uses
-                .push((self.current_token.line, description));
-        }
-    }
-
-    /// Consumes an identifier, recording it if it is longer than one letter (an extension).
-    fn eat_name(&mut self) -> Result<String, BcError> {
-        let name = self.current_token.text();
-        self.eat(TokenType::Letter)?;
-        self.note_name(&name);
-        Ok(name)
-    }
-
-    fn note_name(&mut self, name: &str) {
-        if name.len() > 1 {
-            let mut description = String::from("multiple letter name - ");
-            description.push_str(name);
-            self.extension(description);
-        }
-    }
-
     /// Reports a statement that is not allowed where it appears, with GNU bc's wording, on the
     /// line of the current token.
     fn misplaced<T>(&self, message: &str) -> Result<T, BcError> {
@@ -172,17 +769,6 @@ impl Parser {
         let body = self.parse_statement();
         self.loop_depth -= 1;
         body
-    }
-
-    /// Consumes a token of the expected type, otherwise raises error.
-    fn eat(&mut self, token_type: TokenType) -> Result<(), BcError> {
-        if self.current_token.token_type == token_type {
-            self.last_line = self.current_token.line;
-            self.current_token = self.lexer.try_get_next_token()?;
-            Ok(())
-        } else {
-            self.error()
-        }
     }
 
     /// Peeks the token type of the token at `offset`.
@@ -220,9 +806,9 @@ impl Parser {
 
         let lst = self.parse_semicolon_list()?;
         if self.current_token.token_type == TokenType::Newline {
-            self.eat(TokenType::Newline)?;
+            self.eat_(TokenType::Newline)?;
         } else {
-            self.eat(TokenType::Eof)?;
+            self.eat_(TokenType::Eof)?;
         }
 
         if lst.is_empty() {
@@ -241,7 +827,7 @@ impl Parser {
                 break;
             }
             if t == TokenType::Semicolon {
-                self.eat(TokenType::Semicolon)?;
+                self.eat_(TokenType::Semicolon)?;
                 continue;
             }
 
@@ -249,7 +835,7 @@ impl Parser {
             stmts.push(stmt);
 
             if self.current_token.token_type == TokenType::Semicolon {
-                self.eat(TokenType::Semicolon)?;
+                self.eat_(TokenType::Semicolon)?;
             } else {
                 break;
             }
@@ -261,7 +847,7 @@ impl Parser {
     fn parse_statement_list(&mut self) -> Result<Vec<Stmt>, BcError> {
         let mut stmts = Vec::new();
         loop {
-            self.skip_newlines()?;
+            self.skip_newlines_()?;
             let t = self.current_token.token_type;
             if t == TokenType::Eof || t == TokenType::Rbrace {
                 break;
@@ -273,24 +859,16 @@ impl Parser {
             let nt = self.current_token.token_type;
             match nt {
                 TokenType::Semicolon => {
-                    self.eat(TokenType::Semicolon)?;
+                    self.eat_(TokenType::Semicolon)?;
                 }
                 TokenType::Newline => {
-                    self.eat(TokenType::Newline)?;
+                    self.eat_(TokenType::Newline)?;
                 }
                 TokenType::Rbrace | TokenType::Eof => {}
                 _ => return self.error(),
             }
         }
         Ok(stmts)
-    }
-
-    /// Skips sequence of newline tokens.
-    fn skip_newlines(&mut self) -> Result<(), BcError> {
-        while self.current_token.token_type == TokenType::Newline {
-            self.eat(TokenType::Newline)?;
-        }
-        Ok(())
     }
 
     /// Parses a statement.
@@ -320,7 +898,7 @@ impl Parser {
     /// Parses a string statement.
     fn parse_string_stmt(&mut self) -> Result<Stmt, BcError> {
         let val = self.current_token.value.clone();
-        self.eat(TokenType::String)?;
+        self.eat_(TokenType::String)?;
         Ok(Stmt::StringLiteral(val))
     }
 
@@ -330,7 +908,7 @@ impl Parser {
         if self.loop_depth == 0 {
             return self.misplaced("Break outside a for/while");
         }
-        self.eat(TokenType::Break)?;
+        self.eat_(TokenType::Break)?;
         Ok(Stmt::Break)
     }
 
@@ -345,9 +923,9 @@ impl Parser {
 
     /// Parses `{ statement_list }`.
     fn parse_block(&mut self) -> Result<Stmt, BcError> {
-        self.eat(TokenType::Lbrace)?;
+        self.eat_(TokenType::Lbrace)?;
         let stmts = self.parse_statement_list()?;
-        self.eat(TokenType::Rbrace)?;
+        self.eat_(TokenType::Rbrace)?;
         Ok(Stmt::Block(stmts))
     }
 
@@ -355,31 +933,31 @@ impl Parser {
     fn parse_expr_stmt(&mut self) -> Result<Stmt, BcError> {
         let expr = self.parse_relational_expression()?;
         if matches!(expr, Expr::RelationalOp(..)) {
-            self.extension(String::from("comparison in expression"));
+            self.extension_(String::from("comparison in expression"));
         }
         Ok(Stmt::Expr(expr))
     }
 
     /// Parses the `for` statement.
     fn parse_for(&mut self) -> Result<Stmt, BcError> {
-        self.eat(TokenType::For)?;
-        self.eat(TokenType::Lparen)?;
+        self.eat_(TokenType::For)?;
+        self.eat_(TokenType::Lparen)?;
         let init = self.parse_expression()?;
-        self.eat(TokenType::Semicolon)?;
+        self.eat_(TokenType::Semicolon)?;
         let cond = self.parse_relational_expression()?;
-        self.eat(TokenType::Semicolon)?;
+        self.eat_(TokenType::Semicolon)?;
         let post = self.parse_expression()?;
-        self.eat(TokenType::Rparen)?;
+        self.eat_(TokenType::Rparen)?;
         let body = self.parse_loop_body()?;
         Ok(Stmt::For(init, cond, post, Box::new(body)))
     }
 
     /// Parses the keyword `if` or `while` and the `( relational_expression )` after it.
     fn parse_cond(&mut self) -> Result<Expr, BcError> {
-        self.eat(self.current_token.token_type)?;
-        self.eat(TokenType::Lparen)?;
+        self.eat_(self.current_token.token_type)?;
+        self.eat_(TokenType::Lparen)?;
         let cond = self.parse_relational_expression()?;
-        self.eat(TokenType::Rparen)?;
+        self.eat_(TokenType::Rparen)?;
         Ok(cond)
     }
 
@@ -399,16 +977,16 @@ impl Parser {
 
     /// Parses `return`, `return (e)`, or the GNU extension `return e`.
     fn parse_return(&mut self) -> Result<Stmt, BcError> {
-        self.eat(TokenType::Return)?;
+        self.eat_(TokenType::Return)?;
         if self.current_token.token_type == TokenType::Lparen {
-            self.eat(TokenType::Lparen)?;
+            self.eat_(TokenType::Lparen)?;
             // POSIX: `return ()` is `return (0)`.
             if self.current_token.token_type == TokenType::Rparen {
-                self.eat(TokenType::Rparen)?;
+                self.eat_(TokenType::Rparen)?;
                 return Ok(Stmt::Return(None));
             }
             let expr = self.parse_expression()?;
-            self.eat(TokenType::Rparen)?;
+            self.eat_(TokenType::Rparen)?;
             return Ok(Stmt::Return(Some(expr)));
         }
         // GNU extension: return without parentheses
@@ -419,7 +997,7 @@ impl Parser {
             && nt != TokenType::Eof
         {
             let expr = self.parse_expression()?;
-            self.extension(String::from("return expression requires parenthesis"));
+            self.extension_(String::from("return expression requires parenthesis"));
             Ok(Stmt::Return(Some(expr)))
         } else {
             Ok(Stmt::Return(None))
@@ -428,31 +1006,31 @@ impl Parser {
 
     /// Parses a function definition `define f(x) { ... }`.
     fn parse_function(&mut self) -> Result<Stmt, BcError> {
-        self.eat(TokenType::Define)?;
+        self.eat_(TokenType::Define)?;
         if self.current_token.token_type != TokenType::Letter {
             return self.error();
         }
         let name = self.current_token.text();
-        self.eat(TokenType::Letter)?;
+        self.eat_(TokenType::Letter)?;
 
-        self.eat(TokenType::Lparen)?;
-        let params = self.parse_opt_define_list()?;
+        self.eat_(TokenType::Lparen)?;
+        let params = self.parse_opt_define_list_()?;
         self.parse_function_body(name, params)
     }
 
     /// Parses the rest of a function definition after its parameter list.
     fn parse_function_body(&mut self, name: String, params: Vec<Param>) -> Result<Stmt, BcError> {
-        self.eat(TokenType::Rparen)?;
+        self.eat_(TokenType::Rparen)?;
 
-        self.eat(TokenType::Lbrace)?;
+        self.eat_(TokenType::Lbrace)?;
         // POSIX requires a newline after `{`; GNU bc checks the name at this point too.
         if self.current_token.token_type != TokenType::Newline {
-            self.extension(String::from("End of line required"));
+            self.extension_(String::from("End of line required"));
         }
-        self.note_name(&name);
-        self.skip_newlines()?;
+        self.note_name_(&name);
+        self.skip_newlines_()?;
 
-        let autos = self.parse_opt_auto_define_list()?;
+        let autos = self.parse_opt_auto_define_list_()?;
         self.parse_function_stmts(name, params, autos)
     }
 
@@ -468,7 +1046,7 @@ impl Parser {
         let body = self.parse_statement_list();
         (self.loop_depth, self.in_function) = outer;
         let body = body?;
-        self.eat(TokenType::Rbrace)?;
+        self.eat_(TokenType::Rbrace)?;
 
         Ok(Stmt::FunctionDef(FunctionDef {
             name,
@@ -478,67 +1056,12 @@ impl Parser {
         }))
     }
 
-    /// Parses optional parameters/autos define list.
-    fn parse_opt_define_list(&mut self) -> Result<Vec<Param>, BcError> {
-        if self.current_token.token_type == TokenType::Rparen {
-            Ok(Vec::new())
-        } else {
-            self.parse_define_list()
-        }
-    }
-
-    /// Parses a define list of parameters or auto variables.
-    fn parse_define_list(&mut self) -> Result<Vec<Param>, BcError> {
-        let mut lst = Vec::new();
-        loop {
-            if self.current_token.token_type != TokenType::Letter {
-                return self.error();
-            }
-            let pname = self.eat_name()?;
-            let mut is_arr = false;
-            if self.current_token.token_type == TokenType::Lbracket {
-                self.eat(TokenType::Lbracket)?;
-                self.eat(TokenType::Rbracket)?;
-                is_arr = true;
-            }
-            lst.push(Param {
-                name: pname,
-                is_array: is_arr,
-            });
-
-            if self.current_token.token_type == TokenType::Comma {
-                self.eat(TokenType::Comma)?;
-            } else {
-                break;
-            }
-        }
-        Ok(lst)
-    }
-
-    /// Parses auto list declarations `auto a, b[]`.
-    fn parse_opt_auto_define_list(&mut self) -> Result<Vec<Param>, BcError> {
-        if self.current_token.token_type != TokenType::Auto {
-            return Ok(Vec::new());
-        }
-        self.eat(TokenType::Auto)?;
-        let lst = self.parse_define_list()?;
-        let t = self.current_token.token_type;
-        if t == TokenType::Newline {
-            self.eat(TokenType::Newline)?;
-        } else if t == TokenType::Semicolon {
-            self.eat(TokenType::Semicolon)?;
-        } else {
-            return self.error();
-        }
-        Ok(lst)
-    }
-
     /// Parses expressions, including relational ones.
     fn parse_relational_expression(&mut self) -> Result<Expr, BcError> {
         let (left, left_h) = self.parse_expression_h()?;
         if self.current_token.token_type == TokenType::RelOp {
             let op = self.current_token.text();
-            self.eat(TokenType::RelOp)?;
+            self.eat_(TokenType::RelOp)?;
             let (right, right_h) = self.parse_expression_h()?;
             self.check_height(1 + left_h.max(right_h))?;
             Ok(Expr::RelationalOp(
@@ -586,7 +1109,7 @@ impl Parser {
             }
 
             let op_val = self.current_token.text();
-            self.eat(self.current_token.token_type)?;
+            self.eat_(self.current_token.token_type)?;
 
             let (right, right_height) = self.parse_expr_precedence(next_min_prec)?;
             // A left-associative chain grows without recursion, so its height is checked here.
@@ -600,12 +1123,12 @@ impl Parser {
     fn parse_prefix(&mut self) -> Result<(Expr, Height), BcError> {
         let t = self.current_token.token_type;
         if t == TokenType::Minus {
-            self.eat(TokenType::Minus)?;
+            self.eat_(TokenType::Minus)?;
             let (expr, h) = self.parse_expr_precedence(5)?;
             Ok((Expr::Negate(Box::new(expr)), h + 1))
         } else if t == TokenType::IncrDecr {
             let op = self.current_token.text();
-            self.eat(TokenType::IncrDecr)?;
+            self.eat_(TokenType::IncrDecr)?;
             let (target, h) = self.parse_named_expression()?;
             Ok((
                 Expr::Update(op.starts_with('+'), true, Box::new(target)),
@@ -618,16 +1141,16 @@ impl Parser {
 
     /// Parses `( expression )` after the keyword or name that precedes it.
     fn parse_parenthesized(&mut self) -> Result<(Expr, Height), BcError> {
-        self.eat(TokenType::Lparen)?;
+        self.eat_(TokenType::Lparen)?;
         let inner = self.parse_expression_h()?;
-        self.eat(TokenType::Rparen)?;
+        self.eat_(TokenType::Rparen)?;
         Ok(inner)
     }
 
     /// Parses a keyword followed by a parenthesized expression: `length`, `sqrt` or `scale`
     /// (`which` is 0, 1 or 2).
     fn parse_builtin(&mut self, which: u8) -> Result<(Expr, Height), BcError> {
-        self.eat(self.current_token.token_type)?;
+        self.eat_(self.current_token.token_type)?;
         let (expr, h) = self.parse_parenthesized()?;
         let arg = Box::new(expr);
         let call = match which {
@@ -644,7 +1167,7 @@ impl Parser {
         match t {
             TokenType::Number => {
                 let val = self.current_token.text();
-                self.eat(TokenType::Number)?;
+                self.eat_(TokenType::Number)?;
                 Ok((Expr::Number(val), 1))
             }
             TokenType::Lparen => {
@@ -663,10 +1186,10 @@ impl Parser {
 
     /// Parses a function call `name(args)`.
     fn parse_call(&mut self) -> Result<(Expr, Height), BcError> {
-        let name = self.eat_name()?;
-        self.eat(TokenType::Lparen)?;
+        let name = self.eat_name_()?;
+        self.eat_(TokenType::Lparen)?;
         let (args, h) = self.parse_opt_argument_list()?;
-        self.eat(TokenType::Rparen)?;
+        self.eat_(TokenType::Rparen)?;
         Ok((Expr::Call(name, args), h + 1))
     }
 
@@ -676,7 +1199,7 @@ impl Parser {
         match self.current_token.token_type {
             TokenType::IncrDecr => {
                 let op = self.current_token.text();
-                self.eat(TokenType::IncrDecr)?;
+                self.eat_(TokenType::IncrDecr)?;
                 Ok((
                     Expr::Update(op.starts_with('+'), false, Box::new(target)),
                     target_h + 1,
@@ -687,7 +1210,7 @@ impl Parser {
             // is `-(a = 5)`. The right-hand side extends as far as possible.
             TokenType::AssignOp => {
                 let op = self.current_token.text();
-                self.eat(TokenType::AssignOp)?;
+                self.eat_(TokenType::AssignOp)?;
                 let (_, _, rhs_min_prec) = verified_pratt_infix_info(TOK_ASSIGN_OP);
                 let (value, value_h) = self.parse_expr_precedence(rhs_min_prec)?;
                 Ok((
@@ -708,19 +1231,19 @@ impl Parser {
         let t = self.current_token.token_type;
         match t {
             TokenType::Scale => {
-                self.eat(TokenType::Scale)?;
+                self.eat_(TokenType::Scale)?;
                 Ok((Expr::RegisterAccess(Register::Scale), 1))
             }
             TokenType::Ibase => {
-                self.eat(TokenType::Ibase)?;
+                self.eat_(TokenType::Ibase)?;
                 Ok((Expr::RegisterAccess(Register::Ibase), 1))
             }
             TokenType::Obase => {
-                self.eat(TokenType::Obase)?;
+                self.eat_(TokenType::Obase)?;
                 Ok((Expr::RegisterAccess(Register::Obase), 1))
             }
             TokenType::Letter => {
-                let name = self.eat_name()?;
+                let name = self.eat_name_()?;
                 if self.current_token.token_type == TokenType::Lbracket {
                     self.parse_subscript(name)
                 } else {
@@ -733,9 +1256,9 @@ impl Parser {
 
     /// Parses `[ expression ]` after the array name `name`.
     fn parse_subscript(&mut self, name: String) -> Result<(Expr, Height), BcError> {
-        self.eat(TokenType::Lbracket)?;
+        self.eat_(TokenType::Lbracket)?;
         let (idx, h) = self.parse_expression_h()?;
-        self.eat(TokenType::Rbracket)?;
+        self.eat_(TokenType::Rbracket)?;
         Ok((Expr::ArrayAccess(name, Box::new(idx)), h + 1))
     }
 
@@ -757,9 +1280,9 @@ impl Parser {
                 && self.peek_token_type(0)? == TokenType::Lbracket
                 && self.peek_token_type(1)? == TokenType::Rbracket
             {
-                let name = self.eat_name()?;
-                self.eat(TokenType::Lbracket)?;
-                self.eat(TokenType::Rbracket)?;
+                let name = self.eat_name_()?;
+                self.eat_(TokenType::Lbracket)?;
+                self.eat_(TokenType::Rbracket)?;
                 args.push(ExprOrArray::ArrayArg(name));
                 height = height.max(1);
             } else {
@@ -769,7 +1292,7 @@ impl Parser {
             }
 
             if self.current_token.token_type == TokenType::Comma {
-                self.eat(TokenType::Comma)?;
+                self.eat_(TokenType::Comma)?;
             } else {
                 break;
             }
