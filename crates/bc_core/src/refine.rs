@@ -240,6 +240,120 @@ pub open spec fn r_stmts(list: Seq<Stmt>, nodes: Seq<Node>, ns: Seq<usize>) -> b
         || (r_stmt(list[0], nodes, ns[0]) && r_stmts(list.drop_first(), nodes, ns.drop_first())))
 }
 
+/// The arena `b` extends the arena `a`.
+pub open spec fn extends(a: Seq<Node>, b: Seq<Node>) -> bool {
+    a.len() <= b.len() && forall|i: int| #![trigger a[i]] 0 <= i < a.len() ==> a[i] == b[i]
+}
+
+/// A subtree stays the same when the arena grows.
+pub proof fn lemma_r_expr_extend(x: Expr, a: Seq<Node>, b: Seq<Node>, n: usize)
+    requires
+        r_expr(x, a, n),
+        extends(a, b),
+    ensures
+        r_expr(x, b, n),
+    decreases x,
+{
+    assert(a[n as int] == b[n as int]);
+    match x {
+        Expr::ArrayAccess(_, i) => match a[n as int] {
+            Node::Array(_, j) => lemma_r_expr_extend(*i, a, b, j),
+            _ => {},
+        },
+        Expr::Negate(e) => match a[n as int] {
+            Node::Neg(j) => lemma_r_expr_extend(*e, a, b, j),
+            _ => {},
+        },
+        Expr::BinaryOp(_, l, r) => match a[n as int] {
+            Node::Binary(_, i, j) => {
+                lemma_r_expr_extend(*l, a, b, i);
+                lemma_r_expr_extend(*r, a, b, j);
+            },
+            _ => {},
+        },
+        Expr::RelationalOp(_, l, r) => match a[n as int] {
+            Node::Rel(_, i, j) => {
+                lemma_r_expr_extend(*l, a, b, i);
+                lemma_r_expr_extend(*r, a, b, j);
+            },
+            _ => {},
+        },
+        Expr::Update(_, _, t) => match a[n as int] {
+            Node::Update(_, _, j) => lemma_r_expr_extend(*t, a, b, j),
+            _ => {},
+        },
+        Expr::AssignOp(_, t, v) => match a[n as int] {
+            Node::Assign(_, i, j) => {
+                lemma_r_expr_extend(*t, a, b, i);
+                lemma_r_expr_extend(*v, a, b, j);
+            },
+            _ => {},
+        },
+        Expr::Call(_, args) => match a[n as int] {
+            Node::Call(_, sargs) => lemma_r_args_extend(args@, a, b, sargs),
+            _ => {},
+        },
+        Expr::LengthCall(e) => match a[n as int] {
+            Node::Length(j) => lemma_r_expr_extend(*e, a, b, j),
+            _ => {},
+        },
+        Expr::SqrtCall(e) => match a[n as int] {
+            Node::Sqrt(j) => lemma_r_expr_extend(*e, a, b, j),
+            _ => {},
+        },
+        Expr::ScaleCall(e) => match a[n as int] {
+            Node::ScaleOf(j) => lemma_r_expr_extend(*e, a, b, j),
+            _ => {},
+        },
+        Expr::Paren(e) => match a[n as int] {
+            Node::Paren(j) => lemma_r_expr_extend(*e, a, b, j),
+            _ => {},
+        },
+        _ => {},
+    }
+}
+
+pub proof fn lemma_r_args_extend(args: Seq<ExprOrArray>, a: Seq<Node>, b: Seq<Node>, sargs: Seq<Arg>)
+    requires
+        r_args(args, a, sargs),
+        extends(a, b),
+    ensures
+        r_args(args, b, sargs),
+    decreases args,
+{
+    if args.len() > 0 {
+        assert(r_arg(args[0], a, sargs[0]));
+        match args[0] {
+            ExprOrArray::Expr(e) => {
+                assert(r_expr(e, a, sargs[0].expr));
+                lemma_r_expr_extend(e, a, b, sargs[0].expr);
+            },
+            _ => {},
+        }
+        assert(r_arg(args[0], b, sargs[0]));
+        lemma_r_args_extend(args.drop_first(), a, b, sargs.drop_first());
+    }
+}
+
+/// One more argument at the end.
+pub proof fn lemma_r_args_push(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs: Seq<Arg>, x: ExprOrArray, s: Arg)
+    requires
+        r_args(args, nodes, sargs),
+        r_arg(x, nodes, s),
+    ensures
+        r_args(args.push(x), nodes, sargs.push(s)),
+    decreases args.len(),
+{
+    if args.len() == 0 {
+        assert(args.push(x).drop_first() =~= args);
+        assert(sargs.push(s).drop_first() =~= sargs);
+    } else {
+        lemma_r_args_push(args.drop_first(), nodes, sargs.drop_first(), x, s);
+        assert(args.push(x).drop_first() =~= args.drop_first().push(x));
+        assert(sargs.push(s).drop_first() =~= sargs.drop_first().push(s));
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Evaluator state
 // ---------------------------------------------------------------------------------------------

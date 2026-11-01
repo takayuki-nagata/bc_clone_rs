@@ -27,8 +27,11 @@ use crate::refine::text_view;
 )]
 mod lexer;
 #[allow(
+    clippy::len_zero,
     clippy::match_like_matches_macro,
+    clippy::needless_late_init,
     clippy::question_mark,
+    clippy::type_complexity,
     reason = "the code keeps the forms that the proofs reason about"
 )]
 mod parse;
@@ -291,23 +294,9 @@ pub struct ExExtensionPolicy(ExtensionPolicy);
 
 } // verus!
 
-impl BinOp {
-    /// The operator of a `+`, `-`, `*`, `/`, `%` or `^` token (as `binop_code`: `^` for any
-    /// other text, which the lexer does not produce).
-    pub fn from_symbol(text: &str) -> Self {
-        match text.as_bytes().first() {
-            Some(b'+') => Self::Add,
-            Some(b'-') => Self::Sub,
-            Some(b'*') => Self::Mul,
-            Some(b'/') => Self::Div,
-            Some(b'%') => Self::Mod,
-            _ => Self::Pow,
-        }
-    }
-}
-
 impl RelOp {
     /// The operator of a relational token (as `rel_code`).
+    #[cfg(test)]
     pub fn from_symbol(text: &str) -> Self {
         let two = text.len() == 2;
         match text.as_bytes().first() {
@@ -327,17 +316,6 @@ impl RelOp {
                     Self::Gt
                 }
             }
-        }
-    }
-}
-
-impl AssignOp {
-    /// The operator of an assignment token.
-    pub fn from_symbol(text: &str) -> Self {
-        if text.len() == 1 {
-            Self::Assign
-        } else {
-            Self::Compound(BinOp::from_symbol(text))
         }
     }
 }

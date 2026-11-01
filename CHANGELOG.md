@@ -96,6 +96,8 @@ against the specification. AGENTS.md lists what the proofs assume.
   `bc: unrecognized option '--name'`.
 
 ### API changes (`bc_core`)
+- `BinOp::from_symbol` and `AssignOp::from_symbol` are removed, and `RelOp::from_symbol` exists only
+  in tests: the parser reads the operator from the token's bytes.
 - `BcError::Syntax` no longer has the debug-only field `detail`, and `BcError::syntax` takes only
   the line. `Lexer::try_peek_token` returns the token's kind. `Lexer::line` and `Parser::lexer` are
   private.
