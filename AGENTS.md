@@ -271,6 +271,18 @@ Run before every commit; do not commit unless everything passes:
 cargo fmt --check && cargo clippy --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --all-targets -- -D warnings && cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings && cargo clippy --package bc_c_api --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo clippy --package bc_zephyr --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo test
 ```
 
+### Dividing work among subagents
+- Implementing, proving and fixing stay in one agent: a proof is a tight loop of writing, verifying
+  and reading errors, and a new agent would have to rebuild the invariants and the design.
+- Use a separate agent for what gains from fresh eyes or a small report:
+  - independent review of a finished change, in particular whether a theorem states what is
+    claimed and whether the specification matches POSIX;
+  - running a heavy check and reporting the verdict with its decisive log lines;
+  - broad searches, and classifying the survivors of a mutants run.
+- A reviewer or verifier does not take the author's word: it reads the code and the logs itself,
+  and confirms that a result belongs to the commit or tree under discussion.
+- Give each agent the commit, the files and the question, since it starts without this context.
+
 ### Process-global state in tests
 Signal handlers and panic hooks are process-global. `bc_cli` registers the SIGINT handler only
 under `#[cfg(not(test))]`, and tests that touch global state serialize on `TEST_MUTEX`.
