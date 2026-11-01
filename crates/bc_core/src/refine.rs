@@ -335,6 +335,106 @@ pub proof fn lemma_r_args_extend(args: Seq<ExprOrArray>, a: Seq<Node>, b: Seq<No
     }
 }
 
+/// A statement stays the same when the arena grows.
+pub proof fn lemma_r_stmt_extend(x: Stmt, a: Seq<Node>, b: Seq<Node>, n: usize)
+    requires
+        r_stmt(x, a, n),
+        extends(a, b),
+    ensures
+        r_stmt(x, b, n),
+    decreases x,
+{
+    assert(a[n as int] == b[n as int]);
+    match x {
+        Stmt::Block(list) => match a[n as int] {
+            Node::Block(ns) => lemma_r_stmts_extend(list@, a, b, ns),
+            _ => {},
+        },
+        Stmt::Expr(e) => match a[n as int] {
+            Node::ExprStmt(j) => lemma_r_expr_extend(e, a, b, j),
+            _ => {},
+        },
+        Stmt::Return(v) => match a[n as int] {
+            Node::Return(_, j) => match v {
+                Some(e) => lemma_r_expr_extend(e, a, b, j),
+                None => {},
+            },
+            _ => {},
+        },
+        Stmt::If(c, t) => match a[n as int] {
+            Node::If(i, j) => {
+                lemma_r_expr_extend(c, a, b, i);
+                lemma_r_stmt_extend(*t, a, b, j);
+            },
+            _ => {},
+        },
+        Stmt::While(c, t) => match a[n as int] {
+            Node::While(i, j) => {
+                lemma_r_expr_extend(c, a, b, i);
+                lemma_r_stmt_extend(*t, a, b, j);
+            },
+            _ => {},
+        },
+        Stmt::For(i, c, u, t) => match a[n as int] {
+            Node::For(d, e, f, g) => {
+                lemma_r_expr_extend(i, a, b, d);
+                lemma_r_expr_extend(c, a, b, e);
+                lemma_r_expr_extend(u, a, b, f);
+                lemma_r_stmt_extend(*t, a, b, g);
+            },
+            _ => {},
+        },
+        Stmt::FunctionDef(fd) => match a[n as int] {
+            Node::Define(_, _, _, body) => lemma_r_stmts_extend(fd.body@, a, b, body),
+            _ => {},
+        },
+        _ => {},
+    }
+}
+
+pub proof fn lemma_r_stmts_extend(list: Seq<Stmt>, a: Seq<Node>, b: Seq<Node>, ns: Seq<usize>)
+    requires
+        r_stmts(list, a, ns),
+        extends(a, b),
+    ensures
+        r_stmts(list, b, ns),
+    decreases list,
+{
+    if list.len() > 0 {
+        lemma_r_stmt_extend(list[0], a, b, ns[0]);
+        lemma_r_stmts_extend(list.drop_first(), a, b, ns.drop_first());
+    }
+}
+
+/// One more statement at the end.
+pub proof fn lemma_r_stmts_push(list: Seq<Stmt>, nodes: Seq<Node>, ns: Seq<usize>, x: Stmt, n: usize)
+    requires
+        r_stmts(list, nodes, ns),
+        r_stmt(x, nodes, n),
+    ensures
+        r_stmts(list.push(x), nodes, ns.push(n)),
+    decreases list.len(),
+{
+    if list.len() == 0 {
+        assert(list.push(x).drop_first() =~= list);
+        assert(ns.push(n).drop_first() =~= ns);
+    } else {
+        lemma_r_stmts_push(list.drop_first(), nodes, ns.drop_first(), x, n);
+        assert(list.push(x).drop_first() =~= list.drop_first().push(x));
+        assert(ns.push(n).drop_first() =~= ns.drop_first().push(n));
+    }
+}
+
+/// An expression is relational exactly when its node is.
+pub proof fn lemma_is_rel(x: Expr, nodes: Seq<Node>, n: usize)
+    requires
+        r_expr(x, nodes, n),
+    ensures
+        n < nodes.len(),
+        (x is RelationalOp) == (nodes[n as int] is Rel),
+{
+}
+
 /// One more argument at the end.
 pub proof fn lemma_r_args_push(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs: Seq<Arg>, x: ExprOrArray, s: Arg)
     requires

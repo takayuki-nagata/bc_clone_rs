@@ -31,6 +31,8 @@ mod lexer;
     clippy::match_like_matches_macro,
     clippy::needless_late_init,
     clippy::question_mark,
+    clippy::single_match,
+    clippy::too_many_arguments,
     clippy::type_complexity,
     reason = "the code keeps the forms that the proofs reason about"
 )]

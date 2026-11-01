@@ -17,9 +17,10 @@ use crate::driver::r_ext;
 use crate::error::BcError;
 #[cfg(verus_keep_ghost)]
 use crate::refine::{
-    assign_code as r_assign_code, bin_code, extends, lemma_r_args_extend, lemma_r_args_push,
-    lemma_r_expr_extend, named, r_arg, r_args, r_expr, r_param, r_params, rel_code as r_rel_code,
-    text_view,
+    assign_code as r_assign_code, bin_code, extends, lemma_is_rel, lemma_r_args_extend,
+    lemma_r_args_push, lemma_r_expr_extend, lemma_r_stmt_extend, lemma_r_stmts_extend,
+    lemma_r_stmts_push, named, r_arg, r_args, r_expr, r_param, r_params, r_stmt, r_stmts,
+    rel_code as r_rel_code, text_view,
 };
 use crate::verified_kernels::{
     TOK_ASSIGN_OP, TOK_EXP_OP, TOK_MUL_OP, TOK_PLUS_MINUS, verified_nesting_within_limit,
@@ -34,13 +35,17 @@ use bc_spec::lexer::{Tok, Token as SToken, syntax_error_msg};
 use bc_spec::parser::Param as SParam;
 #[cfg(verus_keep_ghost)]
 use bc_spec::parser::{
-    Arg, ExtUse, Node, PCfg, PR, PState, add_node, assign_code as s_assign_code, binop_code,
-    cur_tok, eat as s_eat, eat_name as s_eat_name, extension as s_extension, inc,
-    infix_info as s_infix_info, lex_err, max_u64, multi_letter_prefix, no_err,
-    note_name as s_note_name, p_arg_list, p_builtin, p_call, p_define_list, p_expr_loop,
-    p_expr_prec, p_named, p_named_tail, p_opt_auto, p_parenthesized, p_prefix, p_primary,
-    p_relational, p_skip_newlines, p_subscript, peek_kind, pr_args, pr_node, pr_ok, pr_params,
-    rel_code as s_rel_code, st_set_depth, syntax_at, token_at, too_deep, within,
+    Arg, ExtUse, Node, PCfg, PErr, PR, PState, add_node, assign_code as s_assign_code, binop_code,
+    break_msg, comparison_msg, cur_tok, eat as s_eat, eat_name as s_eat_name, eol_msg,
+    extension as s_extension, inc, infix_info as s_infix_info, lex_err, max_u64, misplaced,
+    multi_letter_prefix, no_err, note_name as s_note_name, p_arg_list, p_block, p_break_stmt,
+    p_builtin, p_call, p_cond, p_define_list, p_expr_loop, p_expr_prec, p_expr_stmt, p_for,
+    p_function, p_function_body, p_function_stmts, p_if, p_input_item, p_loop_body, p_named,
+    p_named_tail, p_opt_auto, p_parenthesized, p_prefix, p_primary, p_program, p_relational,
+    p_return, p_return_stmt, p_semicolon_list, p_skip_newlines, p_statement, p_statement_inner,
+    p_statement_list, p_string_stmt, p_subscript, p_while, peek_kind, pr_args, pr_err, pr_list,
+    pr_node, pr_ok, pr_params, rel_code as s_rel_code, return_msg, return_paren_msg, st_set_depth,
+    st_set_loop, syntax_at, token_at, too_deep, within,
 };
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin::Ghost;
@@ -98,6 +103,10 @@ type GState = PState;
 #[cfg(not(verus_keep_ghost))]
 type GState = ();
 #[cfg(verus_keep_ghost)]
+type GParams = Seq<SParam>;
+#[cfg(not(verus_keep_ghost))]
+type GParams = ();
+#[cfg(verus_keep_ghost)]
 type GResult = PR;
 #[cfg(not(verus_keep_ghost))]
 type GResult = ();
@@ -143,6 +152,12 @@ pub open spec fn pdone(p: PR) -> bool {
 
 /// The parser corresponds to the specification's state `st` on the tokens `toks`.
 spec fn r_p(p: Parser, toks: Seq<SToken>, cfg: PCfg, st: PState) -> bool {
+    &&& r_pc(p, toks, cfg, st)
+    &&& st.cur < toks.len()
+}
+
+/// [`r_p`], possibly after the final `Eof` was consumed.
+spec fn r_pc(p: Parser, toks: Seq<SToken>, cfg: PCfg, st: PState) -> bool {
     &&& toks_wf(toks)
     &&& st.cur <= toks.len()
     &&& st.nodes.len() <= 2 * st.cur
@@ -175,14 +190,14 @@ spec fn r_perr(e: BcError, ext: Seq<(usize, String)>, p: PR) -> bool {
 
 spec fn r_unit(r: Result<(), BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
-        Ok(()) => p.ok && r_p(q, toks, cfg, p.st) && p.st.nodes == s0.nodes && p.st.cur >= s0.cur,
+        Ok(()) => p.ok && r_p(q, toks, cfg, p.st) && p.st.nodes == s0.nodes && p.st.cur >= s0.cur && p.st.depth == s0.depth,
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
 
 spec fn r_plist(r: Result<Vec<Param>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
-        Ok(l) => p.ok && r_p(q, toks, cfg, p.st) && p.st.nodes == s0.nodes && p.st.cur >= s0.cur && r_params(l@, p.params),
+        Ok(l) => p.ok && r_p(q, toks, cfg, p.st) && p.st.nodes == s0.nodes && p.st.cur >= s0.cur && p.st.depth == s0.depth && r_params(l@, p.params),
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
@@ -214,17 +229,49 @@ impl Parser {
     fn eat(&mut self, k: TokenType, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: Result<(), BcError>)
         requires
             r_p(*old(self), toks, cfg, st),
-            st.cur < toks.len() || !(tok_of(k) is Eof),
+            !(tok_of(k) is Eof),
         ensures
             r_unit(r, *final(self), toks, cfg, st, s_eat(toks, st, tok_of(k))),
+            r is Ok ==> s_eat(toks, st, tok_of(k)).st.cur == st.cur + 1,
     {
-        proof { lemma_rest_step(toks, st.cur + 1); }
+        proof {
+            lemma_rest_step(toks, st.cur + 1);
+            if st.cur == toks.len() - 1 { assert(cur_tok(toks, st) == toks.last()); }
+        }
         if kind_eq(self.current_token.token_type, k) {
             let line = self.current_token.line;
             match self.lexer.try_get_next_token() {
                 Ok(t) => {
                     self.last_line = line;
                     self.current_token = t;
+                    Ok(())
+                },
+                Err(e) => Err(e),
+            }
+        } else {
+            Err(BcError::Syntax { line: self.current_token.line, message: syntax_error_text() })
+        }
+    }
+
+    /// Consumes the final `Eof` of an item, otherwise raises error.
+    fn eat_eof(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: Result<(), BcError>)
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            match r {
+                Ok(()) => s_eat(toks, st, Tok::Eof).ok && r_pc(*final(self), toks, cfg, s_eat(toks, st, Tok::Eof).st)
+                    && s_eat(toks, st, Tok::Eof).st.nodes == st.nodes && s_eat(toks, st, Tok::Eof).st.cur == st.cur + 1 && s_eat(toks, st, Tok::Eof).st.depth == st.depth,
+                Err(x) => r_perr(x, final(self).extension_uses@, s_eat(toks, st, Tok::Eof)),
+            },
+    {
+        proof { lemma_rest_step(toks, st.cur + 1); }
+        if matches!(self.current_token.token_type, TokenType::Eof) {
+            let line = self.current_token.line;
+            match self.lexer.try_get_next_token() {
+                Ok(t) => {
+                    self.last_line = line;
+                    self.current_token = t;
+                    proof { assert(cur_tok(toks, st) == toks.last()); }
                     Ok(())
                 },
                 Err(e) => Err(e),
@@ -351,6 +398,7 @@ impl Parser {
                 r_p(*self, toks, cfg, cur),
                 cur.nodes == st.nodes,
                 cur.cur >= st.cur,
+                cur.depth == st.depth,
                 forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) ==>
                     exists|g: u64| #![trigger p_skip_newlines(toks, cur, g)] p_skip_newlines(toks, cur, g) == p_skip_newlines(toks, st, f),
         {
@@ -403,6 +451,7 @@ impl Parser {
                 r_p(*self, toks, cfg, cur),
                 cur.nodes == st.nodes,
                 cur.cur >= st.cur,
+                cur.depth == st.depth,
                 r_params(lst@, acc),
                 dl_chain(toks, cfg, st, cur, acc),
         {
@@ -546,50 +595,6 @@ impl Parser {
         }
     }
 
-    #[verifier::external_body]
-    fn parse_relational_expression_(&mut self) -> Result<Expr, BcError> {
-        self.parse_relational_expression(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
-    }
-
-    #[verifier::external_body]
-    fn parse_expression_(&mut self) -> Result<Expr, BcError> {
-        self.parse_expression(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
-    }
-
-    #[verifier::external_body]
-    fn too_deep_(&self) -> BcError {
-        self.too_deep_error(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
-    }
-
-    #[verifier::external_body]
-    fn eat_(&mut self, k: TokenType) -> Result<(), BcError> {
-        self.eat(k, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
-    }
-
-    #[verifier::external_body]
-    fn extension_(&mut self, description: String) {
-        self.extension(description, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
-    }
-
-    #[verifier::external_body]
-    fn note_name_(&mut self, name: &str) {
-        self.note_name(name.as_bytes(), Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
-    }
-
-    #[verifier::external_body]
-    fn skip_newlines_(&mut self) -> Result<(), BcError> {
-        self.skip_newlines(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
-    }
-
-    #[verifier::external_body]
-    fn parse_opt_define_list_(&mut self) -> Result<Vec<Param>, BcError> {
-        self.parse_opt_define_list(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
-    }
-
-    #[verifier::external_body]
-    fn parse_opt_auto_define_list_(&mut self) -> Result<Vec<Param>, BcError> {
-        self.parse_opt_auto_define_list(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
-    }
 }
 
 spec fn dl_chain(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<SParam>) -> bool {
@@ -1971,6 +1976,1625 @@ proof fn lemma_loop_next(toks: Seq<SToken>, cfg: PCfg, st: PState, min_prec: i8,
     }
 }
 
+/// The diagnostic or description `break_outside`.
+fn break_outside_text() -> (r: String)
+    ensures
+        text_view(r) == break_msg(),
+{
+    let m = [66u8, 114, 101, 97, 107, 32, 111, 117, 116, 115, 105, 100, 101, 32, 97, 32, 102, 111, 114, 47, 119, 104, 105, 108, 101];
+    proof { assert(m@ =~= break_msg()); }
+    ascii_string(m.as_slice())
+}
+
+/// The diagnostic or description `return_outside`.
+fn return_outside_text() -> (r: String)
+    ensures
+        text_view(r) == return_msg(),
+{
+    let m = [82u8, 101, 116, 117, 114, 110, 32, 111, 117, 116, 115, 105, 100, 101, 32, 111, 102, 32, 97, 32, 102, 117, 110, 99, 116, 105, 111, 110, 46];
+    proof { assert(m@ =~= return_msg()); }
+    ascii_string(m.as_slice())
+}
+
+/// The diagnostic or description `comparison`.
+fn comparison_text() -> (r: String)
+    ensures
+        text_view(r) == comparison_msg(),
+{
+    let m = [99u8, 111, 109, 112, 97, 114, 105, 115, 111, 110, 32, 105, 110, 32, 101, 120, 112, 114, 101, 115, 115, 105, 111, 110];
+    proof { assert(m@ =~= comparison_msg()); }
+    ascii_string(m.as_slice())
+}
+
+/// The diagnostic or description `return_paren`.
+fn return_paren_text() -> (r: String)
+    ensures
+        text_view(r) == return_paren_msg(),
+{
+    let m = [114u8, 101, 116, 117, 114, 110, 32, 101, 120, 112, 114, 101, 115, 115, 105, 111, 110, 32, 114, 101, 113, 117, 105, 114, 101, 115, 32, 112, 97, 114, 101, 110, 116, 104, 101, 115, 105, 115];
+    proof { assert(m@ =~= return_paren_msg()); }
+    ascii_string(m.as_slice())
+}
+
+/// The diagnostic or description `end_of_line`.
+fn end_of_line_text() -> (r: String)
+    ensures
+        text_view(r) == eol_msg(),
+{
+    let m = [69u8, 110, 100, 32, 111, 102, 32, 108, 105, 110, 101, 32, 114, 101, 113, 117, 105, 114, 101, 100];
+    proof { assert(m@ =~= eol_msg()); }
+    ascii_string(m.as_slice())
+}
+
+/// The state `s` came after `s0` in a statement.
+spec fn r_sgrown(s0: PState, s: PState) -> bool {
+    &&& extends(s0.nodes, s.nodes)
+    &&& s.cur > s0.cur
+    &&& s.nodes.len() - s0.nodes.len() <= 2 * (s.cur - s0.cur)
+    &&& s.depth == s0.depth
+}
+
+spec fn r_sres(r: Result<Stmt, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+    match r {
+        Ok(x) => p.ok && p.flag && r_p(q, toks, cfg, p.st) && r_sgrown(s0, p.st) && r_stmt(x, p.st.nodes, p.node),
+        Err(x) => r_perr(x, q.extension_uses@, p),
+    }
+}
+
+spec fn r_lres(r: Result<Vec<Stmt>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+    match r {
+        Ok(l) => p.ok && r_p(q, toks, cfg, p.st) && extends(s0.nodes, p.st.nodes) && p.st.cur >= s0.cur
+            && p.st.nodes.len() - s0.nodes.len() <= 2 * (p.st.cur - s0.cur) && p.st.depth == s0.depth
+            && r_stmts(l@, p.st.nodes, p.list),
+        Err(x) => r_perr(x, q.extension_uses@, p),
+    }
+}
+
+/// `Parser::parse_input_item`: `flag` tells whether there is an item.
+spec fn r_ires(r: Result<Option<Stmt>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+    match r {
+        Ok(o) => p.ok && r_pc(q, toks, cfg, p.st) && extends(s0.nodes, p.st.nodes) && p.st.cur >= s0.cur
+            && p.st.nodes.len() - s0.nodes.len() <= 2 * (p.st.cur - s0.cur) && p.st.depth == s0.depth
+            && match o {
+                Some(x) => p.flag && r_stmt(x, p.st.nodes, p.node),
+                None => !p.flag,
+            },
+        Err(x) => r_perr(x, q.extension_uses@, p),
+    }
+}
+
+/// Adding a statement's node.
+proof fn lemma_stmt_node(q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, s: PState, n: Node, h: u64)
+    requires
+        r_pc(q, toks, cfg, s),
+        extends(s0.nodes, s.nodes),
+        s0.nodes.len() <= 2 * s0.cur,
+        s.cur > s0.cur,
+        s.nodes.len() - s0.nodes.len() + 1 <= 2 * (s.cur - s0.cur),
+        s.depth == s0.depth,
+    ensures
+        ({
+            let g = add_node(s, n, h);
+            &&& g.ok
+            &&& g.flag
+            &&& g.node == s.nodes.len()
+            &&& g.st.nodes.len() == s.nodes.len() + 1
+            &&& g.st.nodes[g.node as int] == n
+            &&& g.st.cur == s.cur
+            &&& g.st.ext == s.ext
+            &&& r_pc(q, toks, cfg, g.st)
+            &&& (s.cur < toks.len() ==> r_p(q, toks, cfg, g.st))
+            &&& extends(s.nodes, g.st.nodes)
+            &&& r_sgrown(s0, g.st)
+        }),
+{
+    let g = add_node(s, n, h);
+    assert(g.st.nodes =~= s.nodes.push(n));
+    assert(cur_tok(toks, g.st) == cur_tok(toks, s));
+}
+
+spec fn semi_chain(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>) -> bool {
+    forall|f: u64| #![trigger p_semicolon_list(toks, cfg, st, seq![], f)] pdone(p_semicolon_list(toks, cfg, st, seq![], f)) ==>
+        exists|g: u64| #![trigger p_semicolon_list(toks, cfg, cur, acc, g)] p_semicolon_list(toks, cfg, cur, acc, g) == p_semicolon_list(toks, cfg, st, seq![], f)
+}
+
+proof fn lemma_semi_start(toks: Seq<SToken>, cfg: PCfg, st: PState)
+    ensures
+        semi_chain(toks, cfg, st, st, Seq::<usize>::empty()),
+{
+    let e = Seq::<usize>::empty();
+    assert(seq![] == e);
+    assert forall|f: u64| #![trigger p_semicolon_list(toks, cfg, st, seq![], f)] pdone(p_semicolon_list(toks, cfg, st, seq![], f)) implies
+        exists|g: u64| #![trigger p_semicolon_list(toks, cfg, st, e, g)] p_semicolon_list(toks, cfg, st, e, g) == p_semicolon_list(toks, cfg, st, seq![], f) by {
+        assert(p_semicolon_list(toks, cfg, st, e, f) == p_semicolon_list(toks, cfg, st, seq![], f));
+    }
+}
+
+proof fn lemma_semi_ret(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>, r: PR)
+    requires
+        semi_chain(toks, cfg, st, cur, acc),
+        forall|g: u64| #![trigger p_semicolon_list(toks, cfg, cur, acc, g)] g > 0 && pdone(p_semicolon_list(toks, cfg, cur, acc, g)) ==> p_semicolon_list(toks, cfg, cur, acc, g) == r,
+    ensures
+        forall|f: u64| #![trigger p_semicolon_list(toks, cfg, st, seq![], f)] pdone(p_semicolon_list(toks, cfg, st, seq![], f)) ==> p_semicolon_list(toks, cfg, st, seq![], f) == r,
+{
+    assert forall|f: u64| #![trigger p_semicolon_list(toks, cfg, st, seq![], f)] pdone(p_semicolon_list(toks, cfg, st, seq![], f)) implies p_semicolon_list(toks, cfg, st, seq![], f) == r by {
+        let g = choose|g: u64| #![trigger p_semicolon_list(toks, cfg, cur, acc, g)] p_semicolon_list(toks, cfg, cur, acc, g) == p_semicolon_list(toks, cfg, st, seq![], f);
+        assert(g > 0);
+    }
+}
+
+proof fn lemma_semi_next(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>, cur2: PState, acc2: Seq<usize>)
+    requires
+        semi_chain(toks, cfg, st, cur, acc),
+        forall|g: u64| #![trigger p_semicolon_list(toks, cfg, cur, acc, g)] g > 0 && pdone(p_semicolon_list(toks, cfg, cur, acc, g)) ==> p_semicolon_list(toks, cfg, cur, acc, g) == p_semicolon_list(toks, cfg, cur2, acc2, (g - 1) as u64),
+    ensures
+        semi_chain(toks, cfg, st, cur2, acc2),
+{
+    assert forall|f: u64| #![trigger p_semicolon_list(toks, cfg, st, seq![], f)] pdone(p_semicolon_list(toks, cfg, st, seq![], f)) implies
+        exists|g: u64| #![trigger p_semicolon_list(toks, cfg, cur2, acc2, g)] p_semicolon_list(toks, cfg, cur2, acc2, g) == p_semicolon_list(toks, cfg, st, seq![], f) by {
+        let g = choose|g: u64| #![trigger p_semicolon_list(toks, cfg, cur, acc, g)] p_semicolon_list(toks, cfg, cur, acc, g) == p_semicolon_list(toks, cfg, st, seq![], f);
+        assert(g > 0);
+        assert(p_semicolon_list(toks, cfg, cur2, acc2, (g - 1) as u64) == p_semicolon_list(toks, cfg, st, seq![], f));
+    }
+}
+
+spec fn sl_chain(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>) -> bool {
+    forall|f: u64| #![trigger p_statement_list(toks, cfg, st, seq![], f)] pdone(p_statement_list(toks, cfg, st, seq![], f)) ==>
+        exists|g: u64| #![trigger p_statement_list(toks, cfg, cur, acc, g)] p_statement_list(toks, cfg, cur, acc, g) == p_statement_list(toks, cfg, st, seq![], f)
+}
+
+proof fn lemma_sl_start(toks: Seq<SToken>, cfg: PCfg, st: PState)
+    ensures
+        sl_chain(toks, cfg, st, st, Seq::<usize>::empty()),
+{
+    let e = Seq::<usize>::empty();
+    assert(seq![] == e);
+    assert forall|f: u64| #![trigger p_statement_list(toks, cfg, st, seq![], f)] pdone(p_statement_list(toks, cfg, st, seq![], f)) implies
+        exists|g: u64| #![trigger p_statement_list(toks, cfg, st, e, g)] p_statement_list(toks, cfg, st, e, g) == p_statement_list(toks, cfg, st, seq![], f) by {
+        assert(p_statement_list(toks, cfg, st, e, f) == p_statement_list(toks, cfg, st, seq![], f));
+    }
+}
+
+proof fn lemma_sl_ret(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>, r: PR)
+    requires
+        sl_chain(toks, cfg, st, cur, acc),
+        forall|g: u64| #![trigger p_statement_list(toks, cfg, cur, acc, g)] g > 0 && pdone(p_statement_list(toks, cfg, cur, acc, g)) ==> p_statement_list(toks, cfg, cur, acc, g) == r,
+    ensures
+        forall|f: u64| #![trigger p_statement_list(toks, cfg, st, seq![], f)] pdone(p_statement_list(toks, cfg, st, seq![], f)) ==> p_statement_list(toks, cfg, st, seq![], f) == r,
+{
+    assert forall|f: u64| #![trigger p_statement_list(toks, cfg, st, seq![], f)] pdone(p_statement_list(toks, cfg, st, seq![], f)) implies p_statement_list(toks, cfg, st, seq![], f) == r by {
+        let g = choose|g: u64| #![trigger p_statement_list(toks, cfg, cur, acc, g)] p_statement_list(toks, cfg, cur, acc, g) == p_statement_list(toks, cfg, st, seq![], f);
+        assert(g > 0);
+    }
+}
+
+proof fn lemma_sl_next(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>, cur2: PState, acc2: Seq<usize>)
+    requires
+        sl_chain(toks, cfg, st, cur, acc),
+        forall|g: u64| #![trigger p_statement_list(toks, cfg, cur, acc, g)] g > 0 && pdone(p_statement_list(toks, cfg, cur, acc, g)) ==> p_statement_list(toks, cfg, cur, acc, g) == p_statement_list(toks, cfg, cur2, acc2, (g - 1) as u64),
+    ensures
+        sl_chain(toks, cfg, st, cur2, acc2),
+{
+    assert forall|f: u64| #![trigger p_statement_list(toks, cfg, st, seq![], f)] pdone(p_statement_list(toks, cfg, st, seq![], f)) implies
+        exists|g: u64| #![trigger p_statement_list(toks, cfg, cur2, acc2, g)] p_statement_list(toks, cfg, cur2, acc2, g) == p_statement_list(toks, cfg, st, seq![], f) by {
+        let g = choose|g: u64| #![trigger p_statement_list(toks, cfg, cur, acc, g)] p_statement_list(toks, cfg, cur, acc, g) == p_statement_list(toks, cfg, st, seq![], f);
+        assert(g > 0);
+        assert(p_statement_list(toks, cfg, cur2, acc2, (g - 1) as u64) == p_statement_list(toks, cfg, st, seq![], f));
+    }
+}
+
+spec fn prog_chain(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>) -> bool {
+    forall|f: u64| #![trigger p_program(toks, cfg, st, seq![], f)] pdone(p_program(toks, cfg, st, seq![], f)) ==>
+        exists|g: u64| #![trigger p_program(toks, cfg, cur, acc, g)] p_program(toks, cfg, cur, acc, g) == p_program(toks, cfg, st, seq![], f)
+}
+
+proof fn lemma_prog_start(toks: Seq<SToken>, cfg: PCfg, st: PState)
+    ensures
+        prog_chain(toks, cfg, st, st, Seq::<usize>::empty()),
+{
+    let e = Seq::<usize>::empty();
+    assert(seq![] == e);
+    assert forall|f: u64| #![trigger p_program(toks, cfg, st, seq![], f)] pdone(p_program(toks, cfg, st, seq![], f)) implies
+        exists|g: u64| #![trigger p_program(toks, cfg, st, e, g)] p_program(toks, cfg, st, e, g) == p_program(toks, cfg, st, seq![], f) by {
+        assert(p_program(toks, cfg, st, e, f) == p_program(toks, cfg, st, seq![], f));
+    }
+}
+
+proof fn lemma_prog_ret(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>, r: PR)
+    requires
+        prog_chain(toks, cfg, st, cur, acc),
+        forall|g: u64| #![trigger p_program(toks, cfg, cur, acc, g)] g > 0 && pdone(p_program(toks, cfg, cur, acc, g)) ==> p_program(toks, cfg, cur, acc, g) == r,
+    ensures
+        forall|f: u64| #![trigger p_program(toks, cfg, st, seq![], f)] pdone(p_program(toks, cfg, st, seq![], f)) ==> p_program(toks, cfg, st, seq![], f) == r,
+{
+    assert forall|f: u64| #![trigger p_program(toks, cfg, st, seq![], f)] pdone(p_program(toks, cfg, st, seq![], f)) implies p_program(toks, cfg, st, seq![], f) == r by {
+        let g = choose|g: u64| #![trigger p_program(toks, cfg, cur, acc, g)] p_program(toks, cfg, cur, acc, g) == p_program(toks, cfg, st, seq![], f);
+        assert(g > 0);
+    }
+}
+
+proof fn lemma_prog_next(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>, cur2: PState, acc2: Seq<usize>)
+    requires
+        prog_chain(toks, cfg, st, cur, acc),
+        forall|g: u64| #![trigger p_program(toks, cfg, cur, acc, g)] g > 0 && pdone(p_program(toks, cfg, cur, acc, g)) ==> p_program(toks, cfg, cur, acc, g) == p_program(toks, cfg, cur2, acc2, (g - 1) as u64),
+    ensures
+        prog_chain(toks, cfg, st, cur2, acc2),
+{
+    assert forall|f: u64| #![trigger p_program(toks, cfg, st, seq![], f)] pdone(p_program(toks, cfg, st, seq![], f)) implies
+        exists|g: u64| #![trigger p_program(toks, cfg, cur2, acc2, g)] p_program(toks, cfg, cur2, acc2, g) == p_program(toks, cfg, st, seq![], f) by {
+        let g = choose|g: u64| #![trigger p_program(toks, cfg, cur, acc, g)] p_program(toks, cfg, cur, acc, g) == p_program(toks, cfg, st, seq![], f);
+        assert(g > 0);
+        assert(p_program(toks, cfg, cur2, acc2, (g - 1) as u64) == p_program(toks, cfg, st, seq![], f));
+    }
+}
+
+impl Parser {
+    /// Parses the program fully, returning Err on lexical/syntax error or `"quit"`.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_program_ref(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<Stmt>, BcError>, Ghost<GResult>))
+        requires
+            r_pc(*old(self), toks, cfg, st),
+        ensures
+            match r.0 {
+                Ok(l) => r.1@.ok && r_stmts(l@, r.1@.st.nodes, r.1@.list) && r_ext(final(self).extension_uses@, r.1@.st.ext),
+                Err(x) => r_perr(x, final(self).extension_uses@, r.1@),
+            },
+            forall|f: u64| #![trigger p_program(toks, cfg, st, seq![], f)] pdone(p_program(toks, cfg, st, seq![], f)) ==> p_program(toks, cfg, st, seq![], f) == r.1@,
+    {
+        let mut stmts: Vec<Stmt> = Vec::new();
+        let ghost mut cur = st;
+        let ghost mut acc = Seq::<usize>::empty();
+        proof { lemma_prog_start(toks, cfg, st); }
+        loop
+            invariant
+                r_pc(*self, toks, cfg, cur),
+                extends(st.nodes, cur.nodes),
+                st.nodes.len() <= 2 * st.cur,
+                cur.nodes.len() <= 2 * cur.cur,
+                r_stmts(stmts@, cur.nodes, acc),
+                prog_chain(toks, cfg, st, cur, acc),
+        {
+            let ghost (c, a0) = (cur, acc);
+            if matches!(self.current_token.token_type, TokenType::Eof) {
+                let ghost g = pr_list(c, a0);
+                proof {
+                    assert forall|k: u64| #![trigger p_program(toks, cfg, c, a0, k)] k > 0 && pdone(p_program(toks, cfg, c, a0, k)) implies p_program(toks, cfg, c, a0, k) == g by {
+                    }
+                    lemma_prog_ret(toks, cfg, st, c, a0, g);
+                }
+                return (Ok(stmts), Ghost(g));
+            }
+            proof {
+                if c.cur == toks.len() { assert(cur_tok(toks, c) == toks.last()); }
+            }
+            let ghost old_stmts = stmts@;
+            let (res, Ghost(i)) = self.parse_input_item(Ghost(toks), Ghost(cfg), Ghost(c));
+            let item = match res {
+                Ok(v) => v,
+                Err(x) => {
+                    proof {
+                        assert forall|k: u64| #![trigger p_program(toks, cfg, c, a0, k)] k > 0 && pdone(p_program(toks, cfg, c, a0, k)) implies p_program(toks, cfg, c, a0, k) == i by {
+                            assert(pdone(p_input_item(toks, cfg, c, (k - 1) as u64)));
+                        }
+                        lemma_prog_ret(toks, cfg, st, c, a0, i);
+                    }
+                    return (Err(x), Ghost(i));
+                },
+            };
+            proof { lemma_r_stmts_extend(old_stmts, c.nodes, i.st.nodes, a0); }
+            match item {
+                Some(x) => {
+                    let ghost a1 = a0.push(i.node);
+                    proof { lemma_r_stmts_push(old_stmts, i.st.nodes, a0, x, i.node); }
+                    stmts.push(x);
+                    proof { assert(stmts@ =~= old_stmts.push(x)); }
+                    proof {
+                        assert forall|k: u64| #![trigger p_program(toks, cfg, c, a0, k)] k > 0 && pdone(p_program(toks, cfg, c, a0, k)) implies p_program(toks, cfg, c, a0, k) == p_program(toks, cfg, i.st, a1, (k - 1) as u64) by {
+                            assert(pdone(p_input_item(toks, cfg, c, (k - 1) as u64)));
+                        }
+                        lemma_prog_next(toks, cfg, st, c, a0, i.st, a1);
+                        cur = i.st;
+                        acc = a1;
+                    }
+                },
+                None => {
+                    proof {
+                        assert forall|k: u64| #![trigger p_program(toks, cfg, c, a0, k)] k > 0 && pdone(p_program(toks, cfg, c, a0, k)) implies p_program(toks, cfg, c, a0, k) == p_program(toks, cfg, i.st, a0, (k - 1) as u64) by {
+                            assert(pdone(p_input_item(toks, cfg, c, (k - 1) as u64)));
+                        }
+                        lemma_prog_next(toks, cfg, st, c, a0, i.st, a0);
+                        cur = i.st;
+                        acc = a0;
+                    }
+                },
+            }
+        }
+    }
+
+    /// Parses a single top-level item (statement block or function definition).
+    #[verifier::rlimit(60)]
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_input_item(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Option<Stmt>, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_ires(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_input_item(toks, cfg, st, f)] pdone(p_input_item(toks, cfg, st, f)) ==> p_input_item(toks, cfg, st, f) == r.1@,
+    {
+        if matches!(self.current_token.token_type, TokenType::Define) {
+            let (res, Ghost(d)) = self.parse_function(Ghost(toks), Ghost(cfg), Ghost(st));
+        proof {
+            assert forall|f: u64| #![trigger p_input_item(toks, cfg, st, f)] pdone(p_input_item(toks, cfg, st, f)) implies p_input_item(toks, cfg, st, f) == d by {
+                assert(f > 0);
+                assert(pdone(p_function(toks, cfg, st, (f - 1) as u64)));
+            }
+        }
+            return match res {
+                Ok(x) => (Ok(Some(x)), Ghost(d)),
+                Err(x) => (Err(x), Ghost(d)),
+            };
+        }
+        let (res, Ghost(l)) = self.parse_semicolon_list(Ghost(toks), Ghost(cfg), Ghost(st));
+        let lst = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_input_item(toks, cfg, st, f)] pdone(p_input_item(toks, cfg, st, f)) implies p_input_item(toks, cfg, st, f) == l by {
+                        assert(f > 0);
+                        assert(pdone(p_semicolon_list(toks, cfg, st, seq![], (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(l));
+            },
+        };
+        let ghost e = if cur_tok(toks, l.st).kind is Newline { s_eat(toks, l.st, Tok::Newline) } else { s_eat(toks, l.st, Tok::Eof) };
+        let eaten = if matches!(self.current_token.token_type, TokenType::Newline) {
+            self.eat(TokenType::Newline, Ghost(toks), Ghost(cfg), Ghost(l.st))
+        } else {
+            self.eat_eof(Ghost(toks), Ghost(cfg), Ghost(l.st))
+        };
+        match eaten {
+            Ok(()) => {},
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_input_item(toks, cfg, st, f)] pdone(p_input_item(toks, cfg, st, f)) implies p_input_item(toks, cfg, st, f) == e by {
+                        assert(f > 0);
+                        assert(pdone(p_semicolon_list(toks, cfg, st, seq![], (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(e));
+            },
+        }
+        if lst.len() == 0 {
+            let ghost g = pr_ok(e.st);
+            proof {
+                assert forall|f: u64| #![trigger p_input_item(toks, cfg, st, f)] pdone(p_input_item(toks, cfg, st, f)) implies p_input_item(toks, cfg, st, f) == g by {
+                    assert(f > 0);
+                    assert(pdone(p_semicolon_list(toks, cfg, st, seq![], (f - 1) as u64)));
+                }
+            }
+            (Ok(None), Ghost(g))
+        } else {
+            let ghost g = add_node(e.st, Node::Block(l.list), 0u64);
+            proof {
+                assert(e.st.cur == l.st.cur + 1);
+                lemma_stmt_node(*self, toks, cfg, st, e.st, Node::Block(l.list), 0u64);
+                lemma_r_stmts_extend(lst@, l.st.nodes, g.st.nodes, l.list);
+                assert(lst@.len() == l.list.len());
+                assert forall|f: u64| #![trigger p_input_item(toks, cfg, st, f)] pdone(p_input_item(toks, cfg, st, f)) implies p_input_item(toks, cfg, st, f) == g by {
+                    assert(f > 0);
+                    assert(pdone(p_semicolon_list(toks, cfg, st, seq![], (f - 1) as u64)));
+                }
+            }
+            (Ok(Some(Stmt::Block(lst))), Ghost(g))
+        }
+    }
+
+    /// Parses a list of statements separated by semicolons.
+    #[verifier::rlimit(300)]
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_semicolon_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<Stmt>, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_lres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_semicolon_list(toks, cfg, st, seq![], f)] pdone(p_semicolon_list(toks, cfg, st, seq![], f)) ==> p_semicolon_list(toks, cfg, st, seq![], f) == r.1@,
+    {
+        let mut stmts: Vec<Stmt> = Vec::new();
+        let ghost mut cur = st;
+        let ghost mut acc = Seq::<usize>::empty();
+        proof { lemma_semi_start(toks, cfg, st); }
+        loop
+            invariant
+                r_p(*self, toks, cfg, cur),
+                extends(st.nodes, cur.nodes),
+                cur.cur >= st.cur,
+                cur.nodes.len() - st.nodes.len() <= 2 * (cur.cur - st.cur),
+                cur.depth == st.depth,
+                st.nodes.len() <= 2 * st.cur,
+                r_stmts(stmts@, cur.nodes, acc),
+                semi_chain(toks, cfg, st, cur, acc),
+        {
+            let ghost (c, a0) = (cur, acc);
+            let k = self.current_token.token_type;
+            if matches!(k, TokenType::Newline) || matches!(k, TokenType::Eof) || matches!(k, TokenType::Rbrace) {
+                let ghost g = pr_list(c, a0);
+                proof {
+                    assert forall|k: u64| #![trigger p_semicolon_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_semicolon_list(toks, cfg, c, a0, k)) implies p_semicolon_list(toks, cfg, c, a0, k) == g by {
+                    }
+                    lemma_semi_ret(toks, cfg, st, c, a0, g);
+                }
+                return (Ok(stmts), Ghost(g));
+            }
+            if matches!(k, TokenType::Semicolon) {
+                let ghost e = s_eat(toks, c, Tok::Semicolon);
+                match self.eat(TokenType::Semicolon, Ghost(toks), Ghost(cfg), Ghost(c)) {
+                    Ok(()) => {
+                        proof {
+                            assert forall|k: u64| #![trigger p_semicolon_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_semicolon_list(toks, cfg, c, a0, k)) implies p_semicolon_list(toks, cfg, c, a0, k) == p_semicolon_list(toks, cfg, e.st, a0, (k - 1) as u64) by {
+                            }
+                            lemma_semi_next(toks, cfg, st, c, a0, e.st, a0);
+                            cur = e.st;
+                            acc = a0;
+                        }
+                    },
+                    Err(x) => {
+                        proof {
+                            assert forall|k: u64| #![trigger p_semicolon_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_semicolon_list(toks, cfg, c, a0, k)) implies p_semicolon_list(toks, cfg, c, a0, k) == e by {
+                            }
+                            lemma_semi_ret(toks, cfg, st, c, a0, e);
+                        }
+                        return (Err(x), Ghost(e));
+                    },
+                }
+            } else {
+                let ghost old_stmts = stmts@;
+                let (res, Ghost(i)) = self.parse_statement(Ghost(toks), Ghost(cfg), Ghost(c));
+                let x = match res {
+                    Ok(v) => v,
+                    Err(y) => {
+                        proof {
+                            assert forall|k: u64| #![trigger p_semicolon_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_semicolon_list(toks, cfg, c, a0, k)) implies p_semicolon_list(toks, cfg, c, a0, k) == i by {
+                                assert(pdone(p_statement(toks, cfg, c, (k - 1) as u64)));
+                            }
+                            lemma_semi_ret(toks, cfg, st, c, a0, i);
+                        }
+                        return (Err(y), Ghost(i));
+                    },
+                };
+                let ghost a1 = a0.push(i.node);
+                proof {
+                    lemma_r_stmts_extend(old_stmts, c.nodes, i.st.nodes, a0);
+                    lemma_r_stmts_push(old_stmts, i.st.nodes, a0, x, i.node);
+                }
+                stmts.push(x);
+                proof { assert(stmts@ =~= old_stmts.push(x)); }
+                if !matches!(self.current_token.token_type, TokenType::Semicolon) {
+                    let ghost g = pr_list(i.st, a1);
+                    proof {
+                        assert forall|k: u64| #![trigger p_semicolon_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_semicolon_list(toks, cfg, c, a0, k)) implies p_semicolon_list(toks, cfg, c, a0, k) == g by {
+                            assert(pdone(p_statement(toks, cfg, c, (k - 1) as u64)));
+                        }
+                        lemma_semi_ret(toks, cfg, st, c, a0, g);
+                    }
+                    return (Ok(stmts), Ghost(g));
+                }
+                let ghost e = s_eat(toks, i.st, Tok::Semicolon);
+                match self.eat(TokenType::Semicolon, Ghost(toks), Ghost(cfg), Ghost(i.st)) {
+                    Ok(()) => {
+                        proof {
+                            assert forall|k: u64| #![trigger p_semicolon_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_semicolon_list(toks, cfg, c, a0, k)) implies p_semicolon_list(toks, cfg, c, a0, k) == p_semicolon_list(toks, cfg, e.st, a1, (k - 1) as u64) by {
+                                assert(pdone(p_statement(toks, cfg, c, (k - 1) as u64)));
+                            }
+                            lemma_semi_next(toks, cfg, st, c, a0, e.st, a1);
+                            cur = e.st;
+                            acc = a1;
+                        }
+                    },
+                    Err(y) => {
+                        proof {
+                            assert forall|k: u64| #![trigger p_semicolon_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_semicolon_list(toks, cfg, c, a0, k)) implies p_semicolon_list(toks, cfg, c, a0, k) == e by {
+                                assert(pdone(p_statement(toks, cfg, c, (k - 1) as u64)));
+                            }
+                            lemma_semi_ret(toks, cfg, st, c, a0, e);
+                        }
+                        return (Err(y), Ghost(e));
+                    },
+                }
+            }
+        }
+    }
+
+    /// Parses a list of statements within a block (with newline and semicolon separations).
+    #[verifier::rlimit(300)]
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_statement_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<Stmt>, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_lres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_statement_list(toks, cfg, st, seq![], f)] pdone(p_statement_list(toks, cfg, st, seq![], f)) ==> p_statement_list(toks, cfg, st, seq![], f) == r.1@,
+    {
+        let mut stmts: Vec<Stmt> = Vec::new();
+        let ghost mut cur = st;
+        let ghost mut acc = Seq::<usize>::empty();
+        proof { lemma_sl_start(toks, cfg, st); }
+        loop
+            invariant
+                r_p(*self, toks, cfg, cur),
+                extends(st.nodes, cur.nodes),
+                cur.cur >= st.cur,
+                cur.nodes.len() - st.nodes.len() <= 2 * (cur.cur - st.cur),
+                cur.depth == st.depth,
+                st.nodes.len() <= 2 * st.cur,
+                r_stmts(stmts@, cur.nodes, acc),
+                sl_chain(toks, cfg, st, cur, acc),
+        {
+            let ghost (c, a0) = (cur, acc);
+            let (res, Ghost(sk)) = self.skip_newlines(Ghost(toks), Ghost(cfg), Ghost(c));
+            match res {
+                Ok(()) => {},
+                Err(y) => {
+                    proof {
+                        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == sk by {
+                            assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
+                        }
+                        lemma_sl_ret(toks, cfg, st, c, a0, sk);
+                    }
+                    return (Err(y), Ghost(sk));
+                },
+            }
+            let k = self.current_token.token_type;
+            if matches!(k, TokenType::Eof) || matches!(k, TokenType::Rbrace) {
+                let ghost g = pr_list(sk.st, a0);
+                proof {
+                    assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == g by {
+                        assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
+                    }
+                    lemma_sl_ret(toks, cfg, st, c, a0, g);
+                }
+                return (Ok(stmts), Ghost(g));
+            }
+            let ghost old_stmts = stmts@;
+            let (res2, Ghost(i)) = self.parse_statement(Ghost(toks), Ghost(cfg), Ghost(sk.st));
+            let x = match res2 {
+                Ok(v) => v,
+                Err(y) => {
+                    proof {
+                        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == i by {
+                            assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
+                            assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
+                        }
+                        lemma_sl_ret(toks, cfg, st, c, a0, i);
+                    }
+                    return (Err(y), Ghost(i));
+                },
+            };
+            let ghost a1 = a0.push(i.node);
+            proof {
+                lemma_r_stmts_extend(old_stmts, c.nodes, i.st.nodes, a0);
+                lemma_r_stmts_push(old_stmts, i.st.nodes, a0, x, i.node);
+            }
+            stmts.push(x);
+            proof { assert(stmts@ =~= old_stmts.push(x)); }
+            let nk = self.current_token.token_type;
+            let ghost line = cur_tok(toks, i.st).line;
+            if matches!(nk, TokenType::Rbrace) || matches!(nk, TokenType::Eof) {
+                let ghost g = pr_list(i.st, a1);
+                proof {
+                    assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == g by {
+                        assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
+                        assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
+                    }
+                    lemma_sl_ret(toks, cfg, st, c, a0, g);
+                }
+                return (Ok(stmts), Ghost(g));
+            }
+            if !matches!(nk, TokenType::Semicolon) && !matches!(nk, TokenType::Newline) {
+                let ghost g = syntax_at(i.st, line);
+                proof {
+                    assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == g by {
+                        assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
+                        assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
+                    }
+                    lemma_sl_ret(toks, cfg, st, c, a0, g);
+                }
+                return (Err(BcError::Syntax { line: self.current_token.line, message: syntax_error_text() }), Ghost(g));
+            }
+            let ghost e = s_eat(toks, i.st, tok_of(nk));
+            match self.eat(nk, Ghost(toks), Ghost(cfg), Ghost(i.st)) {
+                Ok(()) => {
+                    proof {
+                        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == p_statement_list(toks, cfg, e.st, a1, (k - 1) as u64) by {
+                            assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
+                            assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
+                        }
+                        lemma_sl_next(toks, cfg, st, c, a0, e.st, a1);
+                        cur = e.st;
+                        acc = a1;
+                    }
+                },
+                Err(y) => {
+                    proof {
+                        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == e by {
+                            assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
+                            assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
+                        }
+                        lemma_sl_ret(toks, cfg, st, c, a0, e);
+                    }
+                    return (Err(y), Ghost(e));
+                },
+            }
+        }
+    }
+
+    /// Parses one statement as one level of nesting.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_statement(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_statement(toks, cfg, st, f)] pdone(p_statement(toks, cfg, st, f)) ==> p_statement(toks, cfg, st, f) == r.1@,
+    {
+        if !verified_nesting_within_limit(self.depth, 1, self.max_depth) {
+            return (Err(self.too_deep_error(Ghost(toks), Ghost(cfg), Ghost(st))), Ghost(too_deep(st)));
+        }
+        let outer = self.depth;
+        self.depth = outer + 1;
+        let ghost st1 = st_set_depth(st, (st.depth + 1) as u64);
+        proof { assert(cur_tok(toks, st1) == cur_tok(toks, st)); }
+        let (res, Ghost(x)) = self.parse_statement_inner(Ghost(toks), Ghost(cfg), Ghost(st1));
+        self.depth = outer;
+        match res {
+            Err(e) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_statement(toks, cfg, st, f)] pdone(p_statement(toks, cfg, st, f)) implies p_statement(toks, cfg, st, f) == x by {
+                        assert(f > 0);
+                        assert(pdone(p_statement_inner(toks, cfg, st1, (f - 1) as u64)));
+                    }
+                }
+                (Err(e), Ghost(x))
+            },
+            Ok(v) => {
+                let ghost g = pr_node(st_set_depth(x.st, st.depth), x.node, x.h);
+                proof {
+                    assert(cur_tok(toks, g.st) == cur_tok(toks, x.st));
+                    assert forall|f: u64| #![trigger p_statement(toks, cfg, st, f)] pdone(p_statement(toks, cfg, st, f)) implies p_statement(toks, cfg, st, f) == g by {
+                        assert(f > 0);
+                        assert(pdone(p_statement_inner(toks, cfg, st1, (f - 1) as u64)));
+                    }
+                }
+                (Ok(v), Ghost(g))
+            },
+        }
+    }
+
+    /// Parses a loop body, tracking the loop nesting for `break`.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_loop_body(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_loop_body(toks, cfg, st, f)] pdone(p_loop_body(toks, cfg, st, f)) ==> p_loop_body(toks, cfg, st, f) == r.1@,
+    {
+        let outer = self.loop_depth;
+        self.loop_depth = if outer < usize::MAX { outer + 1 } else { outer };
+        let ghost st1 = st_set_loop(st, inc(st.loop_depth), st.in_function);
+        proof { assert(cur_tok(toks, st1) == cur_tok(toks, st)); }
+        let (res, Ghost(x)) = self.parse_statement(Ghost(toks), Ghost(cfg), Ghost(st1));
+        self.loop_depth = outer;
+        match res {
+            Err(e) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_loop_body(toks, cfg, st, f)] pdone(p_loop_body(toks, cfg, st, f)) implies p_loop_body(toks, cfg, st, f) == x by {
+                        assert(f > 0);
+                        assert(pdone(p_statement(toks, cfg, st1, (f - 1) as u64)));
+                    }
+                }
+                (Err(e), Ghost(x))
+            },
+            Ok(v) => {
+                let ghost g = pr_node(st_set_loop(x.st, st.loop_depth, x.st.in_function), x.node, x.h);
+                proof {
+                    assert(cur_tok(toks, g.st) == cur_tok(toks, x.st));
+                    assert forall|f: u64| #![trigger p_loop_body(toks, cfg, st, f)] pdone(p_loop_body(toks, cfg, st, f)) implies p_loop_body(toks, cfg, st, f) == g by {
+                        assert(f > 0);
+                        assert(pdone(p_statement(toks, cfg, st1, (f - 1) as u64)));
+                    }
+                }
+                (Ok(v), Ghost(g))
+            },
+        }
+    }
+
+    #[verifier::rlimit(100)]
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_statement_inner(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_statement_inner(toks, cfg, st, f)] pdone(p_statement_inner(toks, cfg, st, f)) ==> p_statement_inner(toks, cfg, st, f) == r.1@,
+    {
+        let t = self.current_token.token_type;
+        if matches!(t, TokenType::String) {
+            let (r0, Ghost(a)) = self.parse_string_stmt(Ghost(toks), Ghost(cfg), Ghost(st));
+            proof {
+                assert forall|f: u64| #![trigger p_statement_inner(toks, cfg, st, f)] pdone(p_statement_inner(toks, cfg, st, f)) implies p_statement_inner(toks, cfg, st, f) == a by {
+                    assert(f > 0);
+                }
+            }
+            return (r0, Ghost(a));
+        }
+        if matches!(t, TokenType::Break) {
+            let (r0, Ghost(a)) = self.parse_break_stmt(Ghost(toks), Ghost(cfg), Ghost(st));
+            proof {
+                assert forall|f: u64| #![trigger p_statement_inner(toks, cfg, st, f)] pdone(p_statement_inner(toks, cfg, st, f)) implies p_statement_inner(toks, cfg, st, f) == a by {
+                    assert(f > 0);
+                }
+            }
+            return (r0, Ghost(a));
+        }
+        if matches!(t, TokenType::Quit) {
+            let ghost g = pr_err(st, PErr { quit: true, out_of_fuel: false, line: 0u64, msg: seq![] });
+            proof {
+                assert forall|f: u64| #![trigger p_statement_inner(toks, cfg, st, f)] pdone(p_statement_inner(toks, cfg, st, f)) implies p_statement_inner(toks, cfg, st, f) == g by {
+                    assert(f > 0);
+                }
+            }
+            return (Err(BcError::Quit), Ghost(g));
+        }
+        if matches!(t, TokenType::Return) {
+            let (r0, Ghost(a)) = self.parse_return_stmt(Ghost(toks), Ghost(cfg), Ghost(st));
+            proof {
+                assert forall|f: u64| #![trigger p_statement_inner(toks, cfg, st, f)] pdone(p_statement_inner(toks, cfg, st, f)) implies p_statement_inner(toks, cfg, st, f) == a by {
+                    assert(f > 0);
+                    assert(pdone(p_return_stmt(toks, cfg, st, (f - 1) as u64)));
+                }
+            }
+            return (r0, Ghost(a));
+        }
+        if matches!(t, TokenType::For) {
+            let (r0, Ghost(a)) = self.parse_for(Ghost(toks), Ghost(cfg), Ghost(st));
+            proof {
+                assert forall|f: u64| #![trigger p_statement_inner(toks, cfg, st, f)] pdone(p_statement_inner(toks, cfg, st, f)) implies p_statement_inner(toks, cfg, st, f) == a by {
+                    assert(f > 0);
+                    assert(pdone(p_for(toks, cfg, st, (f - 1) as u64)));
+                }
+            }
+            return (r0, Ghost(a));
+        }
+        if matches!(t, TokenType::If) {
+            let (r0, Ghost(a)) = self.parse_if(Ghost(toks), Ghost(cfg), Ghost(st));
+            proof {
+                assert forall|f: u64| #![trigger p_statement_inner(toks, cfg, st, f)] pdone(p_statement_inner(toks, cfg, st, f)) implies p_statement_inner(toks, cfg, st, f) == a by {
+                    assert(f > 0);
+                    assert(pdone(p_if(toks, cfg, st, (f - 1) as u64)));
+                }
+            }
+            return (r0, Ghost(a));
+        }
+        if matches!(t, TokenType::While) {
+            let (r0, Ghost(a)) = self.parse_while(Ghost(toks), Ghost(cfg), Ghost(st));
+            proof {
+                assert forall|f: u64| #![trigger p_statement_inner(toks, cfg, st, f)] pdone(p_statement_inner(toks, cfg, st, f)) implies p_statement_inner(toks, cfg, st, f) == a by {
+                    assert(f > 0);
+                    assert(pdone(p_while(toks, cfg, st, (f - 1) as u64)));
+                }
+            }
+            return (r0, Ghost(a));
+        }
+        if matches!(t, TokenType::Lbrace) {
+            let (r0, Ghost(a)) = self.parse_block(Ghost(toks), Ghost(cfg), Ghost(st));
+            proof {
+                assert forall|f: u64| #![trigger p_statement_inner(toks, cfg, st, f)] pdone(p_statement_inner(toks, cfg, st, f)) implies p_statement_inner(toks, cfg, st, f) == a by {
+                    assert(f > 0);
+                    assert(pdone(p_block(toks, cfg, st, (f - 1) as u64)));
+                }
+            }
+            return (r0, Ghost(a));
+        }
+        let (r0, Ghost(a)) = self.parse_expr_stmt(Ghost(toks), Ghost(cfg), Ghost(st));
+        proof {
+            assert forall|f: u64| #![trigger p_statement_inner(toks, cfg, st, f)] pdone(p_statement_inner(toks, cfg, st, f)) implies p_statement_inner(toks, cfg, st, f) == a by {
+                assert(f > 0);
+                assert(pdone(p_expr_stmt(toks, cfg, st, (f - 1) as u64)));
+            }
+        }
+        (r0, Ghost(a))
+    }
+
+    /// Parses a string statement.
+    fn parse_string_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            cur_tok(toks, st).kind is Str,
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            r.1@ == p_string_stmt(toks, st),
+    {
+        let val = self.current_token.value.clone();
+        let ghost e = s_eat(toks, st, Tok::Str);
+        match self.eat(TokenType::String, Ghost(toks), Ghost(cfg), Ghost(st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e)),
+        }
+        let ghost g = add_node(e.st, Node::Str(val@), 0u64);
+        proof { lemma_stmt_node(*self, toks, cfg, st, e.st, Node::Str(val@), 0u64); }
+        (Ok(Stmt::StringLiteral(val)), Ghost(g))
+    }
+
+    /// Parses `break`, which must be inside a loop. GNU bc reports a stray `break` on its own
+    /// line, and a stray `return` on the line of the token after it.
+    fn parse_break_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            cur_tok(toks, st).kind is Break,
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            r.1@ == p_break_stmt(toks, st),
+    {
+        if self.loop_depth == 0 {
+            return (Err(BcError::Syntax { line: self.current_token.line, message: break_outside_text() }), Ghost(misplaced(toks, st, break_msg())));
+        }
+        let ghost e = s_eat(toks, st, Tok::Break);
+        match self.eat(TokenType::Break, Ghost(toks), Ghost(cfg), Ghost(st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e)),
+        }
+        let ghost g = add_node(e.st, Node::Break, 0u64);
+        proof { lemma_stmt_node(*self, toks, cfg, st, e.st, Node::Break, 0u64); }
+        (Ok(Stmt::Break), Ghost(g))
+    }
+
+    /// Parses `return`, which must be inside a function.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_return_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            cur_tok(toks, st).kind is Return,
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_return_stmt(toks, cfg, st, f)] pdone(p_return_stmt(toks, cfg, st, f)) ==> p_return_stmt(toks, cfg, st, f) == r.1@,
+    {
+        let (res, Ghost(a)) = self.parse_return(Ghost(toks), Ghost(cfg), Ghost(st));
+        let x = match res {
+            Ok(v) => v,
+            Err(y) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_return_stmt(toks, cfg, st, f)] pdone(p_return_stmt(toks, cfg, st, f)) implies p_return_stmt(toks, cfg, st, f) == a by {
+                        assert(f > 0);
+                        assert(pdone(p_return(toks, cfg, st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(y), Ghost(a));
+            },
+        };
+        if !self.in_function {
+            let ghost g = misplaced(toks, a.st, return_msg());
+            proof {
+                assert forall|f: u64| #![trigger p_return_stmt(toks, cfg, st, f)] pdone(p_return_stmt(toks, cfg, st, f)) implies p_return_stmt(toks, cfg, st, f) == g by {
+                    assert(f > 0);
+                    assert(pdone(p_return(toks, cfg, st, (f - 1) as u64)));
+                }
+            }
+            return (Err(BcError::Syntax { line: self.current_token.line, message: return_outside_text() }), Ghost(g));
+        }
+        proof {
+            assert forall|f: u64| #![trigger p_return_stmt(toks, cfg, st, f)] pdone(p_return_stmt(toks, cfg, st, f)) implies p_return_stmt(toks, cfg, st, f) == a by {
+                assert(f > 0);
+                assert(pdone(p_return(toks, cfg, st, (f - 1) as u64)));
+            }
+        }
+        (Ok(x), Ghost(a))
+    }
+
+    /// Parses `{ statement_list }`.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_block(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            cur_tok(toks, st).kind is Lbrace,
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_block(toks, cfg, st, f)] pdone(p_block(toks, cfg, st, f)) ==> p_block(toks, cfg, st, f) == r.1@,
+    {
+        let ghost e = s_eat(toks, st, Tok::Lbrace);
+        match self.eat(TokenType::Lbrace, Ghost(toks), Ghost(cfg), Ghost(st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e)),
+        }
+        let (res, Ghost(l)) = self.parse_statement_list(Ghost(toks), Ghost(cfg), Ghost(e.st));
+        let stmts = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_block(toks, cfg, st, f)] pdone(p_block(toks, cfg, st, f)) implies p_block(toks, cfg, st, f) == l by {
+                        assert(f > 0);
+                        assert(pdone(p_statement_list(toks, cfg, e.st, seq![], (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(l));
+            },
+        };
+        let ghost e2 = s_eat(toks, l.st, Tok::Rbrace);
+        match self.eat(TokenType::Rbrace, Ghost(toks), Ghost(cfg), Ghost(l.st)) {
+            Ok(()) => {},
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_block(toks, cfg, st, f)] pdone(p_block(toks, cfg, st, f)) implies p_block(toks, cfg, st, f) == e2 by {
+                        assert(f > 0);
+                        assert(pdone(p_statement_list(toks, cfg, e.st, seq![], (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(e2));
+            },
+        }
+        let ghost g = add_node(e2.st, Node::Block(l.list), 0u64);
+        proof {
+            lemma_stmt_node(*self, toks, cfg, st, e2.st, Node::Block(l.list), 0u64);
+            lemma_r_stmts_extend(stmts@, l.st.nodes, g.st.nodes, l.list);
+            assert forall|f: u64| #![trigger p_block(toks, cfg, st, f)] pdone(p_block(toks, cfg, st, f)) implies p_block(toks, cfg, st, f) == g by {
+                assert(f > 0);
+                assert(pdone(p_statement_list(toks, cfg, e.st, seq![], (f - 1) as u64)));
+            }
+        }
+        (Ok(Stmt::Block(stmts)), Ghost(g))
+    }
+
+    /// Parses an expression statement; a relational one is a GNU extension.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_expr_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_expr_stmt(toks, cfg, st, f)] pdone(p_expr_stmt(toks, cfg, st, f)) ==> p_expr_stmt(toks, cfg, st, f) == r.1@,
+    {
+        let (res, Ghost(a)) = self.parse_relational_expression(Ghost(toks), Ghost(cfg), Ghost(st));
+        let x = match res {
+            Ok(v) => v,
+            Err(y) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_expr_stmt(toks, cfg, st, f)] pdone(p_expr_stmt(toks, cfg, st, f)) implies p_expr_stmt(toks, cfg, st, f) == a by {
+                        assert(f > 0);
+                        assert(pdone(p_relational(toks, cfg, st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(y), Ghost(a));
+            },
+        };
+        proof { lemma_is_rel(x, a.st.nodes, a.node); }
+        let ghost st2 = if a.st.nodes[a.node as int] is Rel { s_extension(toks, cfg, a.st, comparison_msg()) } else { a.st };
+        if matches!(x, Expr::RelationalOp(..)) {
+            self.extension(comparison_text(), Ghost(toks), Ghost(cfg), Ghost(a.st), Ghost(comparison_msg()));
+        }
+        let ghost g = add_node(st2, Node::ExprStmt(a.node), 0u64);
+        proof {
+            assert(cur_tok(toks, st2) == cur_tok(toks, a.st));
+            lemma_stmt_node(*self, toks, cfg, st, st2, Node::ExprStmt(a.node), 0u64);
+            lemma_r_expr_extend(x, a.st.nodes, g.st.nodes, a.node);
+            assert forall|f: u64| #![trigger p_expr_stmt(toks, cfg, st, f)] pdone(p_expr_stmt(toks, cfg, st, f)) implies p_expr_stmt(toks, cfg, st, f) == g by {
+                assert(f > 0);
+                assert(pdone(p_relational(toks, cfg, st, (f - 1) as u64)));
+            }
+        }
+        (Ok(Stmt::Expr(x)), Ghost(g))
+    }
+
+    /// Parses the `for` statement.
+    #[verifier::rlimit(60)]
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_for(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            cur_tok(toks, st).kind is For,
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_for(toks, cfg, st, f)] pdone(p_for(toks, cfg, st, f)) ==> p_for(toks, cfg, st, f) == r.1@,
+    {
+        let ghost e1 = s_eat(toks, st, Tok::For);
+        match self.eat(TokenType::For, Ghost(toks), Ghost(cfg), Ghost(st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e1)),
+        }
+        let ghost e2 = s_eat(toks, e1.st, Tok::Lparen);
+        match self.eat(TokenType::Lparen, Ghost(toks), Ghost(cfg), Ghost(e1.st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e2)),
+        }
+        let (res, Ghost(i)) = self.parse_expression(Ghost(toks), Ghost(cfg), Ghost(e2.st));
+        let init = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_for(toks, cfg, st, f)] pdone(p_for(toks, cfg, st, f)) implies p_for(toks, cfg, st, f) == i by {
+                        assert(f > 0);
+                        assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(i));
+            },
+        };
+        let ghost e3 = s_eat(toks, i.st, Tok::Semicolon);
+        match self.eat(TokenType::Semicolon, Ghost(toks), Ghost(cfg), Ghost(i.st)) {
+            Ok(()) => {},
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_for(toks, cfg, st, f)] pdone(p_for(toks, cfg, st, f)) implies p_for(toks, cfg, st, f) == e3 by {
+                        assert(f > 0);
+                        assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(e3));
+            },
+        }
+        let (res, Ghost(c)) = self.parse_relational_expression(Ghost(toks), Ghost(cfg), Ghost(e3.st));
+        let cond = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_for(toks, cfg, st, f)] pdone(p_for(toks, cfg, st, f)) implies p_for(toks, cfg, st, f) == c by {
+                        assert(f > 0);
+                        assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                        assert(pdone(p_relational(toks, cfg, e3.st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(c));
+            },
+        };
+        let ghost e4 = s_eat(toks, c.st, Tok::Semicolon);
+        match self.eat(TokenType::Semicolon, Ghost(toks), Ghost(cfg), Ghost(c.st)) {
+            Ok(()) => {},
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_for(toks, cfg, st, f)] pdone(p_for(toks, cfg, st, f)) implies p_for(toks, cfg, st, f) == e4 by {
+                        assert(f > 0);
+                        assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                        assert(pdone(p_relational(toks, cfg, e3.st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(e4));
+            },
+        }
+        let (res, Ghost(u)) = self.parse_expression(Ghost(toks), Ghost(cfg), Ghost(e4.st));
+        let post = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_for(toks, cfg, st, f)] pdone(p_for(toks, cfg, st, f)) implies p_for(toks, cfg, st, f) == u by {
+                        assert(f > 0);
+                        assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                        assert(pdone(p_relational(toks, cfg, e3.st, (f - 1) as u64)));
+                        assert(pdone(p_expr_prec(toks, cfg, e4.st, 0i8, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(u));
+            },
+        };
+        let ghost e5 = s_eat(toks, u.st, Tok::Rparen);
+        match self.eat(TokenType::Rparen, Ghost(toks), Ghost(cfg), Ghost(u.st)) {
+            Ok(()) => {},
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_for(toks, cfg, st, f)] pdone(p_for(toks, cfg, st, f)) implies p_for(toks, cfg, st, f) == e5 by {
+                        assert(f > 0);
+                        assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                        assert(pdone(p_relational(toks, cfg, e3.st, (f - 1) as u64)));
+                        assert(pdone(p_expr_prec(toks, cfg, e4.st, 0i8, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(e5));
+            },
+        }
+        let (res, Ghost(b)) = self.parse_loop_body(Ghost(toks), Ghost(cfg), Ghost(e5.st));
+        let body = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_for(toks, cfg, st, f)] pdone(p_for(toks, cfg, st, f)) implies p_for(toks, cfg, st, f) == b by {
+                        assert(f > 0);
+                        assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                        assert(pdone(p_relational(toks, cfg, e3.st, (f - 1) as u64)));
+                        assert(pdone(p_expr_prec(toks, cfg, e4.st, 0i8, (f - 1) as u64)));
+                        assert(pdone(p_loop_body(toks, cfg, e5.st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(b));
+            },
+        };
+        let ghost nd = Node::For(i.node, c.node, u.node, b.node);
+        let ghost g = add_node(b.st, nd, 0u64);
+        proof {
+            lemma_stmt_node(*self, toks, cfg, st, b.st, nd, 0u64);
+            lemma_r_expr_extend(init, i.st.nodes, g.st.nodes, i.node);
+            lemma_r_expr_extend(cond, c.st.nodes, g.st.nodes, c.node);
+            lemma_r_expr_extend(post, u.st.nodes, g.st.nodes, u.node);
+            lemma_r_stmt_extend(body, b.st.nodes, g.st.nodes, b.node);
+            assert forall|f: u64| #![trigger p_for(toks, cfg, st, f)] pdone(p_for(toks, cfg, st, f)) implies p_for(toks, cfg, st, f) == g by {
+                assert(f > 0);
+                assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                assert(pdone(p_relational(toks, cfg, e3.st, (f - 1) as u64)));
+                assert(pdone(p_expr_prec(toks, cfg, e4.st, 0i8, (f - 1) as u64)));
+                assert(pdone(p_loop_body(toks, cfg, e5.st, (f - 1) as u64)));
+            }
+        }
+        (Ok(Stmt::For(init, cond, post, Box::new(body))), Ghost(g))
+    }
+
+    /// Parses the keyword `if` or `while` and the `( relational_expression )` after it.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_cond(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Expr, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            !(cur_tok(toks, st).kind is Eof),
+        ensures
+            r_xres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_cond(toks, cfg, st, f)] pdone(p_cond(toks, cfg, st, f)) ==> p_cond(toks, cfg, st, f) == r.1@,
+    {
+        let kind = self.current_token.token_type;
+        let ghost e1 = s_eat(toks, st, cur_tok(toks, st).kind);
+        match self.eat(kind, Ghost(toks), Ghost(cfg), Ghost(st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e1)),
+        }
+        let ghost e2 = s_eat(toks, e1.st, Tok::Lparen);
+        match self.eat(TokenType::Lparen, Ghost(toks), Ghost(cfg), Ghost(e1.st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e2)),
+        }
+        let (res, Ghost(c)) = self.parse_relational_expression(Ghost(toks), Ghost(cfg), Ghost(e2.st));
+        let cond = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_cond(toks, cfg, st, f)] pdone(p_cond(toks, cfg, st, f)) implies p_cond(toks, cfg, st, f) == c by {
+                        assert(f > 0);
+                        assert(pdone(p_relational(toks, cfg, e2.st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(c));
+            },
+        };
+        let ghost e3 = s_eat(toks, c.st, Tok::Rparen);
+        let ghost g = if e3.ok { pr_node(e3.st, c.node, 0u64) } else { e3 };
+        let res3 = self.eat(TokenType::Rparen, Ghost(toks), Ghost(cfg), Ghost(c.st));
+        proof {
+            assert forall|f: u64| #![trigger p_cond(toks, cfg, st, f)] pdone(p_cond(toks, cfg, st, f)) implies p_cond(toks, cfg, st, f) == g by {
+                assert(f > 0);
+                assert(pdone(p_relational(toks, cfg, e2.st, (f - 1) as u64)));
+            }
+        }
+        match res3 {
+            Ok(()) => (Ok(cond), Ghost(g)),
+            Err(x) => (Err(x), Ghost(g)),
+        }
+    }
+
+    /// Parses the `if` statement.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_if(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            cur_tok(toks, st).kind is If,
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_if(toks, cfg, st, f)] pdone(p_if(toks, cfg, st, f)) ==> p_if(toks, cfg, st, f) == r.1@,
+    {
+        let (res, Ghost(c)) = self.parse_cond(Ghost(toks), Ghost(cfg), Ghost(st));
+        let cond = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_if(toks, cfg, st, f)] pdone(p_if(toks, cfg, st, f)) implies p_if(toks, cfg, st, f) == c by {
+                        assert(f > 0);
+                        assert(pdone(p_cond(toks, cfg, st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(c));
+            },
+        };
+        let (res, Ghost(b)) = self.parse_statement(Ghost(toks), Ghost(cfg), Ghost(c.st));
+        let body = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_if(toks, cfg, st, f)] pdone(p_if(toks, cfg, st, f)) implies p_if(toks, cfg, st, f) == b by {
+                        assert(f > 0);
+                        assert(pdone(p_cond(toks, cfg, st, (f - 1) as u64)));
+                        assert(pdone(p_statement(toks, cfg, c.st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(b));
+            },
+        };
+        let ghost g = add_node(b.st, Node::If(c.node, b.node), 0u64);
+        proof {
+            lemma_stmt_node(*self, toks, cfg, st, b.st, Node::If(c.node, b.node), 0u64);
+            lemma_r_expr_extend(cond, c.st.nodes, g.st.nodes, c.node);
+            lemma_r_stmt_extend(body, b.st.nodes, g.st.nodes, b.node);
+            assert forall|f: u64| #![trigger p_if(toks, cfg, st, f)] pdone(p_if(toks, cfg, st, f)) implies p_if(toks, cfg, st, f) == g by {
+                assert(f > 0);
+                assert(pdone(p_cond(toks, cfg, st, (f - 1) as u64)));
+                assert(pdone(p_statement(toks, cfg, c.st, (f - 1) as u64)));
+            }
+        }
+        (Ok(Stmt::If(cond, Box::new(body))), Ghost(g))
+    }
+
+    /// Parses the `while` statement.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_while(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            cur_tok(toks, st).kind is While,
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_while(toks, cfg, st, f)] pdone(p_while(toks, cfg, st, f)) ==> p_while(toks, cfg, st, f) == r.1@,
+    {
+        let (res, Ghost(c)) = self.parse_cond(Ghost(toks), Ghost(cfg), Ghost(st));
+        let cond = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_while(toks, cfg, st, f)] pdone(p_while(toks, cfg, st, f)) implies p_while(toks, cfg, st, f) == c by {
+                        assert(f > 0);
+                        assert(pdone(p_cond(toks, cfg, st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(c));
+            },
+        };
+        let (res, Ghost(b)) = self.parse_loop_body(Ghost(toks), Ghost(cfg), Ghost(c.st));
+        let body = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_while(toks, cfg, st, f)] pdone(p_while(toks, cfg, st, f)) implies p_while(toks, cfg, st, f) == b by {
+                        assert(f > 0);
+                        assert(pdone(p_cond(toks, cfg, st, (f - 1) as u64)));
+                        assert(pdone(p_loop_body(toks, cfg, c.st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(b));
+            },
+        };
+        let ghost g = add_node(b.st, Node::While(c.node, b.node), 0u64);
+        proof {
+            lemma_stmt_node(*self, toks, cfg, st, b.st, Node::While(c.node, b.node), 0u64);
+            lemma_r_expr_extend(cond, c.st.nodes, g.st.nodes, c.node);
+            lemma_r_stmt_extend(body, b.st.nodes, g.st.nodes, b.node);
+            assert forall|f: u64| #![trigger p_while(toks, cfg, st, f)] pdone(p_while(toks, cfg, st, f)) implies p_while(toks, cfg, st, f) == g by {
+                assert(f > 0);
+                assert(pdone(p_cond(toks, cfg, st, (f - 1) as u64)));
+                assert(pdone(p_loop_body(toks, cfg, c.st, (f - 1) as u64)));
+            }
+        }
+        (Ok(Stmt::While(cond, Box::new(body))), Ghost(g))
+    }
+
+    /// Parses `return`, `return (e)`, or the GNU extension `return e`.
+    #[verifier::rlimit(60)]
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_return(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            cur_tok(toks, st).kind is Return,
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_return(toks, cfg, st, f)] pdone(p_return(toks, cfg, st, f)) ==> p_return(toks, cfg, st, f) == r.1@,
+    {
+        let ghost e = s_eat(toks, st, Tok::Return);
+        match self.eat(TokenType::Return, Ghost(toks), Ghost(cfg), Ghost(st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e)),
+        }
+        if matches!(self.current_token.token_type, TokenType::Lparen) {
+            let ghost e2 = s_eat(toks, e.st, Tok::Lparen);
+            match self.eat(TokenType::Lparen, Ghost(toks), Ghost(cfg), Ghost(e.st)) {
+                Ok(()) => {},
+                Err(x) => return (Err(x), Ghost(e2)),
+            }
+            // POSIX: `return ()` is `return (0)`.
+            if matches!(self.current_token.token_type, TokenType::Rparen) {
+                let ghost e3 = s_eat(toks, e2.st, Tok::Rparen);
+                match self.eat(TokenType::Rparen, Ghost(toks), Ghost(cfg), Ghost(e2.st)) {
+                    Ok(()) => {},
+                    Err(x) => return (Err(x), Ghost(e3)),
+                }
+                let ghost g = add_node(e3.st, Node::Return(false, 0usize), 0u64);
+                proof { lemma_stmt_node(*self, toks, cfg, st, e3.st, Node::Return(false, 0usize), 0u64); }
+                return (Ok(Stmt::Return(None)), Ghost(g));
+            }
+            let (res, Ghost(v)) = self.parse_expression(Ghost(toks), Ghost(cfg), Ghost(e2.st));
+            let x = match res {
+                Ok(w) => w,
+                Err(y) => {
+                    proof {
+                        assert forall|f: u64| #![trigger p_return(toks, cfg, st, f)] pdone(p_return(toks, cfg, st, f)) implies p_return(toks, cfg, st, f) == v by {
+                            assert(f > 0);
+                            assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                        }
+                    }
+                    return (Err(y), Ghost(v));
+                },
+            };
+            let ghost e3 = s_eat(toks, v.st, Tok::Rparen);
+            match self.eat(TokenType::Rparen, Ghost(toks), Ghost(cfg), Ghost(v.st)) {
+                Ok(()) => {},
+                Err(y) => {
+                    proof {
+                        assert forall|f: u64| #![trigger p_return(toks, cfg, st, f)] pdone(p_return(toks, cfg, st, f)) implies p_return(toks, cfg, st, f) == e3 by {
+                            assert(f > 0);
+                            assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                        }
+                    }
+                    return (Err(y), Ghost(e3));
+                },
+            }
+            let ghost g = add_node(e3.st, Node::Return(true, v.node), 0u64);
+            proof {
+                lemma_stmt_node(*self, toks, cfg, st, e3.st, Node::Return(true, v.node), 0u64);
+                lemma_r_expr_extend(x, v.st.nodes, g.st.nodes, v.node);
+                assert forall|f: u64| #![trigger p_return(toks, cfg, st, f)] pdone(p_return(toks, cfg, st, f)) implies p_return(toks, cfg, st, f) == g by {
+                    assert(f > 0);
+                    assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
+                }
+            }
+            return (Ok(Stmt::Return(Some(x))), Ghost(g));
+        }
+        // GNU extension: return without parentheses
+        let nt = self.current_token.token_type;
+        if !matches!(nt, TokenType::Newline) && !matches!(nt, TokenType::Semicolon)
+            && !matches!(nt, TokenType::Rbrace) && !matches!(nt, TokenType::Eof)
+        {
+            let (res, Ghost(v)) = self.parse_expression(Ghost(toks), Ghost(cfg), Ghost(e.st));
+            let x = match res {
+                Ok(w) => w,
+                Err(y) => {
+                    proof {
+                        assert forall|f: u64| #![trigger p_return(toks, cfg, st, f)] pdone(p_return(toks, cfg, st, f)) implies p_return(toks, cfg, st, f) == v by {
+                            assert(f > 0);
+                            assert(pdone(p_expr_prec(toks, cfg, e.st, 0i8, (f - 1) as u64)));
+                        }
+                    }
+                    return (Err(y), Ghost(v));
+                },
+            };
+            self.extension(return_paren_text(), Ghost(toks), Ghost(cfg), Ghost(v.st), Ghost(return_paren_msg()));
+            let ghost st2 = s_extension(toks, cfg, v.st, return_paren_msg());
+            let ghost g = add_node(st2, Node::Return(true, v.node), 0u64);
+            proof {
+                assert(cur_tok(toks, st2) == cur_tok(toks, v.st));
+                lemma_stmt_node(*self, toks, cfg, st, st2, Node::Return(true, v.node), 0u64);
+                lemma_r_expr_extend(x, v.st.nodes, g.st.nodes, v.node);
+                assert forall|f: u64| #![trigger p_return(toks, cfg, st, f)] pdone(p_return(toks, cfg, st, f)) implies p_return(toks, cfg, st, f) == g by {
+                    assert(f > 0);
+                    assert(pdone(p_expr_prec(toks, cfg, e.st, 0i8, (f - 1) as u64)));
+                }
+            }
+            (Ok(Stmt::Return(Some(x))), Ghost(g))
+        } else {
+            let ghost g = add_node(e.st, Node::Return(false, 0usize), 0u64);
+            proof {
+                lemma_stmt_node(*self, toks, cfg, st, e.st, Node::Return(false, 0usize), 0u64);
+                assert forall|f: u64| #![trigger p_return(toks, cfg, st, f)] pdone(p_return(toks, cfg, st, f)) implies p_return(toks, cfg, st, f) == g by {
+                    assert(f > 0);
+                }
+            }
+            (Ok(Stmt::Return(None)), Ghost(g))
+        }
+    }
+
+    /// Parses a function definition `define f(x) { ... }`.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_function(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            cur_tok(toks, st).kind is Define,
+        ensures
+            r_sres(r.0, *final(self), toks, cfg, st, r.1@),
+            forall|f: u64| #![trigger p_function(toks, cfg, st, f)] pdone(p_function(toks, cfg, st, f)) ==> p_function(toks, cfg, st, f) == r.1@,
+    {
+        let ghost e1 = s_eat(toks, st, Tok::Define);
+        match self.eat(TokenType::Define, Ghost(toks), Ghost(cfg), Ghost(st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e1)),
+        }
+        if !matches!(self.current_token.token_type, TokenType::Letter) {
+            return (Err(BcError::Syntax { line: self.current_token.line, message: syntax_error_text() }), Ghost(syntax_at(e1.st, cur_tok(toks, e1.st).line)));
+        }
+        proof { lemma_cur_ascii(toks, e1.st); }
+        let ghost sname = cur_tok(toks, e1.st).text;
+        let name = self.current_token.text();
+        let name_bytes = self.current_token.value.clone();
+        let ghost e2 = s_eat(toks, e1.st, Tok::Letter);
+        match self.eat(TokenType::Letter, Ghost(toks), Ghost(cfg), Ghost(e1.st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e2)),
+        }
+        let ghost e3 = s_eat(toks, e2.st, Tok::Lparen);
+        match self.eat(TokenType::Lparen, Ghost(toks), Ghost(cfg), Ghost(e2.st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e3)),
+        }
+        let ghost empty = cur_tok(toks, e3.st).kind is Rparen;
+        let (res, Ghost(ps)) = self.parse_opt_define_list(Ghost(toks), Ghost(cfg), Ghost(e3.st));
+        let params = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_function(toks, cfg, st, f)] pdone(p_function(toks, cfg, st, f)) implies p_function(toks, cfg, st, f) == ps by {
+                        assert(f > 0);
+                        if !empty { assert(pdone(p_define_list(toks, cfg, e3.st, seq![], (f - 1) as u64))); }
+                    }
+                }
+                return (Err(x), Ghost(ps));
+            },
+        };
+        let (res, Ghost(b)) = self.parse_function_body(name, name_bytes.as_slice(), params, Ghost(sname), Ghost(ps.params), Ghost(toks), Ghost(cfg), Ghost(ps.st));
+        proof {
+            assert forall|f: u64| #![trigger p_function(toks, cfg, st, f)] pdone(p_function(toks, cfg, st, f)) implies p_function(toks, cfg, st, f) == b by {
+                assert(f > 0);
+                if !empty { assert(pdone(p_define_list(toks, cfg, e3.st, seq![], (f - 1) as u64))); }
+                assert(pdone(p_function_body(toks, cfg, ps.st, sname, ps.params, (f - 1) as u64)));
+            }
+        }
+        (res, Ghost(b))
+    }
+
+    /// Parses the rest of a function definition after its parameter list.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_function_body(&mut self, name: String, name_bytes: &[u8], params: Vec<Param>, Ghost(sname): Ghost<GBytes>, Ghost(sparams): Ghost<GParams>, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            text_view(name) == sname,
+            name_bytes@ == sname,
+            all_ascii(sname),
+            r_params(params@, sparams),
+        ensures
+            match r.0 {
+                Ok(x) => r.1@.ok && r.1@.flag && r_p(*final(self), toks, cfg, r.1@.st) && extends(st.nodes, r.1@.st.nodes) && r.1@.st.cur > st.cur
+                    && r.1@.st.nodes.len() - st.nodes.len() <= 2 * (r.1@.st.cur - st.cur) && r.1@.st.depth == st.depth
+                    && r_stmt(x, r.1@.st.nodes, r.1@.node),
+                Err(x) => r_perr(x, final(self).extension_uses@, r.1@),
+            },
+            forall|f: u64| #![trigger p_function_body(toks, cfg, st, sname, sparams, f)] pdone(p_function_body(toks, cfg, st, sname, sparams, f)) ==> p_function_body(toks, cfg, st, sname, sparams, f) == r.1@,
+    {
+        let ghost e4 = s_eat(toks, st, Tok::Rparen);
+        match self.eat(TokenType::Rparen, Ghost(toks), Ghost(cfg), Ghost(st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e4)),
+        }
+        let ghost e5 = s_eat(toks, e4.st, Tok::Lbrace);
+        match self.eat(TokenType::Lbrace, Ghost(toks), Ghost(cfg), Ghost(e4.st)) {
+            Ok(()) => {},
+            Err(x) => return (Err(x), Ghost(e5)),
+        }
+        // POSIX requires a newline after `{`; GNU bc checks the name at this point too.
+        let ghost st6 = if !(cur_tok(toks, e5.st).kind is Newline) { s_extension(toks, cfg, e5.st, eol_msg()) } else { e5.st };
+        if !matches!(self.current_token.token_type, TokenType::Newline) {
+            self.extension(end_of_line_text(), Ghost(toks), Ghost(cfg), Ghost(e5.st), Ghost(eol_msg()));
+        }
+        proof { assert(cur_tok(toks, st6) == cur_tok(toks, e5.st)); }
+        self.note_name(name_bytes, Ghost(toks), Ghost(cfg), Ghost(st6));
+        let ghost st7 = s_note_name(toks, cfg, st6, sname);
+        proof { assert(cur_tok(toks, st7) == cur_tok(toks, st6)); }
+        let (res, Ghost(sk)) = self.skip_newlines(Ghost(toks), Ghost(cfg), Ghost(st7));
+        match res {
+            Ok(()) => {},
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_function_body(toks, cfg, st, sname, sparams, f)] pdone(p_function_body(toks, cfg, st, sname, sparams, f)) implies p_function_body(toks, cfg, st, sname, sparams, f) == sk by {
+                        assert(f > 0);
+                        assert(pdone(p_skip_newlines(toks, st7, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(sk));
+            },
+        }
+        let (res, Ghost(au)) = self.parse_opt_auto_define_list(Ghost(toks), Ghost(cfg), Ghost(sk.st));
+        let autos = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_function_body(toks, cfg, st, sname, sparams, f)] pdone(p_function_body(toks, cfg, st, sname, sparams, f)) implies p_function_body(toks, cfg, st, sname, sparams, f) == au by {
+                        assert(f > 0);
+                        assert(pdone(p_skip_newlines(toks, st7, (f - 1) as u64)));
+                        assert(pdone(p_opt_auto(toks, cfg, sk.st, (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(au));
+            },
+        };
+        let (res, Ghost(b)) = self.parse_function_stmts(name, params, autos, Ghost(sname), Ghost(sparams), Ghost(au.params), Ghost(toks), Ghost(cfg), Ghost(au.st));
+        proof {
+            assert forall|f: u64| #![trigger p_function_body(toks, cfg, st, sname, sparams, f)] pdone(p_function_body(toks, cfg, st, sname, sparams, f)) implies p_function_body(toks, cfg, st, sname, sparams, f) == b by {
+                assert(f > 0);
+                assert(pdone(p_skip_newlines(toks, st7, (f - 1) as u64)));
+                assert(pdone(p_opt_auto(toks, cfg, sk.st, (f - 1) as u64)));
+                assert(pdone(p_function_stmts(toks, cfg, au.st, sname, sparams, au.params, (f - 1) as u64)));
+            }
+        }
+        (res, Ghost(b))
+    }
+
+    /// Parses the statements of a function body, with `in_function` set and no enclosing loop.
+    #[verifier::exec_allows_no_decreases_clause]
+    fn parse_function_stmts(&mut self, name: String, params: Vec<Param>, autos: Vec<Param>, Ghost(sname): Ghost<GBytes>, Ghost(sparams): Ghost<GParams>, Ghost(sautos): Ghost<GParams>, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+        requires
+            r_p(*old(self), toks, cfg, st),
+            text_view(name) == sname,
+            r_params(params@, sparams),
+            r_params(autos@, sautos),
+        ensures
+            match r.0 {
+                Ok(x) => r.1@.ok && r.1@.flag && r_p(*final(self), toks, cfg, r.1@.st) && extends(st.nodes, r.1@.st.nodes) && r.1@.st.cur > st.cur
+                    && r.1@.st.nodes.len() - st.nodes.len() <= 2 * (r.1@.st.cur - st.cur) && r.1@.st.depth == st.depth
+                    && r_stmt(x, r.1@.st.nodes, r.1@.node),
+                Err(x) => r_perr(x, final(self).extension_uses@, r.1@),
+            },
+            forall|f: u64| #![trigger p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)] pdone(p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)) ==> p_function_stmts(toks, cfg, st, sname, sparams, sautos, f) == r.1@,
+    {
+        let outer_loop = self.loop_depth;
+        let outer_function = self.in_function;
+        self.loop_depth = 0;
+        self.in_function = true;
+        let ghost st1 = st_set_loop(st, 0u64, true);
+        proof { assert(cur_tok(toks, st1) == cur_tok(toks, st)); }
+        let (res, Ghost(l)) = self.parse_statement_list(Ghost(toks), Ghost(cfg), Ghost(st1));
+        self.loop_depth = outer_loop;
+        self.in_function = outer_function;
+        let body = match res {
+            Ok(v) => v,
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)] pdone(p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)) implies p_function_stmts(toks, cfg, st, sname, sparams, sautos, f) == l by {
+                        assert(f > 0);
+                        assert(pdone(p_statement_list(toks, cfg, st1, seq![], (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(l));
+            },
+        };
+        let ghost s2 = st_set_loop(l.st, st.loop_depth, st.in_function);
+        proof { assert(cur_tok(toks, s2) == cur_tok(toks, l.st)); }
+        let ghost e8 = s_eat(toks, s2, Tok::Rbrace);
+        match self.eat(TokenType::Rbrace, Ghost(toks), Ghost(cfg), Ghost(s2)) {
+            Ok(()) => {},
+            Err(x) => {
+                proof {
+                    assert forall|f: u64| #![trigger p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)] pdone(p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)) implies p_function_stmts(toks, cfg, st, sname, sparams, sautos, f) == e8 by {
+                        assert(f > 0);
+                        assert(pdone(p_statement_list(toks, cfg, st1, seq![], (f - 1) as u64)));
+                    }
+                }
+                return (Err(x), Ghost(e8));
+            },
+        }
+        let ghost nd = Node::Define(sname, sparams, sautos, l.list);
+        let ghost g = add_node(e8.st, nd, 0u64);
+        proof {
+            lemma_stmt_node(*self, toks, cfg, st, e8.st, nd, 0u64);
+            lemma_r_stmts_extend(body@, l.st.nodes, g.st.nodes, l.list);
+            assert forall|f: u64| #![trigger p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)] pdone(p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)) implies p_function_stmts(toks, cfg, st, sname, sparams, sautos, f) == g by {
+                assert(f > 0);
+                assert(pdone(p_statement_list(toks, cfg, st1, seq![], (f - 1) as u64)));
+            }
+        }
+        (Ok(Stmt::FunctionDef(FunctionDef { name, params, autos, body })), Ghost(g))
+    }
+
+    /// Parses the program fully, returning Err on lexical/syntax error or `"quit"`. The proved
+    /// theorem is that of `parse_program_ref` (connected to the specification in `run_unit`).
+    #[verifier::external_body]
+    pub fn try_parse_program(&mut self) -> Result<Vec<Stmt>, BcError> {
+        self.parse_program_ref(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
+    }
+}
+
 } // verus!
 
 impl Parser {
@@ -1995,24 +3619,10 @@ impl Parser {
         self.max_depth = max_depth;
     }
 
-    /// Enters one level of nesting. The caller decrements `depth` when it leaves the level.
-    fn enter_nesting(&mut self) -> Result<(), BcError> {
-        if !verified_nesting_within_limit(self.depth, 1, self.max_depth) {
-            return Err(self.too_deep_());
-        }
-        self.depth += 1;
-        Ok(())
-    }
-
     /// Creates a new Parser from the Lexer.
     #[cfg(test)]
     pub fn new(lexer: Lexer) -> Self {
         Self::try_new(lexer).unwrap_or_else(|e| panic!("{:?}", e))
-    }
-
-    /// Triggers a syntax error during parsing.
-    fn error<T>(&self) -> Result<T, BcError> {
-        Err(BcError::syntax(self.current_token.line))
     }
 
     /// Sets how uses of non-POSIX syntax are treated.
@@ -2026,34 +3636,6 @@ impl Parser {
         core::mem::take(&mut self.extension_uses)
     }
 
-    /// Reports a statement that is not allowed where it appears, with GNU bc's wording, on the
-    /// line of the current token.
-    fn misplaced<T>(&self, message: &str) -> Result<T, BcError> {
-        Err(BcError::Syntax {
-            line: self.current_token.line,
-            message: String::from(message),
-        })
-    }
-
-    /// Parses a loop body, tracking the loop nesting for `break`.
-    fn parse_loop_body(&mut self) -> Result<Stmt, BcError> {
-        self.loop_depth += 1;
-        let body = self.parse_statement();
-        self.loop_depth -= 1;
-        body
-    }
-
-    /// Parses the program fully, returning Err on lexical/syntax error or `"quit"`.
-    pub fn try_parse_program(&mut self) -> Result<Vec<Stmt>, BcError> {
-        let mut items = Vec::new();
-        while self.current_token.token_type != TokenType::Eof {
-            if let Some(item) = self.parse_input_item()? {
-                items.push(item);
-            }
-        }
-        Ok(items)
-    }
-
     /// Parses the program fully (entry point).
     #[cfg(test)]
     pub fn parse_program(&mut self) -> Vec<Stmt> {
@@ -2063,263 +3645,5 @@ impl Parser {
             }
             panic!("{:?}", e);
         })
-    }
-
-    /// Parses a single top-level item (statement block or function definition).
-    fn parse_input_item(&mut self) -> Result<Option<Stmt>, BcError> {
-        if self.current_token.token_type == TokenType::Define {
-            return Ok(Some(self.parse_function()?));
-        }
-
-        let lst = self.parse_semicolon_list()?;
-        if self.current_token.token_type == TokenType::Newline {
-            self.eat_(TokenType::Newline)?;
-        } else {
-            self.eat_(TokenType::Eof)?;
-        }
-
-        if lst.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(Stmt::Block(lst)))
-        }
-    }
-
-    /// Parses a list of statements separated by semicolons.
-    fn parse_semicolon_list(&mut self) -> Result<Vec<Stmt>, BcError> {
-        let mut stmts = Vec::new();
-        loop {
-            let t = self.current_token.token_type;
-            if t == TokenType::Newline || t == TokenType::Eof || t == TokenType::Rbrace {
-                break;
-            }
-            if t == TokenType::Semicolon {
-                self.eat_(TokenType::Semicolon)?;
-                continue;
-            }
-
-            let stmt = self.parse_statement()?;
-            stmts.push(stmt);
-
-            if self.current_token.token_type == TokenType::Semicolon {
-                self.eat_(TokenType::Semicolon)?;
-            } else {
-                break;
-            }
-        }
-        Ok(stmts)
-    }
-
-    /// Parses a list of statements within a block (with newline and semicolon separations).
-    fn parse_statement_list(&mut self) -> Result<Vec<Stmt>, BcError> {
-        let mut stmts = Vec::new();
-        loop {
-            self.skip_newlines_()?;
-            let t = self.current_token.token_type;
-            if t == TokenType::Eof || t == TokenType::Rbrace {
-                break;
-            }
-
-            let stmt = self.parse_statement()?;
-            stmts.push(stmt);
-
-            let nt = self.current_token.token_type;
-            match nt {
-                TokenType::Semicolon => {
-                    self.eat_(TokenType::Semicolon)?;
-                }
-                TokenType::Newline => {
-                    self.eat_(TokenType::Newline)?;
-                }
-                TokenType::Rbrace | TokenType::Eof => {}
-                _ => return self.error(),
-            }
-        }
-        Ok(stmts)
-    }
-
-    /// Parses a statement.
-    /// Parses one statement as one level of nesting (see [`Height`]).
-    fn parse_statement(&mut self) -> Result<Stmt, BcError> {
-        self.enter_nesting()?;
-        let result = self.parse_statement_inner();
-        self.depth -= 1;
-        result
-    }
-
-    fn parse_statement_inner(&mut self) -> Result<Stmt, BcError> {
-        let t = self.current_token.token_type;
-        match t {
-            TokenType::String => self.parse_string_stmt(),
-            TokenType::Break => self.parse_break_stmt(),
-            TokenType::Quit => Err(BcError::Quit),
-            TokenType::Return => self.parse_return_stmt(),
-            TokenType::For => self.parse_for(),
-            TokenType::If => self.parse_if(),
-            TokenType::While => self.parse_while(),
-            TokenType::Lbrace => self.parse_block(),
-            _ => self.parse_expr_stmt(),
-        }
-    }
-
-    /// Parses a string statement.
-    fn parse_string_stmt(&mut self) -> Result<Stmt, BcError> {
-        let val = self.current_token.value.clone();
-        self.eat_(TokenType::String)?;
-        Ok(Stmt::StringLiteral(val))
-    }
-
-    /// Parses `break`, which must be inside a loop. GNU bc reports a stray `break` on its own
-    /// line, and a stray `return` on the line of the token after it.
-    fn parse_break_stmt(&mut self) -> Result<Stmt, BcError> {
-        if self.loop_depth == 0 {
-            return self.misplaced("Break outside a for/while");
-        }
-        self.eat_(TokenType::Break)?;
-        Ok(Stmt::Break)
-    }
-
-    /// Parses `return`, which must be inside a function.
-    fn parse_return_stmt(&mut self) -> Result<Stmt, BcError> {
-        let stmt = self.parse_return()?;
-        if !self.in_function {
-            return self.misplaced("Return outside of a function.");
-        }
-        Ok(stmt)
-    }
-
-    /// Parses `{ statement_list }`.
-    fn parse_block(&mut self) -> Result<Stmt, BcError> {
-        self.eat_(TokenType::Lbrace)?;
-        let stmts = self.parse_statement_list()?;
-        self.eat_(TokenType::Rbrace)?;
-        Ok(Stmt::Block(stmts))
-    }
-
-    /// Parses an expression statement; a relational one is a GNU extension.
-    fn parse_expr_stmt(&mut self) -> Result<Stmt, BcError> {
-        let expr = self.parse_relational_expression_()?;
-        if matches!(expr, Expr::RelationalOp(..)) {
-            self.extension_(String::from("comparison in expression"));
-        }
-        Ok(Stmt::Expr(expr))
-    }
-
-    /// Parses the `for` statement.
-    fn parse_for(&mut self) -> Result<Stmt, BcError> {
-        self.eat_(TokenType::For)?;
-        self.eat_(TokenType::Lparen)?;
-        let init = self.parse_expression_()?;
-        self.eat_(TokenType::Semicolon)?;
-        let cond = self.parse_relational_expression_()?;
-        self.eat_(TokenType::Semicolon)?;
-        let post = self.parse_expression_()?;
-        self.eat_(TokenType::Rparen)?;
-        let body = self.parse_loop_body()?;
-        Ok(Stmt::For(init, cond, post, Box::new(body)))
-    }
-
-    /// Parses the keyword `if` or `while` and the `( relational_expression )` after it.
-    fn parse_cond(&mut self) -> Result<Expr, BcError> {
-        self.eat_(self.current_token.token_type)?;
-        self.eat_(TokenType::Lparen)?;
-        let cond = self.parse_relational_expression_()?;
-        self.eat_(TokenType::Rparen)?;
-        Ok(cond)
-    }
-
-    /// Parses the `if` statement.
-    fn parse_if(&mut self) -> Result<Stmt, BcError> {
-        let cond = self.parse_cond()?;
-        let body = self.parse_statement()?;
-        Ok(Stmt::If(cond, Box::new(body)))
-    }
-
-    /// Parses the `while` statement.
-    fn parse_while(&mut self) -> Result<Stmt, BcError> {
-        let cond = self.parse_cond()?;
-        let body = self.parse_loop_body()?;
-        Ok(Stmt::While(cond, Box::new(body)))
-    }
-
-    /// Parses `return`, `return (e)`, or the GNU extension `return e`.
-    fn parse_return(&mut self) -> Result<Stmt, BcError> {
-        self.eat_(TokenType::Return)?;
-        if self.current_token.token_type == TokenType::Lparen {
-            self.eat_(TokenType::Lparen)?;
-            // POSIX: `return ()` is `return (0)`.
-            if self.current_token.token_type == TokenType::Rparen {
-                self.eat_(TokenType::Rparen)?;
-                return Ok(Stmt::Return(None));
-            }
-            let expr = self.parse_expression_()?;
-            self.eat_(TokenType::Rparen)?;
-            return Ok(Stmt::Return(Some(expr)));
-        }
-        // GNU extension: return without parentheses
-        let nt = self.current_token.token_type;
-        if nt != TokenType::Newline
-            && nt != TokenType::Semicolon
-            && nt != TokenType::Rbrace
-            && nt != TokenType::Eof
-        {
-            let expr = self.parse_expression_()?;
-            self.extension_(String::from("return expression requires parenthesis"));
-            Ok(Stmt::Return(Some(expr)))
-        } else {
-            Ok(Stmt::Return(None))
-        }
-    }
-
-    /// Parses a function definition `define f(x) { ... }`.
-    fn parse_function(&mut self) -> Result<Stmt, BcError> {
-        self.eat_(TokenType::Define)?;
-        if self.current_token.token_type != TokenType::Letter {
-            return self.error();
-        }
-        let name = self.current_token.text();
-        self.eat_(TokenType::Letter)?;
-
-        self.eat_(TokenType::Lparen)?;
-        let params = self.parse_opt_define_list_()?;
-        self.parse_function_body(name, params)
-    }
-
-    /// Parses the rest of a function definition after its parameter list.
-    fn parse_function_body(&mut self, name: String, params: Vec<Param>) -> Result<Stmt, BcError> {
-        self.eat_(TokenType::Rparen)?;
-
-        self.eat_(TokenType::Lbrace)?;
-        // POSIX requires a newline after `{`; GNU bc checks the name at this point too.
-        if self.current_token.token_type != TokenType::Newline {
-            self.extension_(String::from("End of line required"));
-        }
-        self.note_name_(&name);
-        self.skip_newlines_()?;
-
-        let autos = self.parse_opt_auto_define_list_()?;
-        self.parse_function_stmts(name, params, autos)
-    }
-
-    /// Parses the statements of a function body, with `in_function` set and no enclosing loop.
-    fn parse_function_stmts(
-        &mut self,
-        name: String,
-        params: Vec<Param>,
-        autos: Vec<Param>,
-    ) -> Result<Stmt, BcError> {
-        let outer = (self.loop_depth, self.in_function);
-        (self.loop_depth, self.in_function) = (0, true);
-        let body = self.parse_statement_list();
-        (self.loop_depth, self.in_function) = outer;
-        let body = body?;
-        self.eat_(TokenType::Rbrace)?;
-
-        Ok(Stmt::FunctionDef(FunctionDef {
-            name,
-            params,
-            autos,
-            body,
-        }))
     }
 }
