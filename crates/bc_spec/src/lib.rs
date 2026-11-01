@@ -51,6 +51,8 @@ pub mod eval;
 pub mod format;
 pub mod fuel;
 pub mod lexer;
+#[cfg(verus_keep_ghost)]
+pub mod lexer_lemmas;
 pub mod num;
 pub mod output;
 pub mod parser;
