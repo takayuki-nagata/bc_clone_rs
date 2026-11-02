@@ -29,15 +29,14 @@ use esp_println::{print, println};
 /// Longest input line the serial REPL accepts (see `bc_zephyr::REPL_MAX_LINE`).
 const REPL_MAX_LINE: usize = 1024;
 
-/// Nesting limit (`docs/COMPATIBILITY.md` §2). Measured on QEMU with the same optimization settings
-/// and a 128 KiB heap (`bc_qemu_riscv32`'s `m5stamp-probe`), not yet on the board: at 128 levels the
-/// workloads use at most 82 KB of stack (see [`MAX_STACK_PERCENT`]) and 90 KB of heap. At 160 the
+/// Nesting limit (`docs/COMPATIBILITY.md` §2). At 128 levels the workloads use at most 82 KB of
+/// stack on the board (see [`MAX_STACK_PERCENT`]). The heap is measured on QEMU with the same
+/// optimization settings and a 128 KiB heap (`bc_qemu_riscv32`'s `m5stamp-probe`): 90 KB. At 160 the
 /// heap reaches 116 KB, too close to the limit for an allocator we did not measure with; at 192
 /// it runs out. Running out of heap is not recoverable here, so the heap decides this limit.
 const M5STAMP_MAX_DEPTH: usize = 128;
 
-/// The self-tests fail if they use more of the stack than this. The measurement behind
-/// [`M5STAMP_MAX_DEPTH`] used another build, so the margin is large.
+/// The self-tests fail if they use more of the stack than this.
 const MAX_STACK_PERCENT: usize = 60;
 
 #[panic_handler]
