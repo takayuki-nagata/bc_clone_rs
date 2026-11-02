@@ -4,6 +4,7 @@ use super::*;
 use crate::parser::Lexer;
 use crate::parser::Param;
 use crate::parser::Parser;
+use crate::parser::test_tree::{Expr, ExprOrArray, FunctionDef, Stmt};
 use alloc::format;
 use alloc::string::ToString;
 use num_bigint::BigInt;
@@ -120,7 +121,7 @@ fn test_ibase_warning() {
 
 #[test]
 fn test_eval_uncovered_lines() {
-    use crate::parser::{Expr, ExprOrArray, FunctionDef, Param, Register, Stmt};
+    use crate::parser::{Param, Register};
 
     let mut evaluator = Evaluator::new(true, Box::new(String::new()), Box::new(String::new()));
 
@@ -176,10 +177,11 @@ fn test_eval_uncovered_lines() {
         Box::new(Expr::Number("1".to_string())),
     )));
 
-    // 10. Update of a non-named expression (unreachable from the parser)
+    // 10. Update of a non-named expression (unreachable from the parser): the place is the
+    // variable with no name, as in the specification
     let node_update_unreach = Expr::Update(true, true, Box::new(Expr::Number("1".to_string())));
     let res_unreach_val = evaluator.evaluate(&node_update_unreach);
-    assert_eq!(res_unreach_val.coeff, BigInt::from(2));
+    assert_eq!(res_unreach_val.coeff, BigInt::from(1));
 
     // 10b. Additional tests for ibase single-character assignment edge cases
     // A) multi-character number (cleaned.len() != 1)
@@ -245,18 +247,15 @@ fn test_eval_uncovered_lines() {
     )));
 
     // 14. Function argument errors (lines 379, 399, 405)
-    evaluator.functions.insert(
-        "f_param_err".to_string(),
-        FunctionDef {
-            name: "f_param_err".to_string(),
-            params: vec![Param {
-                name: "x".to_string(),
-                is_array: false,
-            }],
-            autos: vec![],
-            body: vec![],
-        },
-    );
+    evaluator.execute(&Stmt::FunctionDef(FunctionDef {
+        name: "f_param_err".to_string(),
+        params: vec![Param {
+            name: "x".to_string(),
+            is_array: false,
+        }],
+        autos: vec![],
+        body: vec![],
+    }));
     let res_f_arg_cnt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         evaluator.evaluate(&Expr::Call("f_param_err".to_string(), vec![]));
     }));
@@ -270,18 +269,15 @@ fn test_eval_uncovered_lines() {
     }));
     assert!(res_f_arg_arr_mismatch.is_err());
 
-    evaluator.functions.insert(
-        "f_arr_err".to_string(),
-        FunctionDef {
-            name: "f_arr_err".to_string(),
-            params: vec![Param {
-                name: "x".to_string(),
-                is_array: true,
-            }],
-            autos: vec![],
-            body: vec![],
-        },
-    );
+    evaluator.execute(&Stmt::FunctionDef(FunctionDef {
+        name: "f_arr_err".to_string(),
+        params: vec![Param {
+            name: "x".to_string(),
+            is_array: true,
+        }],
+        autos: vec![],
+        body: vec![],
+    }));
     let res_f_arr_expr_mismatch = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         evaluator.evaluate(&Expr::Call(
             "f_arr_err".to_string(),
@@ -300,10 +296,6 @@ fn test_eval_uncovered_lines() {
     evaluator.break_flag = true;
     evaluator.execute(&Stmt::Expr(Expr::Number("10".to_string())));
     evaluator.break_flag = false;
-
-    // 17. Stmt::Quit execution (lines 544-546)
-    evaluator.execute(&Stmt::Quit);
-    assert!(evaluator.quit_flag);
 
     // 18. Uninitialized variables and arrays access to cover entry().or_insert_with() closures
     let _ = evaluator.evaluate(&Expr::Variable("uninit_var".to_string()));
@@ -337,18 +329,15 @@ fn test_eval_uncovered_lines() {
             Box::new(Expr::Number("0".to_string())),
         )),
     ));
-    evaluator.functions.insert(
-        "f_uninit_arr_arg".to_string(),
-        FunctionDef {
-            name: "f_uninit_arr_arg".to_string(),
-            params: vec![Param {
-                name: "x".to_string(),
-                is_array: true,
-            }],
-            autos: vec![],
-            body: vec![],
-        },
-    );
+    evaluator.execute(&Stmt::FunctionDef(FunctionDef {
+        name: "f_uninit_arr_arg".to_string(),
+        params: vec![Param {
+            name: "x".to_string(),
+            is_array: true,
+        }],
+        autos: vec![],
+        body: vec![],
+    }));
     let _ = evaluator.evaluate(&Expr::Call(
         "f_uninit_arr_arg".to_string(),
         vec![ExprOrArray::ArrayArg("uninit_arr_arg".to_string())],
@@ -360,22 +349,19 @@ fn test_eval_uncovered_lines() {
         "shadowed_var".to_string(),
         vec![BCNum::new(BigInt::from(99), 0)],
     );
-    evaluator.functions.insert(
-        "f_panic".to_string(),
-        FunctionDef {
-            name: "f_panic".to_string(),
-            params: vec![],
-            autos: vec![Param {
-                name: "shadowed_var".to_string(),
-                is_array: false,
-            }],
-            body: vec![Stmt::Expr(Expr::BinaryOp(
-                BinOp::Div,
-                Box::new(Expr::Number("1".to_string())),
-                Box::new(Expr::Number("0".to_string())),
-            ))],
-        },
-    );
+    evaluator.execute(&Stmt::FunctionDef(FunctionDef {
+        name: "f_panic".to_string(),
+        params: vec![],
+        autos: vec![Param {
+            name: "shadowed_var".to_string(),
+            is_array: false,
+        }],
+        body: vec![Stmt::Expr(Expr::BinaryOp(
+            BinOp::Div,
+            Box::new(Expr::Number("1".to_string())),
+            Box::new(Expr::Number("0".to_string())),
+        ))],
+    }));
     let panic_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         evaluator.evaluate(&Expr::Call("f_panic".to_string(), vec![]));
     }));
@@ -818,7 +804,7 @@ fn test_evaluator_compound_assignment_scale_and_scoping() {
             Stmt::Return(Some(Expr::Variable("auto1".to_string()))),
         ],
     };
-    evaluator.functions.insert("test_fn".to_string(), f_def);
+    evaluator.execute(&Stmt::FunctionDef(f_def));
 
     let call_res = evaluator.evaluate(&Expr::Call(
         "test_fn".to_string(),
@@ -1038,14 +1024,13 @@ fn test_hex_base_assignment_obase_clamping_and_fractional_index() {
     assert_eq!(arr_val_b.coeff, BigInt::from(1));
 
     // 4. Block execution break on quit_flag
-    evaluator.execute(&Stmt::Block(vec![
-        Stmt::Quit,
-        Stmt::Expr(Expr::AssignOp(
-            AssignOp::Assign,
-            Box::new(Expr::Variable("stopped".to_string())),
-            Box::new(Expr::Number("1".to_string())),
-        )),
-    ]));
+    evaluator.quit_flag = true;
+    evaluator.execute(&Stmt::Block(vec![Stmt::Expr(Expr::AssignOp(
+        AssignOp::Assign,
+        Box::new(Expr::Variable("stopped".to_string())),
+        Box::new(Expr::Number("1".to_string())),
+    ))]));
+    evaluator.quit_flag = false;
     let stopped_var = evaluator.evaluate(&Expr::Variable("stopped".to_string()));
     assert_eq!(stopped_var.coeff, BigInt::from(0));
 }
@@ -1179,28 +1164,30 @@ fn test_fallible_evaluator_and_scope_restoration() {
         b"x = 42; a[0] = 7\ndefine bad(x, a[]) {\n  auto y, b[]\n  x = 99\n  y = 1 / 0\n  return (y)\n}\n",
     ))
     .unwrap();
-    for stmt in p_setup.try_parse_program().unwrap() {
-        assert!(ev.try_execute(&stmt).is_ok());
+    for stmt in p_setup.try_parse_tree().unwrap() {
+        assert!(ev.try_execute_tree(&stmt).is_ok());
     }
 
     // Calling bad(10, a[]) must fail with "Divide by zero" inside bad() AND leave_call must restore x = 42
     let mut p_call = Parser::try_new(Lexer::new(b"bad(10, a[])\n")).unwrap();
-    let call_stmts = p_call.try_parse_program().unwrap();
+    let call_stmts = p_call.try_parse_tree().unwrap();
     assert_eq!(
-        ev.try_execute(&call_stmts[0]),
+        ev.try_execute_tree(&call_stmts[0]),
         Err(BcError::Runtime {
             kind: RuntimeError::DivideByZero,
             func: Some("bad".to_string())
         })
     );
-    let x_after = ev.try_evaluate(&Expr::Variable("x".to_string())).unwrap();
+    let x_after = ev
+        .try_evaluate_tree(&Expr::Variable("x".to_string()))
+        .unwrap();
     assert_eq!(x_after.coeff, BigInt::from(42));
 
     // Argument errors and undefined function
     let mut p_mismatch = Parser::try_new(Lexer::new(b"bad(10)\n")).unwrap();
-    let stmts_mismatch = p_mismatch.try_parse_program().unwrap();
+    let stmts_mismatch = p_mismatch.try_parse_tree().unwrap();
     assert_eq!(
-        ev.try_execute(&stmts_mismatch[0]),
+        ev.try_execute_tree(&stmts_mismatch[0]),
         Err(BcError::Runtime {
             kind: RuntimeError::ParameterMismatch,
             func: None
@@ -1208,9 +1195,9 @@ fn test_fallible_evaluator_and_scope_restoration() {
     );
 
     let mut p_arr_err = Parser::try_new(Lexer::new(b"bad(10, 20)\n")).unwrap();
-    let stmts_arr_err = p_arr_err.try_parse_program().unwrap();
+    let stmts_arr_err = p_arr_err.try_parse_tree().unwrap();
     assert_eq!(
-        ev.try_execute(&stmts_arr_err[0]),
+        ev.try_execute_tree(&stmts_arr_err[0]),
         Err(BcError::Runtime {
             kind: RuntimeError::ParameterTypeMismatch("a".to_string()),
             func: None
@@ -1218,9 +1205,9 @@ fn test_fallible_evaluator_and_scope_restoration() {
     );
 
     let mut p_scalar_err = Parser::try_new(Lexer::new(b"bad(a[], a[])\n")).unwrap();
-    let stmts_scalar_err = p_scalar_err.try_parse_program().unwrap();
+    let stmts_scalar_err = p_scalar_err.try_parse_tree().unwrap();
     assert_eq!(
-        ev.try_execute(&stmts_scalar_err[0]),
+        ev.try_execute_tree(&stmts_scalar_err[0]),
         Err(BcError::Runtime {
             kind: RuntimeError::ParameterTypeMismatch("x".to_string()),
             func: None
@@ -1228,9 +1215,9 @@ fn test_fallible_evaluator_and_scope_restoration() {
     );
 
     let mut p_undef = Parser::try_new(Lexer::new(b"nonexistent(1)\n")).unwrap();
-    let stmts_undef = p_undef.try_parse_program().unwrap();
+    let stmts_undef = p_undef.try_parse_tree().unwrap();
     assert_eq!(
-        ev.try_execute(&stmts_undef[0]),
+        ev.try_execute_tree(&stmts_undef[0]),
         Err(BcError::Runtime {
             kind: RuntimeError::UndefinedFunction("nonexistent".to_string()),
             func: None
@@ -1238,9 +1225,9 @@ fn test_fallible_evaluator_and_scope_restoration() {
     );
 
     let mut p_sqrt = Parser::try_new(Lexer::new(b"sqrt(-1)\n")).unwrap();
-    let stmts_sqrt = p_sqrt.try_parse_program().unwrap();
+    let stmts_sqrt = p_sqrt.try_parse_tree().unwrap();
     assert_eq!(
-        ev.try_execute(&stmts_sqrt[0]),
+        ev.try_execute_tree(&stmts_sqrt[0]),
         Err(BcError::Runtime {
             kind: RuntimeError::NegativeSqrt,
             func: None
@@ -1251,13 +1238,13 @@ fn test_fallible_evaluator_and_scope_restoration() {
     ev.scale = 4;
     let eval_expr = |ev: &mut Evaluator, src: &str| -> BCNum {
         let mut p = Parser::try_new(Lexer::new(src.as_bytes())).unwrap();
-        let stmts = p.try_parse_program().unwrap();
+        let stmts = p.try_parse_tree().unwrap();
         let inner = match &stmts[0] {
             Stmt::Block(b) => &b[0],
             other => other,
         };
         if let Stmt::Expr(e) = inner {
-            ev.try_evaluate(e).unwrap()
+            ev.try_evaluate_tree(e).unwrap()
         } else {
             panic!("expected Stmt::Expr");
         }

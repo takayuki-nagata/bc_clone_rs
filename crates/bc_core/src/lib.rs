@@ -64,6 +64,6 @@ pub use error::{BcError, RuntimeError};
 pub use eval::{BcWriter, ErrWriter, Evaluator, WrappedStdout};
 pub use math::BCNum;
 pub use parser::{
-    DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Lexer, Param, Parser,
-    Register, Stmt, Token, TokenType,
+    Arg, Code, DEFAULT_MAX_DEPTH, ExtensionPolicy, FunctionDef, Lexer, Node, Param, Parser,
+    Register, Token, TokenType,
 };

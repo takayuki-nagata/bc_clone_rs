@@ -213,7 +213,11 @@ impl Evaluator {
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(30)]
     #[allow(clippy::ptr_arg, reason = "the specification relates the lists to the call")]
-    pub(crate) fn ev_args_ref(&mut self, params: &Vec<Param>, args: &Vec<ExprOrArray>, Ghost(nodes): Ghost<SpecNodes>, Ghost(sargs): Ghost<SpecArgs>, Ghost(sparams): Ghost<SpecParams>, Ghost(st): Ghost<SpecState>) -> (r: Result<Vec<(String, ArgValue)>, BcError>)
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "three of them are the Ghost arguments of the refinement proof"
+    )]
+    pub(crate) fn ev_args_ref(&mut self, code: &Rc<Code>, params: &Vec<Param>, args: &Vec<PArg>, Ghost(nodes): Ghost<SpecNodes>, Ghost(sargs): Ghost<SpecArgs>, Ghost(sparams): Ghost<SpecParams>, Ghost(st): Ghost<SpecState>) -> (r: Result<Vec<(String, ArgValue)>, BcError>)
         requires
             old(self).inv(),
             params.len() == args.len(),
@@ -221,12 +225,12 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> args_ok(r->Ok_0@),
-            (r_state(*old(self), st) && r_args(args@, nodes, sargs) && r_params(params@, sparams)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes) && r_args(args@, sargs) && r_params(params@, sparams)) ==> forall|f: u64|
                 done(#[trigger] bc_spec::eval::ev_args(nodes, sargs, sparams, st, Seq::empty(), f).r)
                     ==> r_args_result(r, *final(self), bc_spec::eval::ev_args(nodes, sargs, sparams, st, Seq::empty(), f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_args(args@, nodes, sargs) && r_params(params@, sparams);
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes) && r_args(args@, sargs) && r_params(params@, sparams);
         let ghost fin = exists|f: u64| done(#[trigger] bc_spec::eval::ev_args(nodes, sargs, sparams, st, Seq::empty(), f).r);
         let mut vals: Vec<(String, ArgValue)> = Vec::new();
         let ghost mut si = st;
@@ -247,7 +251,7 @@ impl Evaluator {
                 params.len() == args.len(),
                 vals@.len() == i,
                 args_ok(vals@),
-                hyp == (r_state(*old(self), st) && r_args(args@, nodes, sargs) && r_params(params@, sparams)),
+                hyp == (r_state(*old(self), st) && r_rc(*code, nodes) && r_args(args@, sargs) && r_params(params@, sparams)),
                 fin == exists|f: u64| done(#[trigger] bc_spec::eval::ev_args(nodes, sargs, sparams, st, Seq::empty(), f).r),
                 hyp ==> sargs.len() == args.len() && sparams.len() == args.len(),
                 hyp && fin ==> r_state(*self, si) && r_argvals(vals@, acc),
@@ -261,7 +265,7 @@ impl Evaluator {
             let ghost sp = sparams[i as int];
             proof {
                 if hyp {
-                    lemma_r_args_index(args@, nodes, sargs, i as int);
+                    lemma_r_args_index(args@, sargs, i as int);
                     assert(r_param(params@[i as int], sp));
                     assert(sargs.skip(i as int)[0] == sa);
                     assert(sparams.skip(i as int)[0] == sp);
@@ -271,7 +275,7 @@ impl Evaluator {
             }
             let param = &params[i];
             match &args[i] {
-                ExprOrArray::ArrayArg(arg_name) => {
+                PArg::Array(arg_name) => {
                     if !param.is_array {
                         let r = Err(BcError::Runtime { kind: RuntimeError::ParameterTypeMismatch(param.name.clone()), func: None });
                         proof {
@@ -287,7 +291,7 @@ impl Evaluator {
                     }
                     proof {
                         if hyp {
-                            assert(r_arg(ExprOrArray::ArrayArg(*arg_name), nodes, sa));
+                            assert(r_arg(PArg::Array(*arg_name), sa));
                             assert(sa.is_array && sa.name == text_view(*arg_name));
                             assert(sp.name == text_view(param.name));
                         }
@@ -310,7 +314,7 @@ impl Evaluator {
                         }
                     }
                 },
-                ExprOrArray::Expr(e) => {
+                PArg::Expr(e) => {
                     if param.is_array {
                         let r = Err(BcError::Runtime { kind: RuntimeError::ParameterTypeMismatch(param.name.clone()), func: None });
                         proof {
@@ -326,12 +330,12 @@ impl Evaluator {
                     }
                     proof {
                         if hyp {
-                            assert(r_arg(ExprOrArray::Expr(*e), nodes, sa));
-                            assert(!sa.is_array && r_expr(*e, nodes, sa.expr));
+                            assert(r_arg(PArg::Expr(*e), sa));
+                            assert(!sa.is_array && sa.expr == *e);
                             assert(sp.name == text_view(param.name));
                         }
                     }
-                    let v = match self.eval_ref(e, Ghost(nodes), Ghost(sa.expr), Ghost(si)) {
+                    let v = match self.eval_ref(code, *e, Ghost(nodes), Ghost(si)) {
                         Ok(v) => v,
                         Err(err) => {
                             proof {
@@ -589,7 +593,7 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "three of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn leave_call(&mut self, func: &FunctionDef, saved_flag: bool, saved_inv: Option<usize>, saved_val: BCNum, Ghost(g): Ghost<SpecFunc>, Ghost(s): Ghost<SpecSaved>, Ghost(st): Ghost<SpecState>) -> (ret: BCNum)
+    pub(crate) fn leave_call(&mut self, autos: &Vec<Param>, params: &Vec<Param>, saved_flag: bool, saved_inv: Option<usize>, saved_val: BCNum, Ghost(g): Ghost<SpecFunc>, Ghost(s): Ghost<SpecSaved>, Ghost(st): Ghost<SpecState>) -> (ret: BCNum)
         requires
             old(self).inv(),
             saved_val.scale <= BC_SCALE_MAX,
@@ -601,14 +605,14 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             ret == old(self).return_value,
-            (r_state(*old(self), st) && r_params(func.params@, g.params) && r_params(func.autos@, g.autos)
+            (r_state(*old(self), st) && r_params(params@, g.params) && r_params(autos@, g.autos)
                 && saved_flag == s.ret && r_num(saved_val, s.ret_val)
                 && match saved_inv {
                     Some(b) => s.has_inv && b == s.inv_ibase,
                     None => !s.has_inv,
                 }) ==> r_state(*final(self), bc_spec::eval::leave_call(st, g, s)),
     {
-        let ghost hyp = r_state(*self, st) && r_params(func.params@, g.params) && r_params(func.autos@, g.autos)
+        let ghost hyp = r_state(*self, st) && r_params(params@, g.params) && r_params(autos@, g.autos)
             && saved_flag == s.ret && r_num(saved_val, s.ret_val)
             && match saved_inv {
                 Some(b) => s.has_inv && b == s.inv_ibase,
@@ -636,8 +640,8 @@ impl Evaluator {
                 assert(r_state(*self, st1));
             }
         }
-        self.pop_params_ref(&func.autos, Ghost(g.autos), Ghost(st1));
-        self.pop_params_ref(&func.params, Ghost(g.params), Ghost(bc_spec::eval::pop_frames(st1, g.autos)));
+        self.pop_params_ref(autos, Ghost(g.autos), Ghost(st1));
+        self.pop_params_ref(params, Ghost(g.params), Ghost(bc_spec::eval::pop_frames(st1, g.autos)));
         ret
     }
 
@@ -645,17 +649,17 @@ impl Evaluator {
     /// after `return`.
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::ptr_arg, reason = "the specification relates the list to the function")]
-    pub(crate) fn run_body(&mut self, body: &Vec<Stmt>, Ghost(nodes): Ghost<SpecNodes>, Ghost(ns): Ghost<SpecIndices>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
+    pub(crate) fn run_body(&mut self, code: &Rc<Code>, body: &Vec<usize>, Ghost(nodes): Ghost<SpecNodes>, Ghost(ns): Ghost<SpecIndices>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
-            (r_state(*old(self), st) && r_stmts(body@, nodes, ns)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes) && body@ == ns) ==> forall|f: u64|
                 done(#[trigger] bc_spec::eval::exec_body(nodes, ns, st, f)) ==> r_unit(r, *final(self), bc_spec::eval::exec_body(nodes, ns, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_stmts(body@, nodes, ns);
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes) && body@ == ns;
         let ghost fin = exists|f: u64| done(#[trigger] bc_spec::eval::exec_body(nodes, ns, st, f));
         let ghost mut si = st;
         let mut i: usize = 0;
@@ -670,7 +674,7 @@ impl Evaluator {
                 self.eval_depth == d,
                 d == old(self).eval_depth,
                 i <= body.len(),
-                hyp == (r_state(*old(self), st) && r_stmts(body@, nodes, ns)),
+                hyp == (r_state(*old(self), st) && r_rc(*code, nodes) && body@ == ns),
                 fin == exists|f: u64| done(#[trigger] bc_spec::eval::exec_body(nodes, ns, st, f)),
                 hyp ==> ns.len() == body.len(),
                 hyp && fin ==> r_state(*self, si),
@@ -682,12 +686,11 @@ impl Evaluator {
             let ghost e0 = *self;
             proof {
                 if hyp {
-                    lemma_r_stmts_index(body@, nodes, ns, i as int);
                     assert(ns.skip(i as int)[0] == ji);
                     assert(ns.skip(i as int).drop_first() =~= ns.skip(i as int + 1));
                 }
             }
-            let ri = self.exec_ref(&body[i], Ghost(nodes), Ghost(ji), Ghost(si));
+            let ri = self.exec_ref(code, body[i], Ghost(nodes), Ghost(si));
             if let Err(err) = ri {
                 proof {
                     if hyp {
@@ -759,19 +762,21 @@ impl Evaluator {
         reason = "three of them are the Ghost arguments of the refinement proof"
     )]
     #[allow(clippy::ptr_arg, reason = "the specification relates the arguments to the call")]
-    pub(crate) fn eval_call(&mut self, Ghost(node): Ghost<Expr>, name: &String, args: &Vec<ExprOrArray>, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_call(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, name: &String, args: &Vec<PArg>, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::Call(*name, *args),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Call(*name, *args),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
         let ghost sargs = if n < nodes.len() { match nodes[n as int] { Node::Call(_, a) => a, _ => Seq::empty() } } else { Seq::empty() };
         let ghost sname = text_view(*name);
         proof {
@@ -782,7 +787,7 @@ impl Evaluator {
             Some(fd) => fd.clone(),
             None => {
                 if self.math_enabled {
-                    return self.eval_math(name, args);
+                    return self.eval_math(code, name, args);
                 }
                 let r = Err(BcError::Runtime { kind: RuntimeError::UndefinedFunction(name.clone()), func: None });
                 proof {
@@ -802,12 +807,22 @@ impl Evaluator {
                 assert(self.functions@.contains_key(*name));
                 assert(r_func(func, g));
                 lemma_find_func_index(st.funcs, sname);
-                assert(r_expr(Expr::Call(*name, *args), nodes, n));
-                assert(r_args(args@, nodes, sargs));
+                assert(r_args(args@, sargs));
                 assert(args@.len() == sargs.len());
             }
         }
-        if args.len() != func.params.len() {
+        proof { if hyp { assert(r_node(func.code.nodes@[func.def as int], g.nodes[func.def as int])); } }
+        if func.def >= func.code.nodes.len() {
+            // A function is always the `Define` node of its unit (`r_func`).
+            return Ok(BCNum::zero());
+        }
+        let (params, autos, body) = match &func.code.nodes[func.def] {
+            PNode::Define(_, params, autos, body) => (params, autos, body),
+            _ => {
+                return Ok(BCNum::zero());
+            },
+        };
+        if args.len() != params.len() {
             let r = Err(BcError::Runtime { kind: RuntimeError::ParameterMismatch, func: None });
             proof {
                 if hyp {
@@ -818,7 +833,7 @@ impl Evaluator {
             }
             return r;
         }
-        let vals = match self.ev_args_ref(&func.params, args, Ghost(nodes), Ghost(sargs), Ghost(g.params), Ghost(st)) {
+        let vals = match self.ev_args_ref(code, params, args, Ghost(nodes), Ghost(sargs), Ghost(g.params), Ghost(st)) {
             Ok(vals) => vals,
             Err(err) => {
                 proof {
@@ -847,7 +862,7 @@ impl Evaluator {
         }
         let ghost e1 = *self;
         let ghost vals_g = vals;
-        let r = self.run_call_ref(&func, name, vals, Ghost(g), Ghost(a.vals), Ghost(a.r.st));
+        let r = self.run_call_ref(&func.code, autos, params, body, name, vals, Ghost(g), Ghost(a.vals), Ghost(a.r.st));
         proof {
             if hyp {
                 assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(r, *self, ev_node(nodes, n, st, f), d) by {
@@ -870,7 +885,7 @@ impl Evaluator {
         reason = "three of them are the Ghost arguments of the refinement proof"
     )]
     #[allow(clippy::ptr_arg, reason = "the specification relates the String to the call")]
-    pub(crate) fn run_call_ref(&mut self, func: &FunctionDef, name: &String, vals: Vec<(String, ArgValue)>, Ghost(g): Ghost<SpecFunc>, Ghost(svals): Ghost<SpecArgVals>, Ghost(sa): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn run_call_ref(&mut self, code: &Rc<Code>, autos: &Vec<Param>, params: &Vec<Param>, body: &Vec<usize>, name: &String, vals: Vec<(String, ArgValue)>, Ghost(g): Ghost<SpecFunc>, Ghost(svals): Ghost<SpecArgVals>, Ghost(sa): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
             args_ok(vals@),
@@ -878,15 +893,15 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), sa) && r_func(*func, g) && g.name == text_view(*name) && r_argvals(vals@, svals)) ==> forall|f: u64|
+            (r_state(*old(self), sa) && r_rc(*code, g.nodes) && r_params(params@, g.params) && r_params(autos@, g.autos) && body@ == g.body && g.name == text_view(*name) && r_argvals(vals@, svals)) ==> forall|f: u64|
                 done(#[trigger] bc_spec::eval::run_call(g, svals, sa, f)) ==> r_result(r, *final(self), bc_spec::eval::run_call(g, svals, sa, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, sa) && r_func(*func, g) && g.name == text_view(*name) && r_argvals(vals@, svals);
+        let ghost hyp = r_state(*self, sa) && r_rc(*code, g.nodes) && r_params(params@, g.params) && r_params(autos@, g.autos) && body@ == g.body && g.name == text_view(*name) && r_argvals(vals@, svals);
         let ghost s = bc_spec::eval::Saved { ret: sa.ret, ret_val: sa.ret_val, has_inv: sa.has_inv, inv_ibase: sa.inv_ibase };
         self.push_args_ref(vals, Ghost(svals), Ghost(sa));
         let ghost sp = bc_spec::eval::push_args(sa, svals);
-        self.push_autos_ref(&func.autos, Ghost(g.autos), Ghost(sp));
+        self.push_autos_ref(autos, Ghost(g.autos), Ghost(sp));
         let ghost s1 = bc_spec::eval::push_autos(sp, g.autos);
         let saved_flag = self.return_flag;
         let saved_inv = self.invocation_ibase;
@@ -912,7 +927,7 @@ impl Evaluator {
                 assert(r_state(*self, s3));
             }
         }
-        let body = self.run_body(&func.body, Ghost(g.nodes), Ghost(g.body), Ghost(s3));
+        let body_r = self.run_body(code, body, Ghost(g.nodes), Ghost(g.body), Ghost(s3));
         let ghost fb = choose|f: u64| done(#[trigger] bc_spec::eval::exec_body(g.nodes, g.body, s3, f));
         let ghost xb = bc_spec::eval::exec_body(g.nodes, g.body, s3, fb);
         proof {
@@ -928,9 +943,9 @@ impl Evaluator {
             }
         }
         let ghost e3 = *self;
-        let ghost sl = if body is Ok { xb.st } else { with_depth(xb.st, d as u64) };
-        let ret_val = self.leave_call(func, saved_flag, saved_inv, saved_val, Ghost(g), Ghost(s), Ghost(sl));
-        let r = match body {
+        let ghost sl = if body_r is Ok { xb.st } else { with_depth(xb.st, d as u64) };
+        let ret_val = self.leave_call(autos, params, saved_flag, saved_inv, saved_val, Ghost(g), Ghost(s), Ghost(sl));
+        let r = match body_r {
             Ok(()) => Ok(ret_val),
             Err(e) => Err(e.in_function(name)),
         };
@@ -939,7 +954,7 @@ impl Evaluator {
                 assert forall|f: u64| done(#[trigger] bc_spec::eval::run_call(g, svals, sa, f))
                     implies r_result(r, *self, bc_spec::eval::run_call(g, svals, sa, f), d) by {
                     assert(done(bc_spec::eval::exec_body(g.nodes, g.body, s3, (f - 1) as u64)));
-                    assert(r_unit(body, e3, xb, d));
+                    assert(r_unit(body_r, e3, xb, d));
                     lemma_leave_call_depth(xb.st, g, s, d as u64);
                 }
             }

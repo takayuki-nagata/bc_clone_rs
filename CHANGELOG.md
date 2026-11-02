@@ -9,6 +9,10 @@ The loops of the front ends are not; `bc_clone` has its own loop over the proved
 lists what the proofs assume.
 
 ### Changed
+- **The syntax tree is a flat arena.** The public `Expr`, `Stmt` and `ExprOrArray` are replaced by
+  `Code`, `Node` and `Arg`; `Evaluator::try_evaluate` and `try_execute` take the arena and a node
+  index, and `Parser::try_parse_program` returns indices into `Parser::take_code`. A function call
+  no longer copies the function's body.
 - **Nesting limit on Wasm and the M5Stamp C3.** Both now set their limit from measurements of the
   stack, instead of inheriting the library default. Wasm allows 1000 levels (it was 128), so
   deeper programs run in the browser. The M5Stamp C3 keeps 128, now stated explicitly, and its

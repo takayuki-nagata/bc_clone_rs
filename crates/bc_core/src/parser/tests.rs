@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::error::BcError;
+use crate::parser::test_tree::{Expr, ExprOrArray, Stmt};
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::ToString;
 use alloc::vec;
@@ -126,7 +128,7 @@ fn test_lexer_unterminated_comment() {
 
 fn parse_err(src: &str) -> BcError {
     Parser::try_new(Lexer::new(src.as_bytes()))
-        .and_then(|mut p| p.try_parse_program())
+        .and_then(|mut p| p.try_parse_tree())
         .unwrap_err()
 }
 
@@ -156,7 +158,7 @@ fn test_misplaced_break_and_return_are_syntax_errors() {
     let ok = "define f() { while (1) { break }; for (i = 0; 1; i++) return (1) }\n";
     assert!(
         Parser::try_new(Lexer::new(ok.as_bytes()))
-            .and_then(|mut p| p.try_parse_program())
+            .and_then(|mut p| p.try_parse_tree())
             .is_ok()
     );
 }
@@ -626,17 +628,17 @@ fn test_fallible_parser_and_lexer() {
     assert!(Parser::try_new(Lexer::new(b"/* unterminated")).is_err());
 
     let mut parser_syntax = Parser::try_new(Lexer::new(b"1 + * 2\n")).unwrap();
-    assert!(parser_syntax.try_parse_program().is_err());
+    assert!(parser_syntax.try_parse_tree().is_err());
 
     let mut parser_quit = Parser::try_new(Lexer::new(b"quit\n")).unwrap();
-    assert_eq!(parser_quit.try_parse_program(), Err(BcError::Quit));
+    assert_eq!(parser_quit.try_parse_tree(), Err(BcError::Quit));
 
     // Verify statement & primary expression variants in try_parse_program
     let mut parser_variants = Parser::try_new(Lexer::new(
         b"\"hello\"\nwhile (0) break\nif (1) x = 2\nlength(123)\nscale(1.23)\nobase = 16\nscale = 4\n",
     ))
     .unwrap();
-    let stmts = parser_variants.try_parse_program().unwrap();
+    let stmts = parser_variants.try_parse_tree().unwrap();
     assert_eq!(stmts.len(), 7);
     assert_eq!(
         stmts[0],

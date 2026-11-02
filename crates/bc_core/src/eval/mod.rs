@@ -7,6 +7,7 @@
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -21,8 +22,8 @@ use crate::mathlib::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
 #[cfg(verus_keep_ghost)]
 use crate::mathlib::{lemma_math_ok, math_ok};
 use crate::parser::{
-    AssignOp, BinOp, DEFAULT_MAX_DEPTH, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Param,
-    Register, RelOp, Stmt,
+    Arg as PArg, AssignOp, BinOp, Code, DEFAULT_MAX_DEPTH, ExtensionPolicy, FunctionDef,
+    Node as PNode, Param, Register, RelOp, share_code,
 };
 #[cfg(verus_keep_ghost)]
 use crate::refine::*;
@@ -52,8 +53,8 @@ use bc_spec::convert::{lemma_num_from_digits, num_from_digits};
 use bc_spec::convert::{lemma_num_length, lemma_num_scale, num_length, num_scale};
 #[cfg(verus_keep_ghost)]
 use bc_spec::eval::{
-    ER, EState, Func, er_ok, ev, ev_node, ev_unary, exec, exec_node, negate, num_u64, reg_get,
-    with_depth,
+    ER, EState, Func, er_ok, ev, ev_node, ev_unary, exec, exec_node, is_assignment, negate,
+    num_u64, reg_get, with_depth,
 };
 #[cfg(verus_keep_ghost)]
 use bc_spec::eval::{
@@ -877,24 +878,24 @@ impl Evaluator {
     }
 
     /// Evaluates an AST expression node, returning Err on runtime math/call errors.
-    pub fn try_evaluate(&mut self, node: &Expr) -> (r: Result<BCNum, BcError>)
+    pub fn try_evaluate(&mut self, code: &Rc<Code>, node: usize) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
         ensures
             final(self).inv(),
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
     {
-        self.eval_ref(node, Ghost(arbitrary()), Ghost(0usize), Ghost(arbitrary()))
+        self.eval_ref(code, node, Ghost(arbitrary()), Ghost(arbitrary()))
     }
 
     /// Executes an AST statement node, returning Err on runtime errors.
-    pub fn try_execute(&mut self, node: &Stmt) -> (r: Result<(), BcError>)
+    pub fn try_execute(&mut self, code: &Rc<Code>, node: usize) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
         ensures
             final(self).inv(),
     {
-        self.exec_ref(node, Ghost(arbitrary()), Ghost(0usize), Ghost(arbitrary()))
+        self.exec_ref(code, node, Ghost(arbitrary()), Ghost(arbitrary()))
     }
 }
 
@@ -958,17 +959,5 @@ impl Evaluator {
     /// The diagnostic stream, for a front end's own messages (e.g. a file that cannot be read).
     pub fn stderr_writer(&mut self) -> &mut ErrWriter {
         &mut self.stderr_writer
-    }
-
-    /// Evaluates an AST expression node and returns a BCNum.
-    #[cfg(test)]
-    pub fn evaluate(&mut self, node: &Expr) -> BCNum {
-        self.try_evaluate(node).unwrap_or_else(|e| panic!("{}", e))
-    }
-
-    /// Executes an AST statement node.
-    #[cfg(test)]
-    pub fn execute(&mut self, node: &Stmt) {
-        self.try_execute(node).unwrap_or_else(|e| panic!("{}", e))
     }
 }

@@ -11,17 +11,17 @@ impl Evaluator {
     /// built by the parser) stops them with `BcError::Quit`.
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::ptr_arg, reason = "the specification relates the list to the unit")]
-    pub(crate) fn exec_items_ref(&mut self, stmts: &Vec<Stmt>, Ghost(nodes): Ghost<SpecNodes>, Ghost(ns): Ghost<SpecIndices>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
+    pub(crate) fn exec_items_ref(&mut self, code: &Rc<Code>, stmts: &Vec<usize>, Ghost(nodes): Ghost<SpecNodes>, Ghost(ns): Ghost<SpecIndices>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
-            (r_state(*old(self), st) && r_stmts(stmts@, nodes, ns)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes) && stmts@ == ns) ==> forall|f: u64|
                 done(#[trigger] bc_spec::top::exec_items(nodes, ns, st, f)) ==> r_unit(r, *final(self), bc_spec::top::exec_items(nodes, ns, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_stmts(stmts@, nodes, ns);
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes) && stmts@ == ns;
         let ghost fin = exists|f: u64| done(#[trigger] bc_spec::top::exec_items(nodes, ns, st, f));
         let ghost mut si = st;
         let mut i: usize = 0;
@@ -36,7 +36,7 @@ impl Evaluator {
                 self.eval_depth == d,
                 d == old(self).eval_depth,
                 i <= stmts.len(),
-                hyp == (r_state(*old(self), st) && r_stmts(stmts@, nodes, ns)),
+                hyp == (r_state(*old(self), st) && r_rc(*code, nodes) && stmts@ == ns),
                 fin == exists|f: u64| done(#[trigger] bc_spec::top::exec_items(nodes, ns, st, f)),
                 hyp ==> ns.len() == stmts.len(),
                 hyp && fin ==> r_state(*self, si),
@@ -48,12 +48,11 @@ impl Evaluator {
             let ghost e0 = *self;
             proof {
                 if hyp {
-                    lemma_r_stmts_index(stmts@, nodes, ns, i as int);
                     assert(ns.skip(i as int)[0] == ji);
                     assert(ns.skip(i as int).drop_first() =~= ns.skip(i as int + 1));
                 }
             }
-            let ri = self.exec_ref(&stmts[i], Ghost(nodes), Ghost(ji), Ghost(si));
+            let ri = self.exec_ref(code, stmts[i], Ghost(nodes), Ghost(si));
             if let Err(err) = ri {
                 proof {
                     if hyp {
@@ -261,7 +260,7 @@ impl Evaluator {
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::ptr_arg, reason = "the call's argument list")]
     #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
-    pub(crate) fn eval_math(&mut self, name: &String, args: &Vec<ExprOrArray>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_math(&mut self, code: &Rc<Code>, name: &String, args: &Vec<PArg>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
         ensures
@@ -274,10 +273,10 @@ impl Evaluator {
         let nb = name.as_str().as_bytes();
         if nb.len() == 1 && args.len() == 1 {
             let c = nb[0];
-            if let ExprOrArray::Expr(expr) = &args[0] {
+            if let PArg::Expr(expr) = &args[0] {
                 // s, c, a, l, e
                 if c == 115 || c == 99 || c == 97 || c == 108 || c == 101 {
-                    let x = self.eval_ref(expr, Ghost(arbitrary()), Ghost(0usize), Ghost(arbitrary()))?;
+                    let x = self.eval_ref(code, *expr, Ghost(arbitrary()), Ghost(arbitrary()))?;
                     let scale = self.scale;
                     let res = if c == 115 {
                         bc_sin(&x, scale)
@@ -304,10 +303,10 @@ impl Evaluator {
             }
         }
         if nb.len() == 1 && nb[0] == 106 && args.len() == 2 {
-            if let ExprOrArray::Expr(expr_n) = &args[0] {
-                if let ExprOrArray::Expr(expr_x) = &args[1] {
-                    let n_val = self.eval_ref(expr_n, Ghost(arbitrary()), Ghost(0usize), Ghost(arbitrary()))?;
-                    let x_val = self.eval_ref(expr_x, Ghost(arbitrary()), Ghost(0usize), Ghost(arbitrary()))?;
+            if let PArg::Expr(expr_n) = &args[0] {
+                if let PArg::Expr(expr_x) = &args[1] {
+                    let n_val = self.eval_ref(code, *expr_n, Ghost(arbitrary()), Ghost(arbitrary()))?;
+                    let x_val = self.eval_ref(code, *expr_x, Ghost(arbitrary()), Ghost(arbitrary()))?;
                     return match bc_bessel(&n_val, &x_val, self.scale) {
                         Ok(v) => {
                             proof {

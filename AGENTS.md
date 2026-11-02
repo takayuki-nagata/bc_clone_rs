@@ -59,10 +59,16 @@ graph TD
   assumes the one-line wrappers `ascii_string` and `copy_bytes`.
 - The lexer works on bytes, which need not be UTF-8. It tracks line numbers and handles
   `/* */` comments, strings, and backslash-newline continuation. A string keeps its bytes
-  (`Stmt::StringLiteral(Vec<u8>)`). An illegal character is the well-formed UTF-8 sequence
+  (`Node::Str(Vec<u8>)`). An illegal character is the well-formed UTF-8 sequence
   that starts at that byte, or the byte alone (`verified_utf8_char_len`).
 - The parser is recursive descent, with Pratt precedence climbing for expressions. Assignment and
   `^` are right-associative. Precedence and associativity come from `verified_pratt_infix_info`.
+- The syntax trees of a unit are a flat arena, `Code { nodes: Vec<Node> }`, with `usize` children.
+  It has the variants and the indices of the specification's arena: the parser adds a node
+  exactly when the specification's `add_node` does. Dropping or copying it does not recurse.
+  A defined function, `FunctionDef { code: Rc<Code>, def }`, shares the arena of its unit, so a
+  call does not copy the body, and a running body survives its redefinition; the arena stays
+  in memory while a function defined in it does.
 - Fallible API: `Lexer::try_get_next_token`, `Lexer::try_peek_token`, `Parser::try_new`,
   `Parser::try_parse_program`.
   `quit` makes `try_parse_program` return `Err(BcError::Quit)` so execution stops at that point, as
@@ -164,7 +170,7 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   C API, Zephyr, QEMU, ESP32-C3, Wasm) uses this driver, so error recovery is identical on all
   targets. The driver takes bytes; the CLI and the C API pass their input without decoding it.
 - Recursion is bounded: `Evaluator::max_depth` limits the depth of the syntax tree (checked while
-  parsing, so evaluation, `Clone`, and `Drop` of the tree stay within it) and the number of
+  parsing, so that evaluation stays within it) and the number of
   nested `try_evaluate`/`try_execute` calls, including across function calls. Each front end
   sets it for the stack it runs on; `bc_cli` runs the engine on a 512 MiB-stack thread. When
   you add a recursive walk over the AST, it must stay within the same bound.
@@ -327,11 +333,10 @@ as possible and state the reason next to it.
   `#[cfg(not(verus_keep_ghost))] use verus_builtin_macros::verus;` and `vstd::prelude` only under
   `cfg(verus_keep_ghost)`. A `Ghost<T>` parameter stays in the signature after erasure, so its
   type must exist without `vstd` and `bc_spec`.
-- The refinement relations between `bc_core` and `bc_spec` are in `src/refine.rs` (syntax trees,
+- The refinement relations between `bc_core` and `bc_spec` are in `src/refine.rs` (the arena,
   numbers, variables, arrays, functions) and `Evaluator::r_state` in `src/eval/` (the whole
-  state; it reads `pub(crate)` fields, so it must stay `pub(crate)`). The syntax-tree types are
-  declared outside `verus!` (Verus rejects derived impls on recursive types) and made visible to
-  Verus with `external_type_specification`; the output streams `WrappedStdout` and `ErrWriter`
+  state; it reads `pub(crate)` fields, so it must stay `pub(crate)`). The arena's types are
+  declared outside `verus!` and made visible to Verus with `external_type_specification`; the output streams `WrappedStdout` and `ErrWriter`
   are opaque (`external_body`) and modeled by `out_log`, `out_col` and `err_log`;
   `ErrWriter::write_bytes` is the trusted statement that a diagnostic write appends exactly its
   bytes to `err_log`.
@@ -343,12 +348,10 @@ as possible and state the reason next to it.
   `trusted_std.rs`.
 - The refinement theorem of expression evaluation is the postcondition of `Evaluator::eval_ref`
   (behind `try_evaluate`): if the state corresponds to the specification's (`r_state`) and the
-  expression to an arena subtree (`r_expr`), then for every fuel with which the specification's
+  arena to the specification's (`r_rc`), then for every fuel with which the specification's
   `ev` finishes, the result and the new state correspond to it (`r_result`). Statement execution
   has the same theorem in `Evaluator::exec_ref` (behind `try_execute`) against the
-  specification's `exec`, with `r_unit`. Both cover every expression and statement that the
-  syntax-tree relation relates (it relates assignments only to named expressions and never
-  relates `quit`, as the parser builds neither), including
+  specification's `exec`, with `r_unit`. Both cover every node of a related arena, including
   function calls (`eval_call`, `run_call_ref`). The functions of `-l` go through `eval_math`, which is
   verified (it keeps `Evaluator::inv` and the depth, and its result satisfies `mathlib::math_ok`)
   but is outside the refinement theorem: `r_state` excludes `-l`.
@@ -357,7 +360,7 @@ as possible and state the reason next to it.
   `str`); the `num-bigint` wrappers and `axiom_bigint_size` in `trusted_bigint.rs`; the axioms of
   `trusted_std.rs`; the output-stream wrappers in `eval/` (`WrappedStdout::write_bytes`,
   `flush_out`, `ErrWriter::write_bytes`, `flush_err`: a failing writer is outside the model, and a writer is taken to store exactly the bytes it receives, which the default `BcWriter::write_bytes` does not do for invalid UTF-8, nor the bare-metal UART, which turns `\n` into `\r\n`); and
-  the one-line wrappers `ascii_string` and `copy_bytes` (`parser/`), `append_bytes` and `subslice`
+  the one-line wrappers `ascii_string`, `share_code` and `copy_bytes` (`parser/`), `append_bytes` and `subslice`
   (`driver.rs`). `WrappedStdout::new` and `ErrWriter::new` are taken to start with an empty log.
   The theorems assume a text shorter than `usize::MAX - 2` bytes and a nesting limit below
   `usize::MAX - 2`. `-l` is excluded by `r_state`. Not covered: the front ends' loops over lines

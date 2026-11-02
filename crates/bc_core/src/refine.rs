@@ -6,8 +6,8 @@
 //! - `r_num`: a `BCNum` has the L0 value of a specification `Num` (numbers are related by value;
 //!   `bc_spec::values` and `bc_spec::format` show that the specification uses numbers only
 //!   through their values).
-//! - `r_expr` / `r_stmt`: a production syntax tree (`Box` and `Vec`) is the subtree at index `n`
-//!   of a specification arena (`Seq<Node>` with `usize` children). Names are related
+//! - `r_code` / `r_node`: the production arena is the specification's arena (`Seq<Node>` with
+//!   `usize` children), node by node with the same indices. Names are related
 //!   through their UTF-8 bytes (`text_view`), string texts byte for byte; operators through the specification's
 //!   operator codes, which the production enums list in the same order.
 //! - `r_vars`, `r_arrays`, `r_funcs`: the evaluator's maps against the specification's
@@ -18,7 +18,7 @@
 //!   streams through `out_log`/`out_col`/`err_log`).
 //!
 //! The refinement theorems are the postconditions of `Evaluator::eval_ref` and
-//! `Evaluator::exec_ref`: if `r_state(e, st)` and `r_expr(x, nodes, n)` (or `r_stmt`), then for
+//! `Evaluator::exec_ref`: if `r_state(e, st)` and `r_code(code, nodes)`, then for node `n` and
 //! every fuel with which the specification's `ev` (or `exec`) finishes, the result and the new
 //! state correspond to it (`r_result`; `bc_spec::fuel` shows that every finishing fuel gives the
 //! same result).
@@ -26,12 +26,13 @@
 use crate::error::{BcError, RuntimeError};
 use crate::math::BCNum;
 use crate::parser::{
-    AssignOp, BinOp, Expr, ExprOrArray, FunctionDef, Param, Register, RelOp, Stmt,
+    Arg as PArg, AssignOp, BinOp, Code, FunctionDef, Node as PNode, Param, Register, RelOp,
 };
 use crate::spec_num::*;
 use crate::trusted_std::axiom_string_view_injective;
 use crate::verified_kernels::BC_SCALE_MAX;
 use alloc::collections::BTreeMap;
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use bc_spec::eval::*;
@@ -113,131 +114,77 @@ pub open spec fn r_params(ps: Seq<Param>, qs: Seq<bc_spec::parser::Param>) -> bo
 // Syntax trees
 // ---------------------------------------------------------------------------------------------
 
-/// Production expression `e` is the arena subtree at `n`.
-pub open spec fn r_expr(e: Expr, nodes: Seq<Node>, n: usize) -> bool
-    decreases e,
-{
-    n < nodes.len() && match e {
-        Expr::Number(t) => nodes[n as int] == Node::Number(text_view(t)),
-        Expr::Variable(x) => nodes[n as int] == Node::Var(text_view(x)),
-        Expr::ArrayAccess(x, i) => match nodes[n as int] {
-            Node::Array(y, j) => y == text_view(x) && r_expr(*i, nodes, j),
-            _ => false,
-        },
-        Expr::RegisterAccess(r) => nodes[n as int] == Node::Reg(reg_code(r)),
-        Expr::Negate(a) => match nodes[n as int] {
-            Node::Neg(j) => r_expr(*a, nodes, j),
-            _ => false,
-        },
-        Expr::BinaryOp(op, l, r) => match nodes[n as int] {
-            Node::Binary(c, a, b) => c == bin_code(op) && r_expr(*l, nodes, a) && r_expr(*r, nodes, b),
-            _ => false,
-        },
-        Expr::RelationalOp(op, l, r) => match nodes[n as int] {
-            Node::Rel(c, a, b) => c == rel_code(op) && r_expr(*l, nodes, a) && r_expr(*r, nodes, b),
-            _ => false,
-        },
-        Expr::Update(inc, prefix, t) => match nodes[n as int] {
-            Node::Update(i2, p2, j) => named(*t) && i2 == inc && p2 == prefix && r_expr(*t, nodes, j),
-            _ => false,
-        },
-        Expr::AssignOp(op, t, v) => match nodes[n as int] {
-            Node::Assign(c, a, b) => named(*t) && c == assign_code(op) && r_expr(*t, nodes, a) && r_expr(*v, nodes, b),
-            _ => false,
-        },
-        Expr::Call(name, args) => match nodes[n as int] {
-            Node::Call(m, sargs) => m == text_view(name) && r_args(args@, nodes, sargs),
-            _ => false,
-        },
-        Expr::LengthCall(a) => match nodes[n as int] {
-            Node::Length(j) => r_expr(*a, nodes, j),
-            _ => false,
-        },
-        Expr::SqrtCall(a) => match nodes[n as int] {
-            Node::Sqrt(j) => r_expr(*a, nodes, j),
-            _ => false,
-        },
-        Expr::ScaleCall(a) => match nodes[n as int] {
-            Node::ScaleOf(j) => r_expr(*a, nodes, j),
-            _ => false,
-        },
-        Expr::Paren(a) => match nodes[n as int] {
-            Node::Paren(j) => r_expr(*a, nodes, j),
-            _ => false,
-        },
-    }
-}
-
 /// The arguments of a call, in order (by `drop_first`, so that Verus can unfold it; see
 /// `lemma_r_args_index`).
-pub open spec fn r_args(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs: Seq<Arg>) -> bool
-    decreases args,
+pub open spec fn r_args(args: Seq<PArg>, sargs: Seq<Arg>) -> bool
+    decreases args.len(),
 {
     args.len() == sargs.len() && (args.len() == 0
-        || (r_arg(args[0], nodes, sargs[0]) && r_args(args.drop_first(), nodes, sargs.drop_first())))
+        || (r_arg(args[0], sargs[0]) && r_args(args.drop_first(), sargs.drop_first())))
 }
 
 /// A call argument: an expression, or a whole array `name[]`.
-pub open spec fn r_arg(a: ExprOrArray, nodes: Seq<Node>, s: Arg) -> bool
-    decreases a,
-{
+pub open spec fn r_arg(a: PArg, s: Arg) -> bool {
     match a {
-        ExprOrArray::Expr(e) => !s.is_array && r_expr(e, nodes, s.expr),
-        ExprOrArray::ArrayArg(name) => s.is_array && s.name == text_view(name),
+        PArg::Expr(e) => !s.is_array && s.expr == e,
+        PArg::Array(name) => s.is_array && s.name == text_view(name),
     }
 }
 
-/// Production statement `s` is the arena subtree at `n`. `Stmt::Quit` has no counterpart: the
-/// parser stops at `quit` (it never builds the statement).
-pub open spec fn r_stmt(s: Stmt, nodes: Seq<Node>, n: usize) -> bool
-    decreases s,
-{
-    n < nodes.len() && match s {
-        Stmt::Block(list) => match nodes[n as int] {
-            Node::Block(ns) => r_stmts(list@, nodes, ns),
+/// A production node is the specification's node with the same children: the two arenas have
+/// the same indices.
+pub open spec fn r_node(p: PNode, s: Node) -> bool {
+    match p {
+        PNode::Number(t) => s == Node::Number(text_view(t)),
+        PNode::Var(x) => s == Node::Var(text_view(x)),
+        PNode::Array(x, i) => s == Node::Array(text_view(x), i),
+        PNode::Reg(r) => s == Node::Reg(reg_code(r)),
+        PNode::Neg(a) => s == Node::Neg(a),
+        PNode::Binary(op, l, r) => s == Node::Binary(bin_code(op), l, r),
+        PNode::Rel(op, l, r) => s == Node::Rel(rel_code(op), l, r),
+        PNode::Update(inc, prefix, t) => s == Node::Update(inc, prefix, t),
+        PNode::Assign(op, t, v) => s == Node::Assign(assign_code(op), t, v),
+        PNode::Call(x, args) => match s {
+            Node::Call(y, sargs) => y == text_view(x) && r_args(args@, sargs),
             _ => false,
         },
-        Stmt::Expr(e) => match nodes[n as int] {
-            Node::ExprStmt(j) => r_expr(e, nodes, j),
-            _ => false,
-        },
-        Stmt::StringLiteral(t) => nodes[n as int] == Node::Str(t@),
-        Stmt::Break => nodes[n as int] == Node::Break,
-        Stmt::Quit => false,
-        Stmt::Return(v) => match nodes[n as int] {
+        PNode::Length(a) => s == Node::Length(a),
+        PNode::Sqrt(a) => s == Node::Sqrt(a),
+        PNode::ScaleOf(a) => s == Node::ScaleOf(a),
+        PNode::Paren(a) => s == Node::Paren(a),
+        PNode::Block(list) => s == Node::Block(list@),
+        PNode::ExprStmt(e) => s == Node::ExprStmt(e),
+        PNode::Str(t) => s == Node::Str(t@),
+        PNode::Break => s == Node::Break,
+        PNode::Return(v) => match s {
             Node::Return(hv, j) => match v {
-                Some(e) => hv && r_expr(e, nodes, j),
+                Some(e) => hv && j == e,
                 None => !hv,
             },
             _ => false,
         },
-        Stmt::If(c, b) => match nodes[n as int] {
-            Node::If(i, j) => r_expr(c, nodes, i) && r_stmt(*b, nodes, j),
-            _ => false,
-        },
-        Stmt::While(c, b) => match nodes[n as int] {
-            Node::While(i, j) => r_expr(c, nodes, i) && r_stmt(*b, nodes, j),
-            _ => false,
-        },
-        Stmt::For(i, c, p, b) => match nodes[n as int] {
-            Node::For(a, d, e, f) => r_expr(i, nodes, a) && r_expr(c, nodes, d) && r_expr(p, nodes, e)
-                && r_stmt(*b, nodes, f),
-            _ => false,
-        },
-        Stmt::FunctionDef(fd) => match nodes[n as int] {
-            Node::Define(name, ps, autos, body) => name == text_view(fd.name) && r_params(fd.params@, ps)
-                && r_params(fd.autos@, autos) && r_stmts(fd.body@, nodes, body),
+        PNode::If(c, b) => s == Node::If(c, b),
+        PNode::While(c, b) => s == Node::While(c, b),
+        PNode::For(i, c, u, b) => s == Node::For(i, c, u, b),
+        PNode::Define(name, params, autos, body) => match s {
+            Node::Define(y, ps, qs, ns) => y == text_view(name) && r_params(params@, ps) && r_params(autos@, qs) && ns == body@,
             _ => false,
         },
     }
 }
 
-/// The statements `list` are the arena subtrees at `ns`.
-pub open spec fn r_stmts(list: Seq<Stmt>, nodes: Seq<Node>, ns: Seq<usize>) -> bool
-    decreases list,
-{
-    list.len() == ns.len() && (list.len() == 0
-        || (r_stmt(list[0], nodes, ns[0]) && r_stmts(list.drop_first(), nodes, ns.drop_first())))
+/// The production arena is the specification's, node by node.
+pub open spec fn r_nodes(ps: Seq<PNode>, nodes: Seq<Node>) -> bool {
+    ps.len() == nodes.len() && forall|i: int| 0 <= i < ps.len() ==> #[trigger] r_node(ps[i], nodes[i])
+}
+
+pub open spec fn r_code(c: Code, nodes: Seq<Node>) -> bool {
+    r_nodes(c.nodes@, nodes)
+}
+
+/// [`r_code`] of a shared arena.
+pub open spec fn r_rc(c: Rc<Code>, nodes: Seq<Node>) -> bool {
+    r_nodes(c.nodes@, nodes)
 }
 
 /// The arena `b` extends the arena `a`.
@@ -245,210 +192,20 @@ pub open spec fn extends(a: Seq<Node>, b: Seq<Node>) -> bool {
     a.len() <= b.len() && forall|i: int| #![trigger a[i]] 0 <= i < a.len() ==> a[i] == b[i]
 }
 
-/// A subtree stays the same when the arena grows.
-pub proof fn lemma_r_expr_extend(x: Expr, a: Seq<Node>, b: Seq<Node>, n: usize)
-    requires
-        r_expr(x, a, n),
-        extends(a, b),
-    ensures
-        r_expr(x, b, n),
-    decreases x,
-{
-    assert(a[n as int] == b[n as int]);
-    match x {
-        Expr::ArrayAccess(_, i) => match a[n as int] {
-            Node::Array(_, j) => lemma_r_expr_extend(*i, a, b, j),
-            _ => {},
-        },
-        Expr::Negate(e) => match a[n as int] {
-            Node::Neg(j) => lemma_r_expr_extend(*e, a, b, j),
-            _ => {},
-        },
-        Expr::BinaryOp(_, l, r) => match a[n as int] {
-            Node::Binary(_, i, j) => {
-                lemma_r_expr_extend(*l, a, b, i);
-                lemma_r_expr_extend(*r, a, b, j);
-            },
-            _ => {},
-        },
-        Expr::RelationalOp(_, l, r) => match a[n as int] {
-            Node::Rel(_, i, j) => {
-                lemma_r_expr_extend(*l, a, b, i);
-                lemma_r_expr_extend(*r, a, b, j);
-            },
-            _ => {},
-        },
-        Expr::Update(_, _, t) => match a[n as int] {
-            Node::Update(_, _, j) => lemma_r_expr_extend(*t, a, b, j),
-            _ => {},
-        },
-        Expr::AssignOp(_, t, v) => match a[n as int] {
-            Node::Assign(_, i, j) => {
-                lemma_r_expr_extend(*t, a, b, i);
-                lemma_r_expr_extend(*v, a, b, j);
-            },
-            _ => {},
-        },
-        Expr::Call(_, args) => match a[n as int] {
-            Node::Call(_, sargs) => lemma_r_args_extend(args@, a, b, sargs),
-            _ => {},
-        },
-        Expr::LengthCall(e) => match a[n as int] {
-            Node::Length(j) => lemma_r_expr_extend(*e, a, b, j),
-            _ => {},
-        },
-        Expr::SqrtCall(e) => match a[n as int] {
-            Node::Sqrt(j) => lemma_r_expr_extend(*e, a, b, j),
-            _ => {},
-        },
-        Expr::ScaleCall(e) => match a[n as int] {
-            Node::ScaleOf(j) => lemma_r_expr_extend(*e, a, b, j),
-            _ => {},
-        },
-        Expr::Paren(e) => match a[n as int] {
-            Node::Paren(j) => lemma_r_expr_extend(*e, a, b, j),
-            _ => {},
-        },
-        _ => {},
-    }
-}
-
-pub proof fn lemma_r_args_extend(args: Seq<ExprOrArray>, a: Seq<Node>, b: Seq<Node>, sargs: Seq<Arg>)
-    requires
-        r_args(args, a, sargs),
-        extends(a, b),
-    ensures
-        r_args(args, b, sargs),
-    decreases args,
-{
-    if args.len() > 0 {
-        assert(r_arg(args[0], a, sargs[0]));
-        match args[0] {
-            ExprOrArray::Expr(e) => {
-                assert(r_expr(e, a, sargs[0].expr));
-                lemma_r_expr_extend(e, a, b, sargs[0].expr);
-            },
-            _ => {},
-        }
-        assert(r_arg(args[0], b, sargs[0]));
-        lemma_r_args_extend(args.drop_first(), a, b, sargs.drop_first());
-    }
-}
-
-/// A statement stays the same when the arena grows.
-pub proof fn lemma_r_stmt_extend(x: Stmt, a: Seq<Node>, b: Seq<Node>, n: usize)
-    requires
-        r_stmt(x, a, n),
-        extends(a, b),
-    ensures
-        r_stmt(x, b, n),
-    decreases x,
-{
-    assert(a[n as int] == b[n as int]);
-    match x {
-        Stmt::Block(list) => match a[n as int] {
-            Node::Block(ns) => lemma_r_stmts_extend(list@, a, b, ns),
-            _ => {},
-        },
-        Stmt::Expr(e) => match a[n as int] {
-            Node::ExprStmt(j) => lemma_r_expr_extend(e, a, b, j),
-            _ => {},
-        },
-        Stmt::Return(v) => match a[n as int] {
-            Node::Return(_, j) => match v {
-                Some(e) => lemma_r_expr_extend(e, a, b, j),
-                None => {},
-            },
-            _ => {},
-        },
-        Stmt::If(c, t) => match a[n as int] {
-            Node::If(i, j) => {
-                lemma_r_expr_extend(c, a, b, i);
-                lemma_r_stmt_extend(*t, a, b, j);
-            },
-            _ => {},
-        },
-        Stmt::While(c, t) => match a[n as int] {
-            Node::While(i, j) => {
-                lemma_r_expr_extend(c, a, b, i);
-                lemma_r_stmt_extend(*t, a, b, j);
-            },
-            _ => {},
-        },
-        Stmt::For(i, c, u, t) => match a[n as int] {
-            Node::For(d, e, f, g) => {
-                lemma_r_expr_extend(i, a, b, d);
-                lemma_r_expr_extend(c, a, b, e);
-                lemma_r_expr_extend(u, a, b, f);
-                lemma_r_stmt_extend(*t, a, b, g);
-            },
-            _ => {},
-        },
-        Stmt::FunctionDef(fd) => match a[n as int] {
-            Node::Define(_, _, _, body) => lemma_r_stmts_extend(fd.body@, a, b, body),
-            _ => {},
-        },
-        _ => {},
-    }
-}
-
-pub proof fn lemma_r_stmts_extend(list: Seq<Stmt>, a: Seq<Node>, b: Seq<Node>, ns: Seq<usize>)
-    requires
-        r_stmts(list, a, ns),
-        extends(a, b),
-    ensures
-        r_stmts(list, b, ns),
-    decreases list,
-{
-    if list.len() > 0 {
-        lemma_r_stmt_extend(list[0], a, b, ns[0]);
-        lemma_r_stmts_extend(list.drop_first(), a, b, ns.drop_first());
-    }
-}
-
-/// One more statement at the end.
-pub proof fn lemma_r_stmts_push(list: Seq<Stmt>, nodes: Seq<Node>, ns: Seq<usize>, x: Stmt, n: usize)
-    requires
-        r_stmts(list, nodes, ns),
-        r_stmt(x, nodes, n),
-    ensures
-        r_stmts(list.push(x), nodes, ns.push(n)),
-    decreases list.len(),
-{
-    if list.len() == 0 {
-        assert(list.push(x).drop_first() =~= list);
-        assert(ns.push(n).drop_first() =~= ns);
-    } else {
-        lemma_r_stmts_push(list.drop_first(), nodes, ns.drop_first(), x, n);
-        assert(list.push(x).drop_first() =~= list.drop_first().push(x));
-        assert(ns.push(n).drop_first() =~= ns.drop_first().push(n));
-    }
-}
-
-/// An expression is relational exactly when its node is.
-pub proof fn lemma_is_rel(x: Expr, nodes: Seq<Node>, n: usize)
-    requires
-        r_expr(x, nodes, n),
-    ensures
-        n < nodes.len(),
-        (x is RelationalOp) == (nodes[n as int] is Rel),
-{
-}
-
 /// One more argument at the end.
-pub proof fn lemma_r_args_push(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs: Seq<Arg>, x: ExprOrArray, s: Arg)
+pub proof fn lemma_r_args_push(args: Seq<PArg>, sargs: Seq<Arg>, x: PArg, s: Arg)
     requires
-        r_args(args, nodes, sargs),
-        r_arg(x, nodes, s),
+        r_args(args, sargs),
+        r_arg(x, s),
     ensures
-        r_args(args.push(x), nodes, sargs.push(s)),
+        r_args(args.push(x), sargs.push(s)),
     decreases args.len(),
 {
     if args.len() == 0 {
         assert(args.push(x).drop_first() =~= args);
         assert(sargs.push(s).drop_first() =~= sargs);
     } else {
-        lemma_r_args_push(args.drop_first(), nodes, sargs.drop_first(), x, s);
+        lemma_r_args_push(args.drop_first(), sargs.drop_first(), x, s);
         assert(args.push(x).drop_first() =~= args.drop_first().push(x));
         assert(sargs.push(s).drop_first() =~= sargs.drop_first().push(s));
     }
@@ -535,10 +292,9 @@ pub open spec fn r_arrays(m: Map<String, Vec<BTreeMap<usize, BCNum>>>, arrays: S
 /// A function definition: name, parameters and `auto` list, and a body that is the list of
 /// subtrees `f.body` of the arena of the unit that defined it.
 pub open spec fn r_func(fd: FunctionDef, f: Func) -> bool {
-    &&& f.name == text_view(fd.name)
-    &&& r_params(fd.params@, f.params)
-    &&& r_params(fd.autos@, f.autos)
-    &&& r_stmts(fd.body@, f.nodes, f.body)
+    &&& r_rc(fd.code, f.nodes)
+    &&& fd.def < f.nodes.len()
+    &&& f.nodes[fd.def as int] == Node::Define(f.name, f.params, f.autos, f.body)
 }
 
 pub open spec fn r_funcs(m: Map<String, FunctionDef>, funcs: Seq<Func>) -> bool {
@@ -1179,66 +935,22 @@ pub proof fn lemma_r_frame_set(pf: Map<usize, BCNum>, sf: ArrFrame, idx: usize, 
 // Assignment targets
 // ---------------------------------------------------------------------------------------------
 
-/// A named expression: what the parser accepts on the left of an assignment and for `++`/`--`.
-pub open spec fn named(e: Expr) -> bool {
-    e is Variable || e is ArrayAccess || e is RegisterAccess
-}
-
 // ---------------------------------------------------------------------------------------------
 // Statements and functions
 // ---------------------------------------------------------------------------------------------
 
 /// An argument of a related call is related.
-pub proof fn lemma_r_args_index(args: Seq<ExprOrArray>, nodes: Seq<Node>, sargs: Seq<Arg>, i: int)
+pub proof fn lemma_r_args_index(args: Seq<PArg>, sargs: Seq<Arg>, i: int)
     requires
-        r_args(args, nodes, sargs),
+        r_args(args, sargs),
         0 <= i < args.len(),
     ensures
         sargs.len() == args.len(),
-        r_arg(args[i], nodes, sargs[i]),
+        r_arg(args[i], sargs[i]),
     decreases i,
 {
     if i > 0 {
-        lemma_r_args_index(args.drop_first(), nodes, sargs.drop_first(), i - 1);
-    }
-}
-
-/// `Evaluator::is_assignment_ref`: an assignment, possibly under unary minus.
-pub open spec fn prod_is_assignment(e: Expr) -> bool
-    decreases e,
-{
-    match e {
-        Expr::AssignOp(..) => true,
-        Expr::Negate(a) => prod_is_assignment(*a),
-        _ => false,
-    }
-}
-
-/// Once the expression evaluated with fuel `f`, production's `is_assignment_ref` is the
-/// specification's with fuel `f + 1` (each unary minus costs `ev` three levels).
-pub proof fn lemma_prod_is_assignment(e: Expr, nodes: Seq<Node>, n: usize, st: EState, f: u64)
-    requires
-        r_expr(e, nodes, n),
-        ev(nodes, n, st, f).ok,
-        f < u64::MAX,
-    ensures
-        prod_is_assignment(e) == is_assignment(nodes, n, (f + 1) as u64),
-    decreases e,
-{
-    match e {
-        Expr::Negate(a) => {
-            match nodes[n as int] {
-                Node::Neg(j) => {
-                    let st1 = with_depth(st, (st.depth + 1) as u64);
-                    assert(ev_node(nodes, n, st1, (f - 1) as u64).ok);
-                    assert(ev_unary(nodes, 0u8, j, st1, (f - 2) as u64).ok);
-                    lemma_prod_is_assignment(*a, nodes, j, st1, (f - 3) as u64);
-                    bc_spec::fuel::lemma_is_assignment_stable(nodes, j, st1, (f - 3) as u64, (f - 2) as u64, f);
-                },
-                _ => {},
-            }
-        },
-        _ => {},
+        lemma_r_args_index(args.drop_first(), sargs.drop_first(), i - 1);
     }
 }
 
@@ -1327,20 +1039,21 @@ pub proof fn lemma_find_func_index(funcs: Seq<Func>, k: Seq<u8>)
 
 /// `r_funcs` holds after production defines `fd` under its name and the specification
 /// defines `g` (with `r_func(fd, g)`).
-pub proof fn lemma_r_funcs_define(m: Map<String, FunctionDef>, funcs: Seq<Func>, fd: FunctionDef, g: Func)
+pub proof fn lemma_r_funcs_define(m: Map<String, FunctionDef>, funcs: Seq<Func>, name: String, fd: FunctionDef, g: Func)
     requires
         r_funcs(m, funcs),
         r_func(fd, g),
+        g.name == text_view(name),
     ensures
-        r_funcs(m.insert(fd.name, fd), define_func(funcs, g, Seq::empty())),
+        r_funcs(m.insert(name, fd), define_func(funcs, g, Seq::empty())),
 {
-    let m2 = m.insert(fd.name, fd);
+    let m2 = m.insert(name, fd);
     let r = define_func(funcs, g, Seq::empty());
     assert forall|k: String| #[trigger] m2.contains_key(k) implies find_func(r, text_view(k)) is Some
         && r_func(m2[k], find_func(r, text_view(k))->Some_0) by {
         lemma_define_func(funcs, g, Seq::empty(), text_view(k));
-        if k != fd.name && text_view(k) == g.name {
-            lemma_text_view_injective(k, fd.name);
+        if k != name && text_view(k) == g.name {
+            lemma_text_view_injective(k, name);
         }
     }
     assert forall|i: int| #![trigger r[i]] 0 <= i < r.len() implies exists|k: String| #[trigger] m2.contains_key(k)
@@ -1349,7 +1062,7 @@ pub proof fn lemma_r_funcs_define(m: Map<String, FunctionDef>, funcs: Seq<Func>,
         lemma_find_func_some(r, i);
         lemma_define_func(funcs, g, Seq::empty(), y);
         if y == g.name {
-            assert(m2.contains_key(fd.name));
+            assert(m2.contains_key(name));
         } else {
             lemma_find_func_index(funcs, y);
             let j = choose|j: int| 0 <= j < funcs.len() && #[trigger] funcs[j].name == y;
@@ -1445,19 +1158,5 @@ pub proof fn lemma_leave_call_depth(st: EState, f: Func, s: Saved, d: u64)
     lemma_pop_frames_depth(pop_frames(st2, f.autos), f.params, d);
 }
 
-/// An element of a related statement list is related.
-pub proof fn lemma_r_stmts_index(list: Seq<Stmt>, nodes: Seq<Node>, ns: Seq<usize>, i: int)
-    requires
-        r_stmts(list, nodes, ns),
-        0 <= i < list.len(),
-    ensures
-        ns.len() == list.len(),
-        r_stmt(list[i], nodes, ns[i]),
-    decreases i,
-{
-    if i > 0 {
-        lemma_r_stmts_index(list.drop_first(), nodes, ns.drop_first(), i - 1);
-    }
-}
 
 } // verus!

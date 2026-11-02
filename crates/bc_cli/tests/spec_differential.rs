@@ -265,13 +265,11 @@ proptest! {
 /// Checks, on generated inputs, the relation `driver::r_parsed` under which the verified
 /// `Evaluator::run_parsed` refines the specification's `run_unit`: for each
 /// unit of the specification, the production parser's statements (or error) and extension uses
-/// correspond to the specification's `parse_unit`, as `refine::r_stmt` and `r_expr` relate
-/// them. Runs the compiled specification in-process, so it needs no oracle binary.
+/// correspond to the specification's `parse_unit`, as `refine::r_code` relates them. Runs the compiled specification in-process, so it needs no oracle binary.
 mod parser_relation {
     use bc_core::error::BcError;
     use bc_core::parser::{
-        AssignOp, BinOp, Expr, ExprOrArray, ExtensionPolicy, Lexer, Param, Parser, Register, RelOp,
-        Stmt,
+        Arg, AssignOp, BinOp, ExtensionPolicy, Lexer, Node, Param, Parser, Register, RelOp,
     };
     use bc_spec::lexer::{exec_split_units, exec_tokenize};
     use bc_spec::parser::{ExecArg, ExecNode, ExecPCfg, ExecParam, exec_parse_unit};
@@ -313,13 +311,6 @@ mod parser_relation {
         }
     }
 
-    fn named(e: &Expr) -> bool {
-        matches!(
-            e,
-            Expr::Variable(_) | Expr::ArrayAccess(..) | Expr::RegisterAccess(_)
-        )
-    }
-
     fn r_params(ps: &[Param], qs: &[ExecParam]) -> bool {
         ps.len() == qs.len()
             && ps
@@ -329,87 +320,66 @@ mod parser_relation {
     }
 
     /// `refine::r_arg`.
-    fn r_arg(a: &ExprOrArray, nodes: &[ExecNode], s: &ExecArg) -> bool {
+    fn r_arg(a: &Arg, s: &ExecArg) -> bool {
         match a {
-            ExprOrArray::Expr(e) => !s.is_array && r_expr(e, nodes, s.expr),
-            ExprOrArray::ArrayArg(name) => s.is_array && s.name == name.as_bytes(),
+            Arg::Expr(e) => !s.is_array && s.expr == *e,
+            Arg::Array(name) => s.is_array && s.name == name.as_bytes(),
         }
     }
 
-    /// `refine::r_expr`.
-    fn r_expr(e: &Expr, nodes: &[ExecNode], n: usize) -> bool {
-        let Some(node) = nodes.get(n) else {
-            return false;
-        };
-        match (e, node) {
-            (Expr::Number(t), ExecNode::Number(u)) => u == t.as_bytes(),
-            (Expr::Variable(x), ExecNode::Var(y)) => y == x.as_bytes(),
-            (Expr::ArrayAccess(x, i), ExecNode::Array(y, j)) => {
-                y == x.as_bytes() && r_expr(i, nodes, *j)
+    /// `refine::r_node`.
+    fn r_node(p: &Node, s: &ExecNode) -> bool {
+        match (p, s) {
+            (Node::Number(t), ExecNode::Number(u)) => u == t.as_bytes(),
+            (Node::Var(x), ExecNode::Var(y)) => y == x.as_bytes(),
+            (Node::Array(x, i), ExecNode::Array(y, j)) => y == x.as_bytes() && i == j,
+            (Node::Reg(r), ExecNode::Reg(c)) => *c == reg_code(*r),
+            (Node::Neg(a), ExecNode::Neg(j))
+            | (Node::Length(a), ExecNode::Length(j))
+            | (Node::Sqrt(a), ExecNode::Sqrt(j))
+            | (Node::ScaleOf(a), ExecNode::ScaleOf(j))
+            | (Node::Paren(a), ExecNode::Paren(j))
+            | (Node::ExprStmt(a), ExecNode::ExprStmt(j)) => a == j,
+            (Node::Binary(op, l, r), ExecNode::Binary(c, a, b)) => {
+                *c == bin_code(*op) && l == a && r == b
             }
-            (Expr::RegisterAccess(r), ExecNode::Reg(c)) => *c == reg_code(*r),
-            (Expr::Negate(a), ExecNode::Neg(j)) => r_expr(a, nodes, *j),
-            (Expr::BinaryOp(op, l, r), ExecNode::Binary(c, a, b)) => {
-                *c == bin_code(*op) && r_expr(l, nodes, *a) && r_expr(r, nodes, *b)
+            (Node::Rel(op, l, r), ExecNode::Rel(c, a, b)) => {
+                *c == rel_code(*op) && l == a && r == b
             }
-            (Expr::RelationalOp(op, l, r), ExecNode::Rel(c, a, b)) => {
-                *c == rel_code(*op) && r_expr(l, nodes, *a) && r_expr(r, nodes, *b)
+            (Node::Update(inc, prefix, t), ExecNode::Update(i2, p2, j)) => {
+                inc == i2 && prefix == p2 && t == j
             }
-            (Expr::Update(inc, prefix, t), ExecNode::Update(i2, p2, j)) => {
-                named(t) && i2 == inc && p2 == prefix && r_expr(t, nodes, *j)
+            (Node::Assign(op, t, v), ExecNode::Assign(c, a, b)) => {
+                *c == assign_code(*op) && t == a && v == b
             }
-            (Expr::AssignOp(op, t, v), ExecNode::Assign(c, a, b)) => {
-                named(t) && *c == assign_code(*op) && r_expr(t, nodes, *a) && r_expr(v, nodes, *b)
-            }
-            (Expr::Call(name, args), ExecNode::Call(m, sargs)) => {
+            (Node::Call(name, args), ExecNode::Call(m, sargs)) => {
                 m == name.as_bytes()
                     && args.len() == sargs.len()
-                    && args.iter().zip(sargs).all(|(a, s)| r_arg(a, nodes, s))
+                    && args.iter().zip(sargs).all(|(a, s)| r_arg(a, s))
             }
-            (Expr::LengthCall(a), ExecNode::Length(j))
-            | (Expr::SqrtCall(a), ExecNode::Sqrt(j))
-            | (Expr::ScaleCall(a), ExecNode::ScaleOf(j))
-            | (Expr::Paren(a), ExecNode::Paren(j)) => r_expr(a, nodes, *j),
-            _ => false,
-        }
-    }
-
-    /// `refine::r_stmts`.
-    fn r_stmts(list: &[Stmt], nodes: &[ExecNode], ns: &[usize]) -> bool {
-        list.len() == ns.len() && list.iter().zip(ns).all(|(s, n)| r_stmt(s, nodes, *n))
-    }
-
-    /// `refine::r_stmt`.
-    fn r_stmt(s: &Stmt, nodes: &[ExecNode], n: usize) -> bool {
-        let Some(node) = nodes.get(n) else {
-            return false;
-        };
-        match (s, node) {
-            (Stmt::Block(list), ExecNode::Block(ns)) => r_stmts(list, nodes, ns),
-            (Stmt::Expr(e), ExecNode::ExprStmt(j)) => r_expr(e, nodes, *j),
-            (Stmt::StringLiteral(t), ExecNode::Str(u)) => u == t,
-            (Stmt::Break, ExecNode::Break) => true,
-            (Stmt::Return(v), ExecNode::Return(hv, j)) => match v {
-                Some(e) => *hv && r_expr(e, nodes, *j),
+            (Node::Block(l), ExecNode::Block(m)) => l == m,
+            (Node::Str(t), ExecNode::Str(u)) => u == t,
+            (Node::Break, ExecNode::Break) => true,
+            (Node::Return(v), ExecNode::Return(hv, j)) => match v {
+                Some(e) => *hv && e == j,
                 None => !*hv,
             },
-            (Stmt::If(c, b), ExecNode::If(i, j)) | (Stmt::While(c, b), ExecNode::While(i, j)) => {
-                r_expr(c, nodes, *i) && r_stmt(b, nodes, *j)
+            (Node::If(a, b), ExecNode::If(c, d)) | (Node::While(a, b), ExecNode::While(c, d)) => {
+                a == c && b == d
             }
-            (Stmt::For(i, c, p, b), ExecNode::For(a, d, e, f)) => {
-                r_expr(i, nodes, *a)
-                    && r_expr(c, nodes, *d)
-                    && r_expr(p, nodes, *e)
-                    && r_stmt(b, nodes, *f)
+            (Node::For(i, c, p, b), ExecNode::For(a, d, e, f)) => {
+                i == a && c == d && p == e && b == f
             }
-            (Stmt::FunctionDef(fd), ExecNode::Define(name, ps, autos, body)) => {
-                name == fd.name.as_bytes()
-                    && r_params(&fd.params, ps)
-                    && r_params(&fd.autos, autos)
-                    && r_stmts(&fd.body, nodes, body)
+            (Node::Define(name, ps, autos, body), ExecNode::Define(m, qs, rs, ns)) => {
+                m == name.as_bytes() && r_params(ps, qs) && r_params(autos, rs) && body == ns
             }
             _ => false,
         }
+    }
+
+    /// `refine::r_nodes`.
+    fn r_nodes(ps: &[Node], ss: &[ExecNode]) -> bool {
+        ps.len() == ss.len() && ps.iter().zip(ss).all(|(p, s)| r_node(p, s))
     }
 
     /// Parses every unit of `input` with both parsers and checks `r_parsed`, as
@@ -427,11 +397,13 @@ mod parser_relation {
                 continue;
             }
             let mut ext = Vec::new();
+            let mut nodes = Vec::new();
             let parsed = Parser::try_new(Lexer::new(&unit.text)).and_then(|mut parser| {
                 parser.set_extension_policy(policy);
                 parser.set_max_depth(max_depth);
                 let stmts = parser.try_parse_program();
                 ext = parser.take_extension_uses();
+                nodes = parser.take_code().nodes;
                 stmts
             });
             let ext_ok = ext.len() == p.st.ext.len()
@@ -442,7 +414,7 @@ mod parser_relation {
             assert!(ext_ok, "extension uses differ for {text:?}: {ext:?}");
             match parsed {
                 Ok(stmts) => assert!(
-                    p.ok && r_stmts(&stmts, &p.st.nodes, &p.list),
+                    p.ok && r_nodes(&nodes, &p.st.nodes) && stmts == p.list,
                     "syntax trees differ for {text:?}"
                 ),
                 Err(BcError::Quit) => assert!(!p.ok && p.err.quit, "quit differs for {text:?}"),

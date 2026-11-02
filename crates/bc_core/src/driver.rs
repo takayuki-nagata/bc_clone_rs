@@ -16,10 +16,11 @@ use crate::eval::Evaluator;
 #[cfg(verus_keep_ghost)]
 use crate::eval::{err_log, lemma_inv_frame, out_col, out_log, r_state, r_unit, same_but_err};
 use crate::format::push_dec;
-use crate::parser::{ExtensionPolicy, Stmt, ascii_string, parse_unit_ref};
+use crate::parser::{Code, ExtensionPolicy, ascii_string, parse_unit_ref};
 #[cfg(verus_keep_ghost)]
-use crate::refine::{r_err, r_stmts, text_view};
+use crate::refine::{r_code, r_err, text_view};
 use crate::verified_kernels::{verified_repl_block_scan, verified_unit_within_limit};
+use alloc::rc::Rc;
 #[cfg(verus_keep_ghost)]
 use bc_spec::eval::{EState, with_call, with_depth, with_err, with_flags};
 #[cfg(verus_keep_ghost)]
@@ -127,10 +128,10 @@ pub(crate) open spec fn r_ext(ext: Seq<(usize, String)>, sext: Seq<ExtUse>) -> b
 
 /// The statements, or the error, and the extension uses correspond to the specification's
 /// result `p` of parsing the unit.
-pub(crate) open spec fn r_parsed(parsed: Result<Vec<Stmt>, BcError>, ext: Seq<(usize, String)>, p: PR) -> bool {
+pub(crate) open spec fn r_parsed(parsed: Result<Vec<usize>, BcError>, ext: Seq<(usize, String)>, code: Code, p: PR) -> bool {
     &&& r_ext(ext, p.st.ext)
     &&& match parsed {
-        Ok(stmts) => p.ok && r_stmts(stmts@, p.st.nodes, p.list),
+        Ok(stmts) => p.ok && r_code(code, p.st.nodes) && stmts@ == p.list,
         Err(BcError::Quit) => !p.ok && p.err.quit,
         Err(BcError::Syntax { line, message, .. }) => !p.ok && !p.err.quit && p.err.line == line as u64
             && p.err.msg == text_view(message),
@@ -350,15 +351,15 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "three of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn run_parsed(&mut self, parsed: Result<Vec<Stmt>, BcError>, ext: &Vec<(usize, String)>, source: &str, first_line: usize, policy: ExtensionPolicy, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(p): Ghost<SpecParse>) -> (r: UnitOutcome)
+    pub(crate) fn run_parsed(&mut self, parsed: Result<Vec<usize>, BcError>, ext: &Vec<(usize, String)>, code: Code, source: &str, first_line: usize, policy: ExtensionPolicy, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(p): Ghost<SpecParse>) -> (r: UnitOutcome)
         requires
             old(self).inv(),
         ensures
             final(self).inv(),
-            (r_top(*old(self), rs.st) && opts.reject_extensions == (policy == ExtensionPolicy::Reject) && r_parsed(parsed, ext@, p))
+            (r_top(*old(self), rs.st) && opts.reject_extensions == (policy == ExtensionPolicy::Reject) && r_parsed(parsed, ext@, code, p))
                 ==> r_outcome(r, *final(self), rs, run_parse_result(opts, rs, source.spec_bytes(), first_line as u64, p)),
     {
-        let ghost hyp = r_top(*self, rs.st) && opts.reject_extensions == (policy == ExtensionPolicy::Reject) && r_parsed(parsed, ext@, p);
+        let ghost hyp = r_top(*self, rs.st) && opts.reject_extensions == (policy == ExtensionPolicy::Reject) && r_parsed(parsed, ext@, code, p);
         let ghost first = first_line as u64;
         let ghost src = source.spec_bytes();
         let ghost rs2 = run_parse_result(opts, rs, src, first, p);
@@ -395,7 +396,8 @@ impl Evaluator {
         match parsed {
             Ok(stmts) => {
                 let ghost e1 = *self;
-                let r = self.exec_items_ref(&stmts, Ghost(p.st.nodes), Ghost(p.list), Ghost(st1));
+                let code = Rc::new(code);
+                let r = self.exec_items_ref(&code, &stmts, Ghost(p.st.nodes), Ghost(p.list), Ghost(st1));
                 let ghost e_run = *self;
                 self.flush_stdout();
                 let ghost x = bc_spec::top::exec_items(p.st.nodes, p.list, st1, 0x4000_0000_0000_0000u64);
@@ -506,7 +508,7 @@ impl Evaluator {
             let too_long = Err(BcError::Syntax { line: 1, message: unit_too_long_text() });
             let none = Vec::new();
             proof { assert(r_ext(none@, e0.ext)); }
-            let r = self.run_parsed(too_long, &none, source, first_line, policy, Ghost(opts), Ghost(rs), Ghost(p));
+            let r = self.run_parsed(too_long, &none, Code { nodes: Vec::new() }, source, first_line, policy, Ghost(opts), Ghost(rs), Ghost(p));
             proof {
                 let st0 = with_call(with_depth(rs.st, 0u64), rs.st.calls, false, rs.st.inv_ibase);
                 let src = source.spec_bytes();
@@ -518,9 +520,9 @@ impl Evaluator {
         }
         let max_depth = if limit < usize::MAX - 2 { limit } else { usize::MAX - 3 };
         let ghost cfg = PCfg { record_extensions: policy != ExtensionPolicy::Allow, max_depth: max_depth as u64 };
-        let (parsed, extension_uses) = parse_unit_ref(unit, policy, max_depth, Ghost(cfg));
+        let (parsed, extension_uses, code) = parse_unit_ref(unit, policy, max_depth, Ghost(cfg));
         let ghost p = parse_unit(tokenize(unit@), cfg);
-        self.run_parsed(parsed, &extension_uses, source, first_line, policy, Ghost(opts), Ghost(rs), Ghost(p))
+        self.run_parsed(parsed, &extension_uses, code, source, first_line, policy, Ghost(opts), Ghost(rs), Ghost(p))
     }
 }
 

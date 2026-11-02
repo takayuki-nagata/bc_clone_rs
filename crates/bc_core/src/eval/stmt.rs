@@ -12,9 +12,9 @@ impl Evaluator {
     #[verifier::exec_allows_no_decreases_clause]
     pub(crate) fn exec_ref(
         &mut self,
-        node: &Stmt,
+        code: &Rc<Code>,
+        n: usize,
         Ghost(nodes): Ghost<SpecNodes>,
-        Ghost(n): Ghost<usize>,
         Ghost(st): Ghost<SpecState>,
     ) -> (r: Result<(), BcError>)
         requires
@@ -22,11 +22,12 @@ impl Evaluator {
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
-            (r_state(*old(self), st) && r_stmt(*node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] exec(nodes, n, st, f)) ==> r_unit(r, *final(self), exec(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_stmt(*node, nodes, n);
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
         if !verified_nesting_within_limit(self.eval_depth, 1, self.max_depth) {
             let r = Err(BcError::Runtime { kind: RuntimeError::NestingTooDeep, func: None });
             proof {
@@ -45,7 +46,7 @@ impl Evaluator {
                 lemma_r_state_depth(before, *self, st);
             }
         }
-        let r = self.exec_node_ref(node, Ghost(nodes), Ghost(n), Ghost(st1));
+        let r = self.exec_node_ref(code, n, Ghost(nodes), Ghost(st1));
         let ghost mid = *self;
         self.eval_depth -= 1;
         proof {
@@ -72,9 +73,9 @@ impl Evaluator {
     #[verifier::exec_allows_no_decreases_clause]
     pub(crate) fn exec_node_ref(
         &mut self,
-        node: &Stmt,
+        code: &Rc<Code>,
+        n: usize,
         Ghost(nodes): Ghost<SpecNodes>,
-        Ghost(n): Ghost<usize>,
         Ghost(st): Ghost<SpecState>,
     ) -> (r: Result<(), BcError>)
         requires
@@ -82,11 +83,12 @@ impl Evaluator {
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
-            (r_state(*old(self), st) && r_stmt(*node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] exec_node(nodes, n, st, f)) ==> r_unit(r, *final(self), exec_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_stmt(*node, nodes, n);
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
         if verified_should_abort_execution(self.break_flag, self.return_flag, self.quit_flag) {
             proof {
                 if hyp {
@@ -95,10 +97,14 @@ impl Evaluator {
             }
             return Ok(());
         }
-        match node {
-            Stmt::Block(list) => self.exec_block(Ghost(*node), list, Ghost(nodes), Ghost(n), Ghost(st)),
-            Stmt::Expr(e) => self.exec_expr_stmt(Ghost(*node), e, Ghost(nodes), Ghost(n), Ghost(st)),
-            Stmt::StringLiteral(t) => {
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        if n >= code.nodes.len() {
+            return Ok(());
+        }
+        match &code.nodes[n] {
+            PNode::Block(list) => self.exec_block(code, Ghost(n), list, Ghost(nodes), Ghost(st)),
+            PNode::ExprStmt(e) => self.exec_expr_stmt(code, Ghost(n), *e, Ghost(nodes), Ghost(st)),
+            PNode::Str(t) => {
                 self.stdout_writer.write_bytes(t.as_slice());
                 self.stdout_writer.flush_out();
                 proof {
@@ -108,7 +114,7 @@ impl Evaluator {
                 }
                 Ok(())
             },
-            Stmt::Break => {
+            PNode::Break => {
                 self.break_flag = true;
                 proof {
                     if hyp {
@@ -117,15 +123,11 @@ impl Evaluator {
                 }
                 Ok(())
             },
-            Stmt::Quit => {
-                self.quit_flag = true;
-                Ok(())
-            },
-            Stmt::Return(v) => self.exec_return(Ghost(*node), v, Ghost(nodes), Ghost(n), Ghost(st)),
-            Stmt::If(c, b) => self.exec_if(Ghost(*node), c, b, Ghost(nodes), Ghost(n), Ghost(st)),
-            Stmt::While(c, b) => {
-                let ghost (jc, jb) = if n < nodes.len() { match nodes[n as int] { Node::While(a, b) => (a, b), _ => (0usize, 0usize) } } else { (0usize, 0usize) };
-                let r = self.exec_loop_ref(c, None, b, Ghost(nodes), Ghost(jc), Ghost(0usize), Ghost(jb), Ghost(st));
+            PNode::Return(v) => self.exec_return(code, Ghost(n), *v, Ghost(nodes), Ghost(st)),
+            PNode::If(c, b) => self.exec_if(code, Ghost(n), *c, *b, Ghost(nodes), Ghost(st)),
+            PNode::While(c, b) => {
+                let ghost (jc, jb) = (*c, *b);
+                let r = self.exec_loop_ref(code, *c, None, *b, Ghost(nodes), Ghost(0usize), Ghost(st));
                 proof {
                     if hyp {
                         assert forall|f: u64| done(#[trigger] exec_node(nodes, n, st, f)) implies r_unit(r, *self, exec_node(nodes, n, st, f), d) by {
@@ -135,24 +137,34 @@ impl Evaluator {
                 }
                 r
             },
-            Stmt::For(i, c, p, b) => self.exec_for_ref(Ghost(*node), i, c, p, b, Ghost(nodes), Ghost(n), Ghost(st)),
-            Stmt::FunctionDef(fd) => {
+            PNode::For(i, c, p, b) => self.exec_for_ref(code, Ghost(n), *i, *c, *p, *b, Ghost(nodes), Ghost(st)),
+            PNode::Define(name, _, _, _) => {
                 let ghost m = self.functions@;
                 proof {
                     axiom_string_obeys_cmp();
                     broadcast use vstd::std_specs::btree::group_btree_axioms;
                 }
-                self.functions.insert(fd.name.clone(), fd.clone());
+                let fd = FunctionDef { code: share_code(code), def: n };
+                let ghost gfd = fd;
+                self.functions.insert(name.clone(), fd);
                 proof {
                     if hyp {
                         match nodes[n as int] {
-                            Node::Define(name, ps, autos, body) => {
-                                let g = Func { name: name, params: ps, autos: autos, body: body, nodes: nodes };
-                                assert(r_func(*fd, g));
-                                lemma_r_funcs_define(m, st.funcs, *fd, g);
+                            Node::Define(sname, ps, autos, body) => {
+                                let g = Func { name: sname, params: ps, autos: autos, body: body, nodes: nodes };
+                                assert(r_func(gfd, g));
+                                lemma_r_funcs_define(m, st.funcs, *name, gfd, g);
                             },
                             _ => {},
                         }
+                        assert forall|f: u64| done(#[trigger] exec_node(nodes, n, st, f)) implies r_unit(Ok(()), *self, exec_node(nodes, n, st, f), d) by {}
+                    }
+                }
+                Ok(())
+            },
+            _ => {
+                proof {
+                    if hyp {
                         assert forall|f: u64| done(#[trigger] exec_node(nodes, n, st, f)) implies r_unit(Ok(()), *self, exec_node(nodes, n, st, f), d) by {}
                     }
                 }
@@ -164,21 +176,23 @@ impl Evaluator {
     /// A block (the specification's `exec_list`): its statements in order, stopping when a
     /// `break` or `return` is pending.
     #[verifier::exec_allows_no_decreases_clause]
-    #[allow(clippy::ptr_arg, reason = "the precondition relates the list to the `Stmt::Block` it comes from")]
-    pub(crate) fn exec_block(&mut self, Ghost(node): Ghost<Stmt>, list: &Vec<Stmt>, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
+    #[allow(clippy::ptr_arg, reason = "the precondition relates the list to the `Node::Block` it comes from")]
+    pub(crate) fn exec_block(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, list: &Vec<usize>, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
             !old(self).break_flag && !old(self).return_flag && !old(self).quit_flag,
-            node == Stmt::Block(*list),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Block(*list),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
-            (r_state(*old(self), st) && r_stmt(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] exec_node(nodes, n, st, f)) ==> r_unit(r, *final(self), exec_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_stmt(node, nodes, n);
-        let ghost ns = if n < nodes.len() { match nodes[n as int] { Node::Block(ns) => ns, _ => Seq::empty() } } else { Seq::empty() };
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost ns = list@;
         let ghost fin = exists|f: u64| done(#[trigger] exec_node(nodes, n, st, f));
         let ghost mut sti = st;
         let mut i: usize = 0;
@@ -188,7 +202,6 @@ impl Evaluator {
                 assert(n < nodes.len());
                 assert(nodes[n as int] is Block);
                 assert(nodes[n as int] == Node::Block(ns));
-                assert(r_stmts(list@, nodes, ns));
             }
         }
         while i < list.len()
@@ -196,10 +209,10 @@ impl Evaluator {
                 self.inv(),
                 self.eval_depth == d,
                 d == old(self).eval_depth,
-                hyp == (r_state(*old(self), st) && r_stmt(node, nodes, n)),
+                hyp == (r_state(*old(self), st) && r_rc(*code, nodes)),
                 hyp ==> nodes[n as int] == Node::Block(ns),
                 i <= list.len(),
-                hyp ==> r_stmts(list@, nodes, ns),
+                ns == list@,
                 fin == exists|f: u64| done(#[trigger] exec_node(nodes, n, st, f)),
                 hyp && fin ==> r_state(*self, sti) && !sti.brk && !sti.ret,
                 hyp ==> forall|f: u64| done(#[trigger] exec_node(nodes, n, st, f)) ==> f as int > i + 1
@@ -216,11 +229,10 @@ impl Evaluator {
             }
             proof {
                 if hyp {
-                    lemma_r_stmts_index(list@, nodes, ns, i as int);
                 }
             }
             let ghost e_before = *self;
-            let ri = self.exec_ref(&list[i], Ghost(nodes), Ghost(ji), Ghost(si));
+            let ri = self.exec_ref(code, list[i], Ghost(nodes), Ghost(si));
             if let Err(e) = ri {
                 proof {
                     if hyp {
@@ -301,36 +313,64 @@ impl Evaluator {
     /// Whether an expression statement is an assignment, whose value is not printed (POSIX).
     /// As in GNU bc, unary minus keeps that property (`-a = 5` prints nothing) and parentheses
     /// remove it (`(a = 5)` prints 5).
-    pub(crate) fn is_assignment_ref(e: &Expr) -> (r: bool)
+    #[verifier::exec_allows_no_decreases_clause]
+    pub(crate) fn is_assignment_ref(code: &Rc<Code>, e: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>, Ghost(f0): Ghost<u64>) -> (r: bool)
         ensures
-            r == prod_is_assignment(*e),
-        decreases e,
+            (r_rc(*code, nodes) && ev(nodes, e, st, f0).ok && f0 < u64::MAX) ==> r == is_assignment(nodes, e, (f0 + 1) as u64),
     {
-        match e {
-            Expr::AssignOp(..) => true,
-            Expr::Negate(inner) => Self::is_assignment_ref(inner),
-            _ => false,
+        let ghost hyp = r_rc(*code, nodes) && ev(nodes, e, st, f0).ok && f0 < u64::MAX;
+        let mut i = e;
+        let ghost mut si = st;
+        let ghost mut fi: u64 = f0;
+        loop
+            invariant
+                hyp == (r_rc(*code, nodes) && ev(nodes, e, st, f0).ok && f0 < u64::MAX),
+                hyp ==> ev(nodes, i, si, fi).ok && fi < u64::MAX && is_assignment(nodes, e, (f0 + 1) as u64) == is_assignment(nodes, i, (fi + 1) as u64),
+        {
+            if i >= code.nodes.len() {
+                return false;
+            }
+            proof { if hyp { assert(r_node(code.nodes@[i as int], nodes[i as int])); } }
+            match &code.nodes[i] {
+                PNode::Assign(..) => { return true; },
+                PNode::Neg(inner) => {
+                    proof {
+                        if hyp {
+                            let st1 = with_depth(si, (si.depth + 1) as u64);
+                            assert(ev_node(nodes, i, st1, (fi - 1) as u64).ok);
+                            assert(ev_unary(nodes, 0u8, *inner, st1, (fi - 2) as u64).ok);
+                            bc_spec::fuel::lemma_is_assignment_stable(nodes, *inner, st1, (fi - 3) as u64, (fi - 2) as u64, fi);
+                            si = st1;
+                            fi = (fi - 3) as u64;
+                        }
+                    }
+                    i = *inner;
+                },
+                _ => { return false; },
+            }
         }
     }
 
     /// An expression statement (the specification's `exec_expr_stmt`): the value is printed
     /// unless it is an assignment.
     #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn exec_expr_stmt(&mut self, Ghost(node): Ghost<Stmt>, e: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
+    pub(crate) fn exec_expr_stmt(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, e: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
             !old(self).break_flag && !old(self).return_flag && !old(self).quit_flag,
-            node == Stmt::Expr(*e),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::ExprStmt(e),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
-            (r_state(*old(self), st) && r_stmt(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] exec_node(nodes, n, st, f)) ==> r_unit(r, *final(self), exec_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_stmt(node, nodes, n);
-        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::ExprStmt(j) => j, _ => 0usize } } else { 0usize };
-        let v = match self.eval_ref(e, Ghost(nodes), Ghost(j), Ghost(st)) {
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost j = e;
+        let v = match self.eval_ref(code, e, Ghost(nodes), Ghost(st)) {
             Ok(v) => v,
             Err(err) => {
                 proof {
@@ -343,7 +383,8 @@ impl Evaluator {
                 return Err(err);
             },
         };
-        let assignment = Self::is_assignment_ref(e);
+        let ghost f0 = choose|f: u64| f < u64::MAX && done(ev(nodes, e, st, f));
+        let assignment = Self::is_assignment_ref(code, e, Ghost(nodes), Ghost(st), Ghost(f0));
         let ghost e1 = *self;
         if !assignment {
             let mut text = v.format_bytes(self.obase);
@@ -356,7 +397,13 @@ impl Evaluator {
                 assert forall|f: u64| done(#[trigger] exec_node(nodes, n, st, f)) implies r_unit(Ok(()), *self, exec_node(nodes, n, st, f), d) by {
                     let x = ev(nodes, j, st, (f - 2) as u64);
                     assert(done(x));
-                    lemma_prod_is_assignment(*e, nodes, j, st, (f - 2) as u64);
+                    let g = (f - 2) as u64;
+                    assert(g < u64::MAX && done(ev(nodes, e, st, g)));
+                    let f1 = choose|f: u64| f < u64::MAX && done(ev(nodes, e, st, f));
+                    assert(f1 == f0);
+                    if f0 <= g { lemma_ev_mono(nodes, e, st, f0, g); } else { lemma_ev_mono(nodes, e, st, g, f0); }
+                    let m = if f0 <= g { f0 } else { g };
+                    bc_spec::fuel::lemma_is_assignment_stable(nodes, e, st, m, (f0 + 1) as u64, (f - 1) as u64);
                     if !assignment {
                         axiom_bigint_size(&v.coeff);
                         lemma_mag_bounds(x.val.mag);
@@ -370,23 +417,25 @@ impl Evaluator {
 
     /// `return` and `return (e)` (the specification's `exec_return`).
     #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn exec_return(&mut self, Ghost(node): Ghost<Stmt>, v: &Option<Expr>, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
+    pub(crate) fn exec_return(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, v: Option<usize>, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
             !old(self).break_flag && !old(self).return_flag && !old(self).quit_flag,
-            node == Stmt::Return(*v),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Return(v),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
-            (r_state(*old(self), st) && r_stmt(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] exec_node(nodes, n, st, f)) ==> r_unit(r, *final(self), exec_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_stmt(node, nodes, n);
-        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Return(_, j) => j, _ => 0usize } } else { 0usize };
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost j = match v { Some(e) => e, None => 0usize };
         match v {
             Some(e) => {
-                let x = match self.eval_ref(e, Ghost(nodes), Ghost(j), Ghost(st)) {
+                let x = match self.eval_ref(code, e, Ghost(nodes), Ghost(st)) {
                     Ok(x) => x,
                     Err(err) => {
                         proof {
@@ -420,21 +469,23 @@ impl Evaluator {
 
     /// `if (c) s` (the specification's `exec_if`).
     #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn exec_if(&mut self, Ghost(node): Ghost<Stmt>, c: &Expr, b: &Stmt, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
+    pub(crate) fn exec_if(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, c: usize, b: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
             !old(self).break_flag && !old(self).return_flag && !old(self).quit_flag,
-            node == Stmt::If(*c, Box::new(*b)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::If(c, b),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
-            (r_state(*old(self), st) && r_stmt(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] exec_node(nodes, n, st, f)) ==> r_unit(r, *final(self), exec_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_stmt(node, nodes, n);
-        let ghost (jc, jb) = if n < nodes.len() { match nodes[n as int] { Node::If(a, b) => (a, b), _ => (0usize, 0usize) } } else { (0usize, 0usize) };
-        let x = match self.eval_ref(c, Ghost(nodes), Ghost(jc), Ghost(st)) {
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost (jc, jb) = (c, b);
+        let x = match self.eval_ref(code, c, Ghost(nodes), Ghost(st)) {
             Ok(x) => x,
             Err(err) => {
                 proof {
@@ -468,7 +519,7 @@ impl Evaluator {
             return Ok(());
         }
         let ghost e1 = *self;
-        let r = self.exec_ref(b, Ghost(nodes), Ghost(jb), Ghost(xc.st));
+        let r = self.exec_ref(code, b, Ghost(nodes), Ghost(xc.st));
         proof {
             if hyp {
                 assert forall|f: u64| done(#[trigger] exec_node(nodes, n, st, f)) implies r_unit(r, *self, exec_node(nodes, n, st, f), d) by {
@@ -491,7 +542,7 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "five of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn exec_loop_ref(&mut self, c: &Expr, post: Option<&Expr>, b: &Stmt, Ghost(nodes): Ghost<SpecNodes>, Ghost(jc): Ghost<usize>, Ghost(jp): Ghost<usize>, Ghost(jb): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
+    pub(crate) fn exec_loop_ref(&mut self, code: &Rc<Code>, c: usize, post: Option<usize>, b: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(jp): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
         ensures
@@ -499,16 +550,17 @@ impl Evaluator {
             final(self).eval_depth == old(self).eval_depth,
             ({
                 let has_post = post is Some;
-                (r_state(*old(self), st) && r_expr(*c, nodes, jc) && r_stmt(*b, nodes, jb)
-                    && (has_post ==> r_expr(*post->Some_0, nodes, jp))) ==> forall|f: u64|
-                    done(#[trigger] bc_spec::eval::exec_loop(nodes, jc, jp, has_post, jb, st, f))
-                        ==> r_unit(r, *final(self), bc_spec::eval::exec_loop(nodes, jc, jp, has_post, jb, st, f), old(self).eval_depth)
+                (r_state(*old(self), st) && r_rc(*code, nodes)
+                    && (has_post ==> post->Some_0 == jp)) ==> forall|f: u64|
+                    done(#[trigger] bc_spec::eval::exec_loop(nodes, c, jp, has_post, b, st, f))
+                        ==> r_unit(r, *final(self), bc_spec::eval::exec_loop(nodes, c, jp, has_post, b, st, f), old(self).eval_depth)
             }),
     {
         let ghost d = self.eval_depth;
         let ghost has_post = post is Some;
-        let ghost hyp = r_state(*self, st) && r_expr(*c, nodes, jc) && r_stmt(*b, nodes, jb)
-            && (has_post ==> r_expr(*post->Some_0, nodes, jp));
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes)
+            && (has_post ==> post->Some_0 == jp);
+        let ghost (jc, jb) = (c, b);
         let ghost fin = exists|f: u64| done(#[trigger] bc_spec::eval::exec_loop(nodes, jc, jp, has_post, jb, st, f));
         let ghost mut sk = st;
         let ghost mut k: int = 0;
@@ -518,8 +570,9 @@ impl Evaluator {
                 self.eval_depth == d,
                 d == old(self).eval_depth,
                 has_post == (post is Some),
-                hyp == (r_state(*old(self), st) && r_expr(*c, nodes, jc) && r_stmt(*b, nodes, jb)
-                    && (has_post ==> r_expr(*post->Some_0, nodes, jp))),
+                hyp == (r_state(*old(self), st) && r_rc(*code, nodes)
+                    && (has_post ==> post->Some_0 == jp)),
+                jc == c && jb == b,
                 k >= 0,
                 fin == exists|f: u64| done(#[trigger] bc_spec::eval::exec_loop(nodes, jc, jp, has_post, jb, st, f)),
                 hyp && fin ==> r_state(*self, sk),
@@ -528,7 +581,7 @@ impl Evaluator {
         {
             let ghost s0 = sk;
             let ghost e0 = *self;
-            let cv = match self.eval_ref(c, Ghost(nodes), Ghost(jc), Ghost(s0)) {
+            let cv = match self.eval_ref(code, c, Ghost(nodes), Ghost(s0)) {
                 Ok(cv) => cv,
                 Err(err) => {
                     proof {
@@ -564,7 +617,7 @@ impl Evaluator {
                 }
                 return Ok(());
             }
-            let rb = self.exec_ref(b, Ghost(nodes), Ghost(jb), Ghost(xc.st));
+            let rb = self.exec_ref(code, b, Ghost(nodes), Ghost(xc.st));
             if let Err(err) = rb {
                 proof {
                     if hyp {
@@ -610,7 +663,7 @@ impl Evaluator {
             match post {
                 Some(p) => {
                     let ghost e3 = *self;
-                    let rp = self.eval_ref(p, Ghost(nodes), Ghost(jp), Ghost(st2));
+                    let rp = self.eval_ref(code, p, Ghost(nodes), Ghost(st2));
                     if let Err(err) = rp {
                         proof {
                             if hyp {
@@ -709,21 +762,23 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "four of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn exec_for_ref(&mut self, Ghost(node): Ghost<Stmt>, init: &Expr, c: &Expr, p: &Expr, b: &Stmt, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
+    pub(crate) fn exec_for_ref(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, init: usize, c: usize, p: usize, b: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
             !old(self).break_flag && !old(self).return_flag && !old(self).quit_flag,
-            node == Stmt::For(*init, *c, *p, Box::new(*b)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::For(init, c, p, b),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
-            (r_state(*old(self), st) && r_stmt(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] exec_node(nodes, n, st, f)) ==> r_unit(r, *final(self), exec_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_stmt(node, nodes, n);
-        let ghost (ji, jc, jp, jb) = if n < nodes.len() { match nodes[n as int] { Node::For(a, b2, c2, d2) => (a, b2, c2, d2), _ => (0usize, 0usize, 0usize, 0usize) } } else { (0usize, 0usize, 0usize, 0usize) };
-        if let Err(err) = self.eval_ref(init, Ghost(nodes), Ghost(ji), Ghost(st)) {
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost (ji, jc, jp, jb) = (init, c, p, b);
+        if let Err(err) = self.eval_ref(code, init, Ghost(nodes), Ghost(st)) {
             proof {
                 if hyp {
                     assert forall|f: u64| done(#[trigger] exec_node(nodes, n, st, f)) implies r_unit(Err(err), *self, exec_node(nodes, n, st, f), d) by {
@@ -743,7 +798,7 @@ impl Evaluator {
             }
         }
         let ghost e1 = *self;
-        let r = self.exec_loop_ref(c, Some(p), b, Ghost(nodes), Ghost(jc), Ghost(jp), Ghost(jb), Ghost(xi.st));
+        let r = self.exec_loop_ref(code, c, Some(p), b, Ghost(nodes), Ghost(jp), Ghost(xi.st));
         proof {
             if hyp {
                 assert forall|f: u64| done(#[trigger] exec_node(nodes, n, st, f)) implies r_unit(r, *self, exec_node(nodes, n, st, f), d) by {

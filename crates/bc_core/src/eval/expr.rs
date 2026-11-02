@@ -14,9 +14,9 @@ impl Evaluator {
     #[verifier::exec_allows_no_decreases_clause]
     pub(crate) fn eval_ref(
         &mut self,
-        node: &Expr,
+        code: &Rc<Code>,
+        n: usize,
         Ghost(nodes): Ghost<SpecNodes>,
-        Ghost(n): Ghost<usize>,
         Ghost(st): Ghost<SpecState>,
     ) -> (r: Result<BCNum, BcError>)
         requires
@@ -25,11 +25,12 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(*node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev(nodes, n, st, f)) ==> r_result(r, *final(self), ev(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(*node, nodes, n);
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
         if !verified_nesting_within_limit(self.eval_depth, 1, self.max_depth) {
             let r = Err(BcError::Runtime { kind: RuntimeError::NestingTooDeep, func: None });
             proof {
@@ -48,7 +49,7 @@ impl Evaluator {
                 lemma_r_state_depth(before, *self, st);
             }
         }
-        let r = self.eval_node_ref(node, Ghost(nodes), Ghost(n), Ghost(st1));
+        let r = self.eval_node_ref(code, n, Ghost(nodes), Ghost(st1));
         let ghost mid = *self;
         self.eval_depth -= 1;
         proof {
@@ -74,9 +75,9 @@ impl Evaluator {
     #[verifier::exec_allows_no_decreases_clause]
     pub(crate) fn eval_node_ref(
         &mut self,
-        node: &Expr,
+        code: &Rc<Code>,
+        n: usize,
         Ghost(nodes): Ghost<SpecNodes>,
-        Ghost(n): Ghost<usize>,
         Ghost(st): Ghost<SpecState>,
     ) -> (r: Result<BCNum, BcError>)
         requires
@@ -85,24 +86,29 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(*node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
-        match node {
-            Expr::RegisterAccess(reg) => self.eval_register(*reg, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::Number(t) => self.eval_number(t, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::Variable(name) => self.eval_variable(name, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::AssignOp(op, target, value) => self.eval_assign(Ghost(*node), *op, target, value, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::Update(increment, prefix, target) => self.eval_update(Ghost(*node), *increment, *prefix, target, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::ArrayAccess(name, index) => self.eval_array(Ghost(*node), name, index, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::Paren(inner) => self.eval_paren(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::Negate(inner) => self.eval_negate(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::LengthCall(inner) => self.eval_length(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::ScaleCall(inner) => self.eval_scale_of(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::SqrtCall(inner) => self.eval_sqrt(Ghost(*node), inner, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::BinaryOp(op, left, right) => self.eval_binary(Ghost(*node), *op, left, right, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::RelationalOp(op, left, right) => self.eval_rel(Ghost(*node), *op, left, right, Ghost(nodes), Ghost(n), Ghost(st)),
-            Expr::Call(name, args) => self.eval_call(Ghost(*node), name, args, Ghost(nodes), Ghost(n), Ghost(st)),
+        proof { if r_rc(*code, nodes) && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        if n >= code.nodes.len() {
+            return Ok(BCNum::zero());
+        }
+        match &code.nodes[n] {
+            PNode::Reg(reg) => self.eval_register(*reg, Ghost(nodes), Ghost(n), Ghost(st)),
+            PNode::Number(t) => self.eval_number(t, Ghost(nodes), Ghost(n), Ghost(st)),
+            PNode::Var(name) => self.eval_variable(name, Ghost(nodes), Ghost(n), Ghost(st)),
+            PNode::Assign(op, target, value) => self.eval_assign(code, Ghost(n), *op, *target, *value, Ghost(nodes), Ghost(st)),
+            PNode::Update(increment, prefix, target) => self.eval_update(code, Ghost(n), *increment, *prefix, *target, Ghost(nodes), Ghost(st)),
+            PNode::Array(name, index) => self.eval_array(code, Ghost(n), name, *index, Ghost(nodes), Ghost(st)),
+            PNode::Paren(inner) => self.eval_paren(code, Ghost(n), *inner, Ghost(nodes), Ghost(st)),
+            PNode::Neg(inner) => self.eval_negate(code, Ghost(n), *inner, Ghost(nodes), Ghost(st)),
+            PNode::Length(inner) => self.eval_length(code, Ghost(n), *inner, Ghost(nodes), Ghost(st)),
+            PNode::ScaleOf(inner) => self.eval_scale_of(code, Ghost(n), *inner, Ghost(nodes), Ghost(st)),
+            PNode::Sqrt(inner) => self.eval_sqrt(code, Ghost(n), *inner, Ghost(nodes), Ghost(st)),
+            PNode::Binary(op, left, right) => self.eval_binary(code, Ghost(n), *op, *left, *right, Ghost(nodes), Ghost(st)),
+            PNode::Rel(op, left, right) => self.eval_rel(code, Ghost(n), *op, *left, *right, Ghost(nodes), Ghost(st)),
+            PNode::Call(name, args) => self.eval_call(code, Ghost(n), name, args, Ghost(nodes), Ghost(st)),
+            _ => Ok(BCNum::zero()),
         }
     }
 
@@ -112,7 +118,7 @@ impl Evaluator {
         ensures
             *final(self) == *old(self),
             r is Ok && r->Ok_0.scale == 0,
-            (r_state(*old(self), st) && r_expr(Expr::RegisterAccess(reg), nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && n < nodes.len() && nodes[n as int] == Node::Reg(reg_code(reg))) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let value = match reg {
@@ -129,21 +135,23 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn eval_paren(&mut self, Ghost(node): Ghost<Expr>, inner: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_paren(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, inner: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::Paren(Box::new(*inner)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Paren(inner),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
-        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Paren(j) => j, _ => 0usize } } else { 0usize };
-        let r = self.eval_ref(inner, Ghost(nodes), Ghost(j), Ghost(st));
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost j = inner;
+        let r = self.eval_ref(code, inner, Ghost(nodes), Ghost(st));
         proof {
             if hyp {
                 assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(r, *self, ev_node(nodes, n, st, f), d) by {
@@ -156,21 +164,23 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn eval_negate(&mut self, Ghost(node): Ghost<Expr>, inner: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_negate(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, inner: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::Negate(Box::new(*inner)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Neg(inner),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
-        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Neg(j) => j, _ => 0usize } } else { 0usize };
-        let r0 = self.eval_ref(inner, Ghost(nodes), Ghost(j), Ghost(st));
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost j = inner;
+        let r0 = self.eval_ref(code, inner, Ghost(nodes), Ghost(st));
         let v = match r0 {
             Ok(v) => v,
             Err(e) => {
@@ -202,21 +212,23 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn eval_length(&mut self, Ghost(node): Ghost<Expr>, inner: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_length(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, inner: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::LengthCall(Box::new(*inner)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Length(inner),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
-        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Length(j) => j, _ => 0usize } } else { 0usize };
-        let r0 = self.eval_ref(inner, Ghost(nodes), Ghost(j), Ghost(st));
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost j = inner;
+        let r0 = self.eval_ref(code, inner, Ghost(nodes), Ghost(st));
         let v = match r0 {
             Ok(v) => v,
             Err(e) => {
@@ -257,21 +269,23 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn eval_scale_of(&mut self, Ghost(node): Ghost<Expr>, inner: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_scale_of(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, inner: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::ScaleCall(Box::new(*inner)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::ScaleOf(inner),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
-        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::ScaleOf(j) => j, _ => 0usize } } else { 0usize };
-        let r0 = self.eval_ref(inner, Ghost(nodes), Ghost(j), Ghost(st));
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost j = inner;
+        let r0 = self.eval_ref(code, inner, Ghost(nodes), Ghost(st));
         let v = match r0 {
             Ok(v) => v,
             Err(e) => {
@@ -303,21 +317,23 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn eval_sqrt(&mut self, Ghost(node): Ghost<Expr>, inner: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_sqrt(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, inner: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::SqrtCall(Box::new(*inner)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Sqrt(inner),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
-        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Sqrt(j) => j, _ => 0usize } } else { 0usize };
-        let r0 = self.eval_ref(inner, Ghost(nodes), Ghost(j), Ghost(st));
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost j = inner;
+        let r0 = self.eval_ref(code, inner, Ghost(nodes), Ghost(st));
         let v = match r0 {
             Ok(v) => v,
             Err(e) => {
@@ -429,29 +445,23 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "three of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn eval_binary(&mut self, Ghost(node): Ghost<Expr>, op: BinOp, left: &Expr, right: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_binary(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, op: BinOp, left: usize, right: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::BinaryOp(op, Box::new(*left), Box::new(*right)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Binary(op, left, right),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
-        let ghost (ja, jb) = if n < nodes.len() {
-            match nodes[n as int] {
-                Node::Binary(_, a, b) => (a, b),
-                Node::Rel(_, a, b) => (a, b),
-                _ => (0usize, 0usize),
-            }
-        } else {
-            (0usize, 0usize)
-        };
-        let ra = self.eval_ref(left, Ghost(nodes), Ghost(ja), Ghost(st));
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost (ja, jb) = (left, right);
+        let ra = self.eval_ref(code, left, Ghost(nodes), Ghost(st));
         let ghost fa = choose|f: u64| done(#[trigger] ev(nodes, ja, st, f));
         let ghost xa = ev(nodes, ja, st, fa);
         let l = match ra {
@@ -468,7 +478,7 @@ impl Evaluator {
                 return Err(e);
             },
         };
-        let rb = self.eval_ref(right, Ghost(nodes), Ghost(jb), Ghost(xa.st));
+        let rb = self.eval_ref(code, right, Ghost(nodes), Ghost(xa.st));
         let ghost fb = choose|f: u64| done(#[trigger] ev(nodes, jb, xa.st, f));
         let ghost xb = ev(nodes, jb, xa.st, fb);
         // Whatever fuel finishes, the operands' results are xa and xb.
@@ -516,29 +526,23 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "three of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn eval_rel(&mut self, Ghost(node): Ghost<Expr>, op: RelOp, left: &Expr, right: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_rel(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, op: RelOp, left: usize, right: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::RelationalOp(op, Box::new(*left), Box::new(*right)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Rel(op, left, right),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
-        let ghost (ja, jb) = if n < nodes.len() {
-            match nodes[n as int] {
-                Node::Binary(_, a, b) => (a, b),
-                Node::Rel(_, a, b) => (a, b),
-                _ => (0usize, 0usize),
-            }
-        } else {
-            (0usize, 0usize)
-        };
-        let ra = self.eval_ref(left, Ghost(nodes), Ghost(ja), Ghost(st));
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost (ja, jb) = (left, right);
+        let ra = self.eval_ref(code, left, Ghost(nodes), Ghost(st));
         let ghost fa = choose|f: u64| done(#[trigger] ev(nodes, ja, st, f));
         let ghost xa = ev(nodes, ja, st, fa);
         let l = match ra {
@@ -555,7 +559,7 @@ impl Evaluator {
                 return Err(e);
             },
         };
-        let rb = self.eval_ref(right, Ghost(nodes), Ghost(jb), Ghost(xa.st));
+        let rb = self.eval_ref(code, right, Ghost(nodes), Ghost(xa.st));
         let ghost fb = choose|f: u64| done(#[trigger] ev(nodes, jb, xa.st, f));
         let ghost xb = ev(nodes, jb, xa.st, fb);
         // Whatever fuel finishes, the operands' results are xa and xb.
@@ -617,12 +621,12 @@ impl Evaluator {
         ensures
             *final(self) == *old(self),
             r is Ok && r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(Expr::Variable(*name), nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && n < nodes.len() && nodes[n as int] == Node::Var(text_view(*name))) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let v = self.var_get(name);
         proof {
-            if r_state(*self, st) && r_expr(Expr::Variable(*name), nodes, n) {
+            if r_state(*self, st) && n < nodes.len() && nodes[n as int] == Node::Var(text_view(*name)) {
                 let nm = text_view(*name);
                 lemma_var_get(st.vars, nm);
                 if self.variables@.contains_key(*name) {
@@ -684,21 +688,23 @@ impl Evaluator {
 
     /// An array element (the specification's `ev_array`): the subscript is evaluated first.
     #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn eval_array(&mut self, Ghost(node): Ghost<Expr>, name: &String, index: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_array(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, name: &String, index: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::ArrayAccess(*name, Box::new(*index)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Array(*name, index),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
-        let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Array(_, j) => j, _ => 0usize } } else { 0usize };
-        let r0 = self.eval_ref(index, Ghost(nodes), Ghost(j), Ghost(st));
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost j = index;
+        let r0 = self.eval_ref(code, index, Ghost(nodes), Ghost(st));
         let v = match r0 {
             Ok(v) => v,
             Err(e) => {
@@ -886,7 +892,7 @@ impl Evaluator {
         ensures
             *final(self) == *old(self),
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(Expr::Number(*t), nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && n < nodes.len() && nodes[n as int] == Node::Number(text_view(*t))) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         self.literal_ref(t, Ghost(st))
@@ -1047,17 +1053,26 @@ impl Evaluator {
 
     /// Resolves an assignment target (the specification's `resolve`), evaluating an array
     /// subscript exactly once.
+    /// The specification's place of anything but a named expression: a variable with no name.
+    fn empty_place() -> (p: Place)
+        ensures
+            r_place(p, bc_spec::eval::Place { kind: 0u8, name: seq![], idx: 0u32, reg: 0u8 }),
+    {
+        let none: Vec<u8> = Vec::new();
+        proof { assert(none@ =~= seq![]); }
+        Place::Variable(crate::parser::ascii_string(none.as_slice()))
+    }
+
     #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn resolve_ref(&mut self, target: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<Place, BcError>)
+    pub(crate) fn resolve_ref(&mut self, code: &Rc<Code>, target: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<Place, BcError>)
         requires
             old(self).inv(),
-            named(*target),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
-            (r_state(*old(self), st) && r_expr(*target, nodes, n)) ==> forall|f: u64|
-                done(#[trigger] resolve(nodes, n, st, f).r) ==> ({
-                    let pr = resolve(nodes, n, st, f);
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
+                done(#[trigger] resolve(nodes, target, st, f).r) ==> ({
+                    let pr = resolve(nodes, target, st, f);
                     match r {
                         Ok(p) => pr.r.ok && r_place(p, pr.place) && r_state(*final(self), pr.r.st),
                         Err(e) => !pr.r.ok && r_err(e, pr.r.err) && r_state(*final(self), with_depth(pr.r.st, old(self).eval_depth as u64)),
@@ -1065,19 +1080,64 @@ impl Evaluator {
                 }),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(*target, nodes, n);
-        match target {
-            Expr::Variable(name) => Ok(Place::Variable(name.clone())),
-            Expr::RegisterAccess(reg) => Ok(Place::Register(*reg)),
-            Expr::ArrayAccess(name, index) => {
-                let ghost j = if n < nodes.len() { match nodes[n as int] { Node::Array(_, j) => j, _ => 0usize } } else { 0usize };
-                let v = match self.eval_ref(index, Ghost(nodes), Ghost(j), Ghost(st)) {
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        let ghost n = target;
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        // Only a named expression is ever assigned to. Anything else is the specification's
+        // empty place, a variable with no name.
+        if target >= code.nodes.len() {
+            let p = Self::empty_place();
+            proof {
+                if hyp {
+                    assert forall|f: u64| done(#[trigger] resolve(nodes, target, st, f).r) implies {
+                        let pr = resolve(nodes, target, st, f);
+                        pr.r.ok && r_place(p, pr.place) && r_state(*self, pr.r.st)
+                    } by {
+                        assert(f > 0);
+                    }
+                }
+            }
+            return Ok(p);
+        }
+        match &code.nodes[target] {
+            PNode::Var(name) => {
+                let p = Place::Variable(name.clone());
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] resolve(nodes, target, st, f).r) implies {
+                            let pr = resolve(nodes, target, st, f);
+                            pr.r.ok && r_place(p, pr.place) && r_state(*self, pr.r.st)
+                        } by {
+                            assert(f > 0);
+                        }
+                    }
+                }
+                Ok(p)
+            },
+            PNode::Reg(reg) => {
+                let p = Place::Register(*reg);
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] resolve(nodes, target, st, f).r) implies {
+                            let pr = resolve(nodes, target, st, f);
+                            pr.r.ok && r_place(p, pr.place) && r_state(*self, pr.r.st)
+                        } by {
+                            assert(f > 0);
+                        }
+                    }
+                }
+                Ok(p)
+            },
+            PNode::Array(name, index) => {
+                let index = *index;
+                let ghost j = index;
+                let v = match self.eval_ref(code, index, Ghost(nodes), Ghost(st)) {
                     Ok(v) => v,
                     Err(e) => {
                         proof {
                             if hyp {
-                                assert forall|f: u64| done(#[trigger] resolve(nodes, n, st, f).r) implies {
-                                    let pr = resolve(nodes, n, st, f);
+                                assert forall|f: u64| done(#[trigger] resolve(nodes, target, st, f).r) implies {
+                                    let pr = resolve(nodes, target, st, f);
                                     !pr.r.ok && r_err(e, pr.r.err) && r_state(*self, with_depth(pr.r.st, d as u64))
                                 } by {
                                     assert(done(ev(nodes, j, st, (f - 1) as u64)));
@@ -1092,8 +1152,8 @@ impl Evaluator {
                     Err(e) => {
                         proof {
                             if hyp {
-                                assert forall|f: u64| done(#[trigger] resolve(nodes, n, st, f).r) implies {
-                                    let pr = resolve(nodes, n, st, f);
+                                assert forall|f: u64| done(#[trigger] resolve(nodes, target, st, f).r) implies {
+                                    let pr = resolve(nodes, target, st, f);
                                     !pr.r.ok && r_err(e, pr.r.err) && r_state(*self, with_depth(pr.r.st, d as u64))
                                 } by {
                                     let x = ev(nodes, j, st, (f - 1) as u64);
@@ -1109,8 +1169,8 @@ impl Evaluator {
                 let p = Place::Element(name.clone(), i);
                 proof {
                     if hyp {
-                        assert forall|f: u64| done(#[trigger] resolve(nodes, n, st, f).r) implies {
-                            let pr = resolve(nodes, n, st, f);
+                        assert forall|f: u64| done(#[trigger] resolve(nodes, target, st, f).r) implies {
+                            let pr = resolve(nodes, target, st, f);
                             pr.r.ok && r_place(p, pr.place) && r_state(*self, pr.r.st)
                         } by {
                             let x = ev(nodes, j, st, (f - 1) as u64);
@@ -1122,7 +1182,20 @@ impl Evaluator {
                 }
                 Ok(p)
             },
-            _ => Err(BcError::Runtime { kind: RuntimeError::NestingTooDeep, func: None }),
+            _ => {
+                let p = Self::empty_place();
+                proof {
+                    if hyp {
+                        assert forall|f: u64| done(#[trigger] resolve(nodes, target, st, f).r) implies {
+                            let pr = resolve(nodes, target, st, f);
+                            pr.r.ok && r_place(p, pr.place) && r_state(*self, pr.r.st)
+                        } by {
+                            assert(f > 0);
+                        }
+                    }
+                }
+                Ok(p)
+            },
         }
     }
 
@@ -1291,33 +1364,23 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "three of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn eval_assign(&mut self, Ghost(node): Ghost<Expr>, op: AssignOp, target: &Expr, value: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_assign(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, op: AssignOp, target: usize, value: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::AssignOp(op, Box::new(*target), Box::new(*value)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Assign(op, target, value),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
-        if !(matches!(target, Expr::Variable(_)) || matches!(target, Expr::ArrayAccess(..)) || matches!(target, Expr::RegisterAccess(_))) {
-            // Not a named expression: the parser never builds this, and `r_expr` excludes it.
-            // The value is computed as for a variable, and nothing is stored.
-            return match op {
-                AssignOp::Assign => self.eval_ref(value, Ghost(nodes), Ghost(0usize), Ghost(st)),
-                AssignOp::Compound(bin) => {
-                    let old_val = self.eval_ref(target, Ghost(nodes), Ghost(0usize), Ghost(st))?;
-                    let rhs = self.eval_ref(value, Ghost(nodes), Ghost(0usize), Ghost(st))?;
-                    self.arith_ref(bin, &old_val, &rhs, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(st))
-                },
-            };
-        }
-        let ghost (jt, jv) = if n < nodes.len() { match nodes[n as int] { Node::Assign(_, a, b) => (a, b), _ => (0usize, 0usize) } } else { (0usize, 0usize) };
-        let place = match self.resolve_ref(target, Ghost(nodes), Ghost(jt), Ghost(st)) {
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost (jt, jv) = (target, value);
+        let place = match self.resolve_ref(code, target, Ghost(nodes), Ghost(st)) {
             Ok(p) => p,
             Err(e) => {
                 proof {
@@ -1340,27 +1403,27 @@ impl Evaluator {
             }
         }
         let ghost st1 = pr.r.st;
-        let ghost code = assign_code(op);
-        let val = match self.assign_value(op, &place, value, Ghost(nodes), Ghost(jv), Ghost(pr.place), Ghost(st1)) {
+        let ghost acode = assign_code(op);
+        let val = match self.assign_value(code, op, &place, value, Ghost(nodes), Ghost(pr.place), Ghost(st1)) {
             Ok(v) => v,
             Err(e) => {
                 proof {
                     if hyp {
                         assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Err(e), *self, ev_node(nodes, n, st, f), d) by {
                             assert(done(resolve(nodes, jt, st, (f - 2) as u64).r));
-                            assert(done(assign_x(nodes, pr.place, code, jv, st1, (f - 2) as u64)));
+                            assert(done(assign_x(nodes, pr.place, acode, jv, st1, (f - 2) as u64)));
                         }
                     }
                 }
                 return Err(e);
             },
         };
-        let ghost fx = choose|f: u64| done(#[trigger] assign_x(nodes, pr.place, code, jv, st1, f));
-        let ghost x = assign_x(nodes, pr.place, code, jv, st1, fx);
+        let ghost fx = choose|f: u64| done(#[trigger] assign_x(nodes, pr.place, acode, jv, st1, f));
+        let ghost x = assign_x(nodes, pr.place, acode, jv, st1, fx);
         proof {
             if hyp {
-                assert forall|f: u64| done(#[trigger] assign_x(nodes, pr.place, code, jv, st1, f)) implies assign_x(nodes, pr.place, code, jv, st1, f) == x by {
-                    if fx <= f { lemma_assign_x_mono(nodes, pr.place, code, jv, st1, fx, f); } else { lemma_assign_x_mono(nodes, pr.place, code, jv, st1, f, fx); }
+                assert forall|f: u64| done(#[trigger] assign_x(nodes, pr.place, acode, jv, st1, f)) implies assign_x(nodes, pr.place, acode, jv, st1, f) == x by {
+                    if fx <= f { lemma_assign_x_mono(nodes, pr.place, acode, jv, st1, fx, f); } else { lemma_assign_x_mono(nodes, pr.place, acode, jv, st1, f, fx); }
                 }
             }
         }
@@ -1370,7 +1433,7 @@ impl Evaluator {
             if hyp {
                 assert forall|f: u64| done(#[trigger] ev_node(nodes, n, st, f)) implies r_result(Ok(r), *self, ev_node(nodes, n, st, f), d) by {
                     assert(done(resolve(nodes, jt, st, (f - 2) as u64).r));
-                    assert(done(assign_x(nodes, pr.place, code, jv, st1, (f - 2) as u64)));
+                    assert(done(assign_x(nodes, pr.place, acode, jv, st1, (f - 2) as u64)));
                 }
             }
         }
@@ -1384,25 +1447,36 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "four of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn assign_value(&mut self, op: AssignOp, place: &Place, value: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(jv): Ghost<usize>, Ghost(sp): Ghost<SpecPlace>, Ghost(st1): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn assign_value(&mut self, code: &Rc<Code>, op: AssignOp, place: &Place, value: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(sp): Ghost<SpecPlace>, Ghost(st1): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st1) && r_place(*place, sp) && r_expr(*value, nodes, jv)) ==> forall|f: u64|
-                done(#[trigger] assign_x(nodes, sp, assign_code(op), jv, st1, f))
-                    ==> r_result(r, *final(self), assign_x(nodes, sp, assign_code(op), jv, st1, f), old(self).eval_depth),
+            (r_state(*old(self), st1) && r_place(*place, sp) && r_rc(*code, nodes)) ==> forall|f: u64|
+                done(#[trigger] assign_x(nodes, sp, assign_code(op), value, st1, f))
+                    ==> r_result(r, *final(self), assign_x(nodes, sp, assign_code(op), value, st1, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st1) && r_place(*place, sp) && r_expr(*value, nodes, jv);
-        let ghost code = assign_code(op);
-        let hex = match (place, op, value) {
-            (Place::Register(Register::Ibase), AssignOp::Assign, Expr::Number(digits))
-            | (Place::Register(Register::Obase), AssignOp::Assign, Expr::Number(digits)) => {
-                let b = digits.as_str().as_bytes();
-                if b.len() == 1 { Some(verified_hex_char_val(b[0])) } else { None }
+        let ghost hyp = r_state(*self, st1) && r_place(*place, sp) && r_rc(*code, nodes);
+        let ghost jv = value;
+        let ghost acode = assign_code(op);
+        proof { if hyp && value < nodes.len() { assert(r_node(code.nodes@[value as int], nodes[value as int])); } }
+        let hex = match (place, op) {
+            (Place::Register(Register::Ibase), AssignOp::Assign)
+            | (Place::Register(Register::Obase), AssignOp::Assign) => {
+                if value < code.nodes.len() {
+                    match &code.nodes[value] {
+                        PNode::Number(digits) => {
+                            let b = digits.as_str().as_bytes();
+                            if b.len() == 1 { Some(verified_hex_char_val(b[0])) } else { None }
+                        },
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
             },
             _ => None,
         };
@@ -1422,12 +1496,12 @@ impl Evaluator {
             AssignOp::Assign => None,
             AssignOp::Compound(_) => Some(self.load_ref(place, Ghost(sp), Ghost(st1))),
         };
-        let rhs = match self.eval_ref(value, Ghost(nodes), Ghost(jv), Ghost(st1)) {
+        let rhs = match self.eval_ref(code, value, Ghost(nodes), Ghost(st1)) {
             Ok(v) => v,
             Err(e) => {
                 proof {
                     if hyp {
-                        assert forall|f: u64| done(#[trigger] assign_x(nodes, sp, code, jv, st1, f)) implies r_result(Err(e), *self, assign_x(nodes, sp, code, jv, st1, f), d) by {
+                        assert forall|f: u64| done(#[trigger] assign_x(nodes, sp, acode, jv, st1, f)) implies r_result(Err(e), *self, assign_x(nodes, sp, acode, jv, st1, f), d) by {
                             assert(done(ev(nodes, jv, st1, f)));
                         }
                     }
@@ -1447,7 +1521,7 @@ impl Evaluator {
                 let res = self.arith_ref(bin, &old_v, &rhs, Ghost(bc_spec::eval::load(st1, sp)), Ghost(xv.val), Ghost(xv.st));
                 proof {
                     if hyp {
-                        assert forall|f: u64| done(#[trigger] assign_x(nodes, sp, code, jv, st1, f)) implies r_result(res, *self, assign_x(nodes, sp, code, jv, st1, f), d) by {
+                        assert forall|f: u64| done(#[trigger] assign_x(nodes, sp, acode, jv, st1, f)) implies r_result(res, *self, assign_x(nodes, sp, acode, jv, st1, f), d) by {
                             assert(done(ev(nodes, jv, st1, f)));
                         }
                     }
@@ -1457,7 +1531,7 @@ impl Evaluator {
             _ => {
                 proof {
                     if hyp {
-                        assert forall|f: u64| done(#[trigger] assign_x(nodes, sp, code, jv, st1, f)) implies r_result(Ok(rhs), *self, assign_x(nodes, sp, code, jv, st1, f), d) by {
+                        assert forall|f: u64| done(#[trigger] assign_x(nodes, sp, acode, jv, st1, f)) implies r_result(Ok(rhs), *self, assign_x(nodes, sp, acode, jv, st1, f), d) by {
                             assert(done(ev(nodes, jv, st1, f)));
                         }
                     }
@@ -1475,29 +1549,23 @@ impl Evaluator {
         clippy::too_many_arguments,
         reason = "three of them are the Ghost arguments of the refinement proof"
     )]
-    pub(crate) fn eval_update(&mut self, Ghost(node): Ghost<Expr>, increment: bool, prefix: bool, target: &Expr, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
+    pub(crate) fn eval_update(&mut self, code: &Rc<Code>, Ghost(n): Ghost<usize>, increment: bool, prefix: bool, target: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
-            node == Expr::Update(increment, prefix, Box::new(*target)),
+            n < code.nodes@.len(),
+            code.nodes@[n as int] == PNode::Update(increment, prefix, target),
         ensures
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_expr(node, nodes, n)) ==> forall|f: u64|
+            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
                 done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
     {
         let ghost d = self.eval_depth;
-        let ghost hyp = r_state(*self, st) && r_expr(node, nodes, n);
-        if !(matches!(target, Expr::Variable(_)) || matches!(target, Expr::ArrayAccess(..)) || matches!(target, Expr::RegisterAccess(_))) {
-            // Not a named expression: the parser never builds this, and `r_expr` excludes it.
-            // The value is computed as for a variable, and nothing is stored.
-            let old_val = self.eval_ref(target, Ghost(nodes), Ghost(0usize), Ghost(st))?;
-            let one = BCNum::new(big_from_usize(1), 0);
-            let new_val = if increment { old_val.add(&one) } else { old_val.sub(&one) };
-            return Ok(if prefix { new_val } else { old_val });
-        }
-        let ghost jt = if n < nodes.len() { match nodes[n as int] { Node::Update(_, _, a) => a, _ => 0usize } } else { 0usize };
-        let place = match self.resolve_ref(target, Ghost(nodes), Ghost(jt), Ghost(st)) {
+        let ghost hyp = r_state(*self, st) && r_rc(*code, nodes);
+        proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
+        let ghost jt = target;
+        let place = match self.resolve_ref(code, target, Ghost(nodes), Ghost(st)) {
             Ok(p) => p,
             Err(e) => {
                 proof {

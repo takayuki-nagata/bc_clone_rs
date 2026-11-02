@@ -9,24 +9,21 @@ use super::lexer::syntax_error_text;
 #[cfg(verus_keep_ghost)]
 use super::lexer::{r_lex_err, r_next, tok_of, tok_view};
 use super::{
-    AssignOp, BinOp, Expr, ExprOrArray, ExtensionPolicy, FunctionDef, Lexer, Param, Register,
-    RelOp, Stmt, Token, TokenType,
+    Arg as PArg, AssignOp, BinOp, Code, ExtensionPolicy, Lexer, Node as PNode, Param, Register,
+    RelOp, Token, TokenType,
 };
 #[cfg(verus_keep_ghost)]
 use crate::driver::{r_ext, r_parsed};
 use crate::error::BcError;
 #[cfg(verus_keep_ghost)]
 use crate::refine::{
-    assign_code as r_assign_code, bin_code, extends, lemma_is_rel, lemma_r_args_extend,
-    lemma_r_args_push, lemma_r_expr_extend, lemma_r_stmt_extend, lemma_r_stmts_extend,
-    lemma_r_stmts_push, named, r_arg, r_args, r_expr, r_param, r_params, r_stmt, r_stmts,
-    rel_code as r_rel_code, text_view,
+    assign_code as r_assign_code, bin_code, extends, lemma_r_args_push, r_arg, r_args, r_node,
+    r_nodes, r_param, r_params, rel_code as r_rel_code, text_view,
 };
 use crate::verified_kernels::{
     TOK_ASSIGN_OP, TOK_EXP_OP, TOK_MUL_OP, TOK_PLUS_MINUS, verified_nesting_within_limit,
     verified_pratt_infix_info,
 };
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
@@ -84,10 +81,16 @@ pub struct Parser {
     last_line: usize,
     /// Largest nesting depth of the syntax tree (`docs/COMPATIBILITY.md` §2).
     max_depth: usize,
+    /// The arena of the nodes built so far.
+    nodes: Vec<PNode>,
 }
 
 broadcast use vstd::std_specs::vec::group_vec_axioms;
 
+#[cfg(verus_keep_ghost)]
+type GNode = Node;
+#[cfg(not(verus_keep_ghost))]
+type GNode = ();
 #[cfg(verus_keep_ghost)]
 type GBytes = Seq<u8>;
 #[cfg(not(verus_keep_ghost))]
@@ -161,6 +164,7 @@ spec fn r_p(p: Parser, toks: Seq<SToken>, cfg: PCfg, st: PState) -> bool {
 /// [`r_p`], possibly after the final `Eof` was consumed.
 spec fn r_pc(p: Parser, toks: Seq<SToken>, cfg: PCfg, st: PState) -> bool {
     &&& toks_wf(toks)
+    &&& r_nodes(p.nodes@, st.nodes)
     &&& st.cur <= toks.len()
     &&& st.nodes.len() <= 2 * st.cur
     &&& p.max_depth < usize::MAX - 2
@@ -696,27 +700,27 @@ spec fn r_grown(s0: PState, s: PState) -> bool {
     &&& s.depth == s0.depth
 }
 
-spec fn r_eres(r: Result<(Expr, usize), BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+spec fn r_eres(r: Result<(usize, usize), BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
         Ok((x, h)) => p.ok && r_p(q, toks, cfg, p.st) && h as u64 == p.h && h <= q.max_depth + 2
-            && r_grown(s0, p.st) && r_expr(x, p.st.nodes, p.node),
+            && r_grown(s0, p.st) && x == p.node && x < p.st.nodes.len(),
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
 
-spec fn r_xres(r: Result<Expr, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+spec fn r_xres(r: Result<usize, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
-        Ok(x) => p.ok && r_p(q, toks, cfg, p.st) && r_grown(s0, p.st) && r_expr(x, p.st.nodes, p.node),
+        Ok(x) => p.ok && r_p(q, toks, cfg, p.st) && r_grown(s0, p.st) && x == p.node && x < p.st.nodes.len(),
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
 
-spec fn r_ares(r: Result<(Vec<ExprOrArray>, usize), BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+spec fn r_ares(r: Result<(Vec<PArg>, usize), BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
         Ok((a, h)) => p.ok && r_p(q, toks, cfg, p.st) && h as u64 == p.h && h <= q.max_depth + 1
             && extends(s0.nodes, p.st.nodes) && p.st.cur >= s0.cur
             && p.st.nodes.len() - s0.nodes.len() <= p.st.cur - s0.cur && p.st.depth == s0.depth
-            && r_args(a@, p.st.nodes, p.args),
+            && r_args(a@, p.args),
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
@@ -829,35 +833,60 @@ proof fn lemma_rest_token(toks: Seq<SToken>, k: int, off: usize)
     }
 }
 
-/// Adding a node to the arena after at least one more token.
-proof fn lemma_node(q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, s: PState, n: Node, h: u64)
-    requires
-        r_p(q, toks, cfg, s),
-        extends(s0.nodes, s.nodes),
-        s0.nodes.len() <= 2 * s0.cur,
-        s.nodes.len() - s0.nodes.len() + 1 <= s.cur - s0.cur,
-        s.depth == s0.depth,
-    ensures
-        ({
-            let g = add_node(s, n, h);
-            &&& g.ok
-            &&& g.h == h
-            &&& g.node == s.nodes.len()
-            &&& g.st.nodes.len() == s.nodes.len() + 1
-            &&& g.st.nodes[g.node as int] == n
-            &&& g.st.cur == s.cur
-            &&& g.st.ext == s.ext
-            &&& r_p(q, toks, cfg, g.st)
-            &&& extends(s.nodes, g.st.nodes)
-            &&& r_grown(s0, g.st)
-        }),
-{
-    let g = add_node(s, n, h);
-    assert(g.st.nodes =~= s.nodes.push(n));
-    assert(cur_tok(toks, g.st) == cur_tok(toks, s));
+/// The parser `b` is `a` with the node `n` added.
+spec fn pushed(a: Parser, b: Parser, n: PNode) -> bool {
+    &&& b.nodes@ == a.nodes@.push(n)
+    &&& b.lexer == a.lexer
+    &&& b.current_token == a.current_token
+    &&& b.loop_depth == a.loop_depth
+    &&& b.in_function == a.in_function
+    &&& b.extension_policy == a.extension_policy
+    &&& b.extension_uses == a.extension_uses
+    &&& b.depth == a.depth
+    &&& b.last_line == a.last_line
+    &&& b.max_depth == a.max_depth
 }
 
 impl Parser {
+    /// Adds an expression's node to the arena (the specification's `add_node`).
+    fn add_expr(&mut self, pn: PNode, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(s0): Ghost<GState>, Ghost(s): Ghost<GState>, Ghost(n): Ghost<GNode>, Ghost(h): Ghost<u64>) -> (idx: usize)
+        requires
+            r_p(*old(self), toks, cfg, s),
+            r_node(pn, n),
+            extends(s0.nodes, s.nodes),
+            s0.nodes.len() <= 2 * s0.cur,
+            s.nodes.len() - s0.nodes.len() + 1 <= s.cur - s0.cur,
+            s.depth == s0.depth,
+        ensures
+            pushed(*old(self), *final(self), pn),
+            ({
+                let g = add_node(s, n, h);
+                &&& g.ok
+                &&& g.h == h
+                &&& g.node == idx
+                &&& idx == s.nodes.len()
+                &&& g.st.nodes.len() == s.nodes.len() + 1
+                &&& g.st.nodes[g.node as int] == n
+                &&& g.st.cur == s.cur
+                &&& g.st.ext == s.ext
+                &&& r_p(*final(self), toks, cfg, g.st)
+                &&& extends(s.nodes, g.st.nodes)
+                &&& r_grown(s0, g.st)
+            }),
+    {
+        let idx = self.nodes.len();
+        self.nodes.push(pn);
+        proof {
+            let g = add_node(s, n, h);
+            assert(g.st.nodes =~= s.nodes.push(n));
+            assert(cur_tok(toks, g.st) == cur_tok(toks, s));
+            assert forall|i: int| 0 <= i < self.nodes@.len() implies #[trigger] r_node(self.nodes@[i], g.st.nodes[i]) by {
+                if i < s.nodes.len() { assert(r_node(old(self).nodes@[i], s.nodes[i])); }
+            }
+        }
+        idx
+    }
+
     /// Reports input nested deeper than `max_depth`, on the line of the last consumed token
     /// (the limit is often detected when the current token is already the next line's).
     fn too_deep_error(&self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (e: BcError)
@@ -888,7 +917,7 @@ impl Parser {
     }
 
     /// Parses an arithmetic expression.
-    fn parse_expression(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Expr, BcError>, Ghost<GResult>))
+    fn parse_expression(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -903,7 +932,7 @@ impl Parser {
     }
 
     /// Parses expressions, including relational ones.
-    fn parse_relational_expression(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Expr, BcError>, Ghost<GResult>))
+    fn parse_relational_expression(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -976,18 +1005,16 @@ impl Parser {
                 return (Err(x), Ghost(too_deep(rr.st)));
             },
         }
+        let idx = self.add_expr(PNode::Rel(op, left, right), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(rr.st), Ghost(Node::Rel(s_rel_code(cur_tok(toks, l.st)), l.node, rr.node)), Ghost(sh));
         let ghost g = add_node(rr.st, Node::Rel(s_rel_code(cur_tok(toks, l.st)), l.node, rr.node), sh);
         proof {
-            lemma_node(*self, toks, cfg, st, rr.st, Node::Rel(s_rel_code(cur_tok(toks, l.st)), l.node, rr.node), sh);
-            lemma_r_expr_extend(left, l.st.nodes, g.st.nodes, l.node);
-            lemma_r_expr_extend(right, rr.st.nodes, g.st.nodes, rr.node);
                 assert forall|f: u64| #![trigger p_relational(toks, cfg, st, f)] pdone(p_relational(toks, cfg, st, f)) implies p_relational(toks, cfg, st, f) == g by {
                     assert(f > 0);
                     assert(pdone(p_expr_prec(toks, cfg, st, 0i8, (f - 1) as u64)));
                     assert(pdone(p_expr_prec(toks, cfg, e.st, 0i8, (f - 1) as u64)));
                 }
         }
-        (Ok(Expr::RelationalOp(op, Box::new(left), Box::new(right))), Ghost(g))
+        (Ok(idx), Ghost(g))
     }
 
     /// Checks that a subtree of height `height` below the current level is within the limit.
@@ -1011,7 +1038,7 @@ impl Parser {
     /// counted on entry, so deeply nested input is rejected before its tree is built, and the
     /// height of the result is checked against `max_depth` (`docs/COMPATIBILITY.md` §2).
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_expr_precedence(&mut self, min_prec: i8, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Expr, usize), BcError>, Ghost<GResult>))
+    fn parse_expr_precedence(&mut self, min_prec: i8, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             min_prec >= 0,
@@ -1054,7 +1081,7 @@ impl Parser {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_expr_precedence_inner(&mut self, min_prec: i8, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Expr, usize), BcError>, Ghost<GResult>))
+    fn parse_expr_precedence_inner(&mut self, min_prec: i8, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             min_prec >= 0,
@@ -1090,7 +1117,7 @@ impl Parser {
                 r_p(*self, toks, cfg, cur),
                 r_grown(st, cur),
                 st.nodes.len() <= 2 * st.cur,
-                r_expr(left, cur.nodes, node),
+                left == node && left < cur.nodes.len(),
                 height as u64 == sh,
                 height <= self.max_depth + 2,
                 min_prec >= 0,
@@ -1159,11 +1186,9 @@ impl Parser {
                     return (Err(x), Ghost(too_deep(rr.st)));
                 },
             }
+            let idx = self.add_expr(PNode::Binary(op, left, right), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(rr.st), Ghost(Node::Binary(binop_code(t), n0, rr.node)), Ghost(sh2));
             let ghost nd = add_node(rr.st, Node::Binary(binop_code(t), n0, rr.node), sh2);
             proof {
-                lemma_node(*self, toks, cfg, st, rr.st, Node::Binary(binop_code(t), n0, rr.node), sh2);
-                lemma_r_expr_extend(left, c.nodes, nd.st.nodes, n0);
-                lemma_r_expr_extend(right, rr.st.nodes, nd.st.nodes, rr.node);
                 assert forall|g: u64| #![trigger p_expr_loop(toks, cfg, c, n0, h0, min_prec, g)] g > 0 && pdone(p_expr_loop(toks, cfg, c, n0, h0, min_prec, g)) implies p_expr_loop(toks, cfg, c, n0, h0, min_prec, g) == p_expr_loop(toks, cfg, nd.st, nd.node, sh2, min_prec, (g - 1) as u64) by {
                         assert(pdone(p_expr_prec(toks, cfg, e.st, next_min_prec, (g - 1) as u64)));
                     }
@@ -1172,14 +1197,14 @@ impl Parser {
                 node = nd.node;
                 sh = sh2;
             }
-            left = Expr::BinaryOp(op, Box::new(left), Box::new(right));
+            left = idx;
             height = h2;
         }
     }
 
     /// Parses prefixes (unary operators).
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_prefix(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Expr, usize), BcError>, Ghost<GResult>))
+    fn parse_prefix(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -1206,16 +1231,15 @@ impl Parser {
                     return (Err(x), Ghost(a));
                 },
             };
+            let idx = self.add_expr(PNode::Neg(x), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(a.st), Ghost(Node::Neg(a.node)), Ghost(inc(a.h)));
             let ghost g = add_node(a.st, Node::Neg(a.node), inc(a.h));
             proof {
-                lemma_node(*self, toks, cfg, st, a.st, Node::Neg(a.node), inc(a.h));
-                lemma_r_expr_extend(x, a.st.nodes, g.st.nodes, a.node);
                 assert forall|f: u64| #![trigger p_prefix(toks, cfg, st, f)] pdone(p_prefix(toks, cfg, st, f)) implies p_prefix(toks, cfg, st, f) == g by {
                     assert(f > 0);
                     assert(pdone(p_expr_prec(toks, cfg, e.st, 5i8, (f - 1) as u64)));
                 }
             }
-            (Ok((Expr::Negate(Box::new(x)), h + 1)), Ghost(g))
+            (Ok((idx, h + 1)), Ghost(g))
         } else if matches!(self.current_token.token_type, TokenType::IncrDecr) {
             let is_inc = is_increment(&self.current_token);
             let ghost e = s_eat(toks, st, Tok::IncrDecr);
@@ -1236,16 +1260,15 @@ impl Parser {
                     return (Err(x), Ghost(a));
                 },
             };
+            let idx = self.add_expr(PNode::Update(is_inc, true, x), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(a.st), Ghost(Node::Update(is_inc, true, a.node)), Ghost(inc(a.h)));
             let ghost g = add_node(a.st, Node::Update(is_inc, true, a.node), inc(a.h));
             proof {
-                lemma_node(*self, toks, cfg, st, a.st, Node::Update(is_inc, true, a.node), inc(a.h));
-                lemma_r_expr_extend(x, a.st.nodes, g.st.nodes, a.node);
                 assert forall|f: u64| #![trigger p_prefix(toks, cfg, st, f)] pdone(p_prefix(toks, cfg, st, f)) implies p_prefix(toks, cfg, st, f) == g by {
                     assert(f > 0);
                     assert(pdone(p_named(toks, cfg, e.st, (f - 1) as u64)));
                 }
             }
-            (Ok((Expr::Update(is_inc, true, Box::new(x)), h + 1)), Ghost(g))
+            (Ok((idx, h + 1)), Ghost(g))
         } else {
             let (res, Ghost(a)) = self.parse_primary(Ghost(toks), Ghost(cfg), Ghost(st));
             proof {
@@ -1260,7 +1283,7 @@ impl Parser {
 
     /// Parses `( expression )` after the keyword or name that precedes it.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_parenthesized(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Expr, usize), BcError>, Ghost<GResult>))
+    fn parse_parenthesized(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -1305,7 +1328,7 @@ impl Parser {
     /// Parses a keyword followed by a parenthesized expression: `length`, `sqrt` or `scale`
     /// (`which` is 0, 1 or 2).
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_builtin(&mut self, which: u8, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Expr, usize), BcError>, Ghost<GResult>))
+    fn parse_builtin(&mut self, which: u8, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             !(cur_tok(toks, st).kind is Eof),
@@ -1333,24 +1356,22 @@ impl Parser {
             },
         };
         let ghost n = if which == 0 { Node::Length(a.node) } else if which == 1 { Node::Sqrt(a.node) } else { Node::ScaleOf(a.node) };
+        let call = if which == 0 { PNode::Length(x) } else if which == 1 { PNode::Sqrt(x) } else { PNode::ScaleOf(x) };
+        let idx = self.add_expr(call, Ghost(toks), Ghost(cfg), Ghost(st), Ghost(a.st), Ghost(n), Ghost(inc(a.h)));
         let ghost g = add_node(a.st, n, inc(a.h));
         proof {
-            lemma_node(*self, toks, cfg, st, a.st, n, inc(a.h));
-            lemma_r_expr_extend(x, a.st.nodes, g.st.nodes, a.node);
             assert forall|f: u64| #![trigger p_builtin(toks, cfg, st, which, f)] pdone(p_builtin(toks, cfg, st, which, f)) implies p_builtin(toks, cfg, st, which, f) == g by {
                 assert(f > 0);
                 assert(pdone(p_parenthesized(toks, cfg, e.st, (f - 1) as u64)));
             }
         }
-        let arg = Box::new(x);
-        let call = if which == 0 { Expr::LengthCall(arg) } else if which == 1 { Expr::SqrtCall(arg) } else { Expr::ScaleCall(arg) };
-        (Ok((call, h + 1)), Ghost(g))
+        (Ok((idx, h + 1)), Ghost(g))
     }
 
     /// Parses primary expressions (literals, variables, built-ins, calls).
     #[verifier::rlimit(60)]
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_primary(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Expr, usize), BcError>, Ghost<GResult>))
+    fn parse_primary(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -1367,9 +1388,9 @@ impl Parser {
                 Ok(()) => {},
                 Err(x) => return (Err(x), Ghost(e)),
             }
+            let idx = self.add_expr(PNode::Number(val), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e.st), Ghost(Node::Number(t.text)), Ghost(1u64));
             let ghost g = add_node(e.st, Node::Number(t.text), 1u64);
-            proof { lemma_node(*self, toks, cfg, st, e.st, Node::Number(t.text), 1u64); }
-            return (Ok((Expr::Number(val), 1)), Ghost(g));
+            return (Ok((idx, 1)), Ghost(g));
         }
         if matches!(k, TokenType::Lparen) {
             let (res, Ghost(a)) = self.parse_parenthesized(Ghost(toks), Ghost(cfg), Ghost(st));
@@ -1385,16 +1406,15 @@ impl Parser {
                     return (Err(y), Ghost(a));
                 },
             };
+            let idx = self.add_expr(PNode::Paren(x), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(a.st), Ghost(Node::Paren(a.node)), Ghost(inc(a.h)));
             let ghost g = add_node(a.st, Node::Paren(a.node), inc(a.h));
             proof {
-                lemma_node(*self, toks, cfg, st, a.st, Node::Paren(a.node), inc(a.h));
-                lemma_r_expr_extend(x, a.st.nodes, g.st.nodes, a.node);
                 assert forall|f: u64| #![trigger p_primary(toks, cfg, st, f)] pdone(p_primary(toks, cfg, st, f)) implies p_primary(toks, cfg, st, f) == g by {
                     assert(f > 0);
                     assert(pdone(p_parenthesized(toks, cfg, st, (f - 1) as u64)));
                 }
             }
-            return (Ok((Expr::Paren(Box::new(x)), h + 1)), Ghost(g));
+            return (Ok((idx, h + 1)), Ghost(g));
         }
         if matches!(k, TokenType::Length) || matches!(k, TokenType::Sqrt) {
             let which = if matches!(k, TokenType::Length) { 0 } else { 1 };
@@ -1453,7 +1473,7 @@ impl Parser {
 
     /// Parses a function call `name(args)`.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_call(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Expr, usize), BcError>, Ghost<GResult>))
+    fn parse_call(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             cur_tok(toks, st).kind is Letter,
@@ -1502,22 +1522,21 @@ impl Parser {
                 return (Err(x), Ghost(e2));
             },
         }
+        let idx = self.add_expr(PNode::Call(name, args), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e2.st), Ghost(Node::Call(n.name, a.args)), Ghost(inc(a.h)));
         let ghost g = add_node(e2.st, Node::Call(n.name, a.args), inc(a.h));
         proof {
-            lemma_node(*self, toks, cfg, st, e2.st, Node::Call(n.name, a.args), inc(a.h));
-            lemma_r_args_extend(args@, a.st.nodes, g.st.nodes, a.args);
             assert forall|f: u64| #![trigger p_call(toks, cfg, st, f)] pdone(p_call(toks, cfg, st, f)) implies p_call(toks, cfg, st, f) == g by {
                 assert(f > 0);
                 if !empty { assert(pdone(p_arg_list(toks, cfg, e.st, seq![], 0u64, (f - 1) as u64))); }
             }
         }
-        (Ok((Expr::Call(name, args), h + 1)), Ghost(g))
+        (Ok((idx, h + 1)), Ghost(g))
     }
 
     /// Parses a named expression, then a postfix `++`/`--` or an assignment that binds to it.
     #[verifier::rlimit(60)]
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_named_tail(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Expr, usize), BcError>, Ghost<GResult>))
+    fn parse_named_tail(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -1554,16 +1573,15 @@ impl Parser {
                     return (Err(x), Ghost(e));
                 },
             }
+            let idx = self.add_expr(PNode::Update(is_inc, false, target), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e.st), Ghost(Node::Update(is_inc, false, a.node)), Ghost(inc(a.h)));
             let ghost g = add_node(e.st, Node::Update(is_inc, false, a.node), inc(a.h));
             proof {
-                lemma_node(*self, toks, cfg, st, e.st, Node::Update(is_inc, false, a.node), inc(a.h));
-                lemma_r_expr_extend(target, a.st.nodes, g.st.nodes, a.node);
                 assert forall|f: u64| #![trigger p_named_tail(toks, cfg, st, f)] pdone(p_named_tail(toks, cfg, st, f)) implies p_named_tail(toks, cfg, st, f) == g by {
                     assert(f > 0);
                     assert(pdone(p_named(toks, cfg, st, (f - 1) as u64)));
                 }
             }
-            return (Ok((Expr::Update(is_inc, false, Box::new(target)), target_h + 1)), Ghost(g));
+            return (Ok((idx, target_h + 1)), Ghost(g));
         }
         if matches!(k, TokenType::AssignOp) {
             // As in GNU bc's grammar, an assignment operator binds to the named
@@ -1599,11 +1617,9 @@ impl Parser {
                 },
             };
             let ghost nd = Node::Assign(s_assign_code(t), a.node, v.node);
+            let idx = self.add_expr(PNode::Assign(op, target, value), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(v.st), Ghost(nd), Ghost(inc(max_u64(a.h, v.h))));
             let ghost g = add_node(v.st, nd, inc(max_u64(a.h, v.h)));
             proof {
-                lemma_node(*self, toks, cfg, st, v.st, nd, inc(max_u64(a.h, v.h)));
-                lemma_r_expr_extend(target, a.st.nodes, g.st.nodes, a.node);
-                lemma_r_expr_extend(value, v.st.nodes, g.st.nodes, v.node);
                 assert forall|f: u64| #![trigger p_named_tail(toks, cfg, st, f)] pdone(p_named_tail(toks, cfg, st, f)) implies p_named_tail(toks, cfg, st, f) == g by {
                     assert(f > 0);
                     assert(pdone(p_named(toks, cfg, st, (f - 1) as u64)));
@@ -1611,7 +1627,7 @@ impl Parser {
                 }
             }
             let h = 1 + max_height(target_h, value_h);
-            return (Ok((Expr::AssignOp(op, Box::new(target), Box::new(value)), h)), Ghost(g));
+            return (Ok((idx, h)), Ghost(g));
         }
         proof {
                 assert forall|f: u64| #![trigger p_named_tail(toks, cfg, st, f)] pdone(p_named_tail(toks, cfg, st, f)) implies p_named_tail(toks, cfg, st, f) == a by {
@@ -1624,12 +1640,12 @@ impl Parser {
 
     /// Parses variables, arrays, or register accesses.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_named_expression(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Expr, usize), BcError>, Ghost<GResult>))
+    fn parse_named_expression(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
             r_eres(r.0, *final(self), toks, cfg, st, r.1@),
-            r.0 matches Ok((x, h)) ==> named(x) && h <= final(self).max_depth + 1,
+            r.0 matches Ok((_, h)) ==> h <= final(self).max_depth + 1,
             forall|f: u64| #![trigger p_named(toks, cfg, st, f)] pdone(p_named(toks, cfg, st, f)) ==> p_named(toks, cfg, st, f) == r.1@,
     {
         let ghost t = cur_tok(toks, st);
@@ -1642,9 +1658,9 @@ impl Parser {
                 Ok(()) => {},
                 Err(x) => return (Err(x), Ghost(e)),
             }
+            let idx = self.add_expr(PNode::Reg(reg), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e.st), Ghost(Node::Reg(code)), Ghost(1u64));
             let ghost g = add_node(e.st, Node::Reg(code), 1u64);
-            proof { lemma_node(*self, toks, cfg, st, e.st, Node::Reg(code), 1u64); }
-            return (Ok((Expr::RegisterAccess(reg), 1)), Ghost(g));
+            return (Ok((idx, 1)), Ghost(g));
         }
         if matches!(k, TokenType::Letter) {
             let ghost n = s_eat_name(toks, cfg, st);
@@ -1664,22 +1680,22 @@ impl Parser {
                 }
                 return (res, Ghost(a));
             }
+            let idx = self.add_expr(PNode::Var(name), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(n.st), Ghost(Node::Var(n.name)), Ghost(1u64));
             let ghost g = add_node(n.st, Node::Var(n.name), 1u64);
-            proof { lemma_node(*self, toks, cfg, st, n.st, Node::Var(n.name), 1u64); }
-            return (Ok((Expr::Variable(name), 1)), Ghost(g));
+            return (Ok((idx, 1)), Ghost(g));
         }
         (Err(BcError::Syntax { line: self.current_token.line, message: syntax_error_text() }), Ghost(syntax_at(st, t.line)))
     }
 
     /// Parses `[ expression ]` after the array name `name`.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_subscript(&mut self, name: String, Ghost(sname): Ghost<GBytes>, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Expr, usize), BcError>, Ghost<GResult>))
+    fn parse_subscript(&mut self, name: String, Ghost(sname): Ghost<GBytes>, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             text_view(name) == sname,
         ensures
             r_eres(r.0, *final(self), toks, cfg, st, r.1@),
-            r.0 matches Ok((x, h)) ==> x is ArrayAccess && h <= final(self).max_depth + 1,
+            r.0 matches Ok((x, h)) ==> h <= final(self).max_depth + 1,
             forall|f: u64| #![trigger p_subscript(toks, cfg, st, sname, f)] pdone(p_subscript(toks, cfg, st, sname, f)) ==> p_subscript(toks, cfg, st, sname, f) == r.1@,
     {
         let ghost e = s_eat(toks, st, Tok::Lbracket);
@@ -1713,34 +1729,33 @@ impl Parser {
                 return (Err(y), Ghost(e2));
             },
         }
+        let node_idx = self.add_expr(PNode::Array(name, idx), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e2.st), Ghost(Node::Array(sname, a.node)), Ghost(inc(a.h)));
         let ghost g = add_node(e2.st, Node::Array(sname, a.node), inc(a.h));
         proof {
-            lemma_node(*self, toks, cfg, st, e2.st, Node::Array(sname, a.node), inc(a.h));
-            lemma_r_expr_extend(idx, a.st.nodes, g.st.nodes, a.node);
                 assert forall|f: u64| #![trigger p_subscript(toks, cfg, st, sname, f)] pdone(p_subscript(toks, cfg, st, sname, f)) implies p_subscript(toks, cfg, st, sname, f) == g by {
                     assert(f > 0);
                     assert(pdone(p_expr_prec(toks, cfg, e.st, 0i8, (f - 1) as u64)));
                 }
         }
-        (Ok((Expr::ArrayAccess(name, Box::new(idx)), h + 1)), Ghost(g))
+        (Ok((node_idx, h + 1)), Ghost(g))
     }
 
     /// Parses function call argument list; the height is that of the highest argument.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_argument_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Vec<ExprOrArray>, usize), BcError>, Ghost<GResult>))
+    fn parse_argument_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Vec<PArg>, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
             r_ares(r.0, *final(self), toks, cfg, st, r.1@),
             forall|f: u64| #![trigger p_arg_list(toks, cfg, st, seq![], 0u64, f)] pdone(p_arg_list(toks, cfg, st, seq![], 0u64, f)) ==> p_arg_list(toks, cfg, st, seq![], 0u64, f) == r.1@,
     {
-        let mut args: Vec<ExprOrArray> = Vec::new();
+        let mut args: Vec<PArg> = Vec::new();
         let mut height: usize = 0;
         let ghost mut cur = st;
         let ghost mut acc = Seq::<Arg>::empty();
         let ghost mut sh = 0u64;
         proof {
-            assert(args@ =~= Seq::<ExprOrArray>::empty());
+            assert(args@ =~= Seq::<PArg>::empty());
             lemma_al_start(toks, cfg, st);
         }
         loop
@@ -1751,7 +1766,7 @@ impl Parser {
                 cur.nodes.len() - st.nodes.len() <= cur.cur - st.cur,
                 cur.depth == st.depth,
                 st.nodes.len() <= 2 * st.cur,
-                r_args(args@, cur.nodes, acc),
+                r_args(args@, acc),
                 height as u64 == sh,
                 height <= self.max_depth + 1,
                 al_chain(toks, cfg, st, cur, acc, sh),
@@ -1828,10 +1843,9 @@ impl Parser {
                 }
                 proof {
                     a = PR { ok: true, err: no_err(), st: e2.st, node: 0usize, h: 1u64, flag: false, list: seq![], params: seq![], args: seq![], name: n.name };
-                    lemma_r_args_extend(old_args, c.nodes, a.st.nodes, a0);
                 }
-                args.push(ExprOrArray::ArrayArg(name));
-                proof { assert(r_arg(args@.last(), a.st.nodes, Arg { is_array: is_arr, name: a.name, expr: a.node })); }
+                args.push(PArg::Array(name));
+                proof { assert(r_arg(args@.last(), Arg { is_array: is_arr, name: a.name, expr: a.node })); }
                 arg_h = 1;
             } else {
                 let (res, Ghost(v)) = self.parse_expr_precedence(0, Ghost(toks), Ghost(cfg), Ghost(c));
@@ -1849,10 +1863,9 @@ impl Parser {
                 };
                 proof {
                     a = v;
-                    lemma_r_args_extend(old_args, c.nodes, a.st.nodes, a0);
                 }
-                args.push(ExprOrArray::Expr(x));
-                proof { assert(r_arg(args@.last(), a.st.nodes, Arg { is_array: is_arr, name: a.name, expr: a.node })); }
+                args.push(PArg::Expr(x));
+                proof { assert(r_arg(args@.last(), Arg { is_array: is_arr, name: a.name, expr: a.node })); }
                 arg_h = h;
             }
             let ghost arg_s = Arg { is_array: is_arr, name: a.name, expr: a.node };
@@ -1860,7 +1873,7 @@ impl Parser {
             let ghost h1 = max_u64(h0, a.h);
             proof {
                 assert(args@ =~= old_args.push(args@.last()));
-                lemma_r_args_push(old_args, a.st.nodes, a0, args@.last(), arg_s);
+                lemma_r_args_push(old_args, a0, args@.last(), arg_s);
             }
             height = max_height(height, arg_h);
             if !matches!(self.current_token.token_type, TokenType::Comma) {
@@ -2036,63 +2049,76 @@ spec fn r_sgrown(s0: PState, s: PState) -> bool {
     &&& s.depth == s0.depth
 }
 
-spec fn r_sres(r: Result<Stmt, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+spec fn r_sres(r: Result<usize, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
-        Ok(x) => p.ok && p.flag && r_p(q, toks, cfg, p.st) && r_sgrown(s0, p.st) && r_stmt(x, p.st.nodes, p.node),
+        Ok(x) => p.ok && p.flag && r_p(q, toks, cfg, p.st) && r_sgrown(s0, p.st) && x == p.node && x < p.st.nodes.len(),
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
 
-spec fn r_lres(r: Result<Vec<Stmt>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+spec fn r_lres(r: Result<Vec<usize>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
         Ok(l) => p.ok && r_p(q, toks, cfg, p.st) && extends(s0.nodes, p.st.nodes) && p.st.cur >= s0.cur
             && p.st.nodes.len() - s0.nodes.len() <= 2 * (p.st.cur - s0.cur) && p.st.depth == s0.depth
-            && r_stmts(l@, p.st.nodes, p.list),
+            && l@ == p.list,
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
 
 /// `Parser::parse_input_item`: `flag` tells whether there is an item.
-spec fn r_ires(r: Result<Option<Stmt>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
+spec fn r_ires(r: Result<Option<usize>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
         Ok(o) => p.ok && r_pc(q, toks, cfg, p.st) && extends(s0.nodes, p.st.nodes) && p.st.cur >= s0.cur
             && p.st.nodes.len() - s0.nodes.len() <= 2 * (p.st.cur - s0.cur) && p.st.depth == s0.depth
             && match o {
-                Some(x) => p.flag && r_stmt(x, p.st.nodes, p.node),
+                Some(x) => p.flag && x == p.node && x < p.st.nodes.len(),
                 None => !p.flag,
             },
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
 
-/// Adding a statement's node.
-proof fn lemma_stmt_node(q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, s: PState, n: Node, h: u64)
-    requires
-        r_pc(q, toks, cfg, s),
-        extends(s0.nodes, s.nodes),
-        s0.nodes.len() <= 2 * s0.cur,
-        s.cur > s0.cur,
-        s.nodes.len() - s0.nodes.len() + 1 <= 2 * (s.cur - s0.cur),
-        s.depth == s0.depth,
-    ensures
-        ({
+impl Parser {
+    /// Adds a statement's node to the arena (the specification's `add_node`).
+    fn add_stmt(&mut self, pn: PNode, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(s0): Ghost<GState>, Ghost(s): Ghost<GState>, Ghost(n): Ghost<GNode>, Ghost(h): Ghost<u64>) -> (idx: usize)
+        requires
+            r_pc(*old(self), toks, cfg, s),
+            r_node(pn, n),
+            extends(s0.nodes, s.nodes),
+            s0.nodes.len() <= 2 * s0.cur,
+            s.cur > s0.cur,
+            s.nodes.len() - s0.nodes.len() + 1 <= 2 * (s.cur - s0.cur),
+            s.depth == s0.depth,
+        ensures
+            pushed(*old(self), *final(self), pn),
+            ({
+                let g = add_node(s, n, h);
+                &&& g.ok
+                &&& g.flag
+                &&& g.node == idx
+                &&& idx == s.nodes.len()
+                &&& g.st.nodes.len() == s.nodes.len() + 1
+                &&& g.st.nodes[g.node as int] == n
+                &&& g.st.cur == s.cur
+                &&& g.st.ext == s.ext
+                &&& r_pc(*final(self), toks, cfg, g.st)
+                &&& (s.cur < toks.len() ==> r_p(*final(self), toks, cfg, g.st))
+                &&& extends(s.nodes, g.st.nodes)
+                &&& r_sgrown(s0, g.st)
+            }),
+    {
+        let idx = self.nodes.len();
+        self.nodes.push(pn);
+        proof {
             let g = add_node(s, n, h);
-            &&& g.ok
-            &&& g.flag
-            &&& g.node == s.nodes.len()
-            &&& g.st.nodes.len() == s.nodes.len() + 1
-            &&& g.st.nodes[g.node as int] == n
-            &&& g.st.cur == s.cur
-            &&& g.st.ext == s.ext
-            &&& r_pc(q, toks, cfg, g.st)
-            &&& (s.cur < toks.len() ==> r_p(q, toks, cfg, g.st))
-            &&& extends(s.nodes, g.st.nodes)
-            &&& r_sgrown(s0, g.st)
-        }),
-{
-    let g = add_node(s, n, h);
-    assert(g.st.nodes =~= s.nodes.push(n));
-    assert(cur_tok(toks, g.st) == cur_tok(toks, s));
+            assert(g.st.nodes =~= s.nodes.push(n));
+            assert(cur_tok(toks, g.st) == cur_tok(toks, s));
+            assert forall|i: int| 0 <= i < self.nodes@.len() implies #[trigger] r_node(self.nodes@[i], g.st.nodes[i]) by {
+                if i < s.nodes.len() { assert(r_node(old(self).nodes@[i], s.nodes[i])); }
+            }
+        }
+        idx
+    }
 }
 
 spec fn semi_chain(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>) -> bool {
@@ -2233,17 +2259,17 @@ proof fn lemma_prog_next(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, 
 impl Parser {
     /// Parses the program fully, returning Err on lexical/syntax error or `"quit"`.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_program_ref(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<Stmt>, BcError>, Ghost<GResult>))
+    fn parse_program_ref(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<usize>, BcError>, Ghost<GResult>))
         requires
             r_pc(*old(self), toks, cfg, st),
         ensures
             match r.0 {
-                Ok(l) => r.1@.ok && r_stmts(l@, r.1@.st.nodes, r.1@.list) && r_ext(final(self).extension_uses@, r.1@.st.ext),
+                Ok(l) => r.1@.ok && l@ == r.1@.list && r_nodes(final(self).nodes@, r.1@.st.nodes) && r_ext(final(self).extension_uses@, r.1@.st.ext),
                 Err(x) => r_perr(x, final(self).extension_uses@, r.1@),
             },
             forall|f: u64| #![trigger p_program(toks, cfg, st, seq![], f)] pdone(p_program(toks, cfg, st, seq![], f)) ==> p_program(toks, cfg, st, seq![], f) == r.1@,
     {
-        let mut stmts: Vec<Stmt> = Vec::new();
+        let mut stmts: Vec<usize> = Vec::new();
         let ghost mut cur = st;
         let ghost mut acc = Seq::<usize>::empty();
         proof { lemma_prog_start(toks, cfg, st); }
@@ -2253,7 +2279,7 @@ impl Parser {
                 extends(st.nodes, cur.nodes),
                 st.nodes.len() <= 2 * st.cur,
                 cur.nodes.len() <= 2 * cur.cur,
-                r_stmts(stmts@, cur.nodes, acc),
+                stmts@ == acc,
                 prog_chain(toks, cfg, st, cur, acc),
         {
             let ghost (c, a0) = (cur, acc);
@@ -2283,11 +2309,9 @@ impl Parser {
                     return (Err(x), Ghost(i));
                 },
             };
-            proof { lemma_r_stmts_extend(old_stmts, c.nodes, i.st.nodes, a0); }
             match item {
                 Some(x) => {
                     let ghost a1 = a0.push(i.node);
-                    proof { lemma_r_stmts_push(old_stmts, i.st.nodes, a0, x, i.node); }
                     stmts.push(x);
                     proof { assert(stmts@ =~= old_stmts.push(x)); }
                     proof {
@@ -2316,7 +2340,7 @@ impl Parser {
     /// Parses a single top-level item (statement block or function definition).
     #[verifier::rlimit(60)]
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_input_item(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Option<Stmt>, BcError>, Ghost<GResult>))
+    fn parse_input_item(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Option<usize>, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -2377,32 +2401,31 @@ impl Parser {
             }
             (Ok(None), Ghost(g))
         } else {
+            let idx = self.add_stmt(PNode::Block(lst), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e.st), Ghost(Node::Block(l.list)), Ghost(0u64));
             let ghost g = add_node(e.st, Node::Block(l.list), 0u64);
             proof {
                 assert(e.st.cur == l.st.cur + 1);
-                lemma_stmt_node(*self, toks, cfg, st, e.st, Node::Block(l.list), 0u64);
-                lemma_r_stmts_extend(lst@, l.st.nodes, g.st.nodes, l.list);
                 assert(lst@.len() == l.list.len());
                 assert forall|f: u64| #![trigger p_input_item(toks, cfg, st, f)] pdone(p_input_item(toks, cfg, st, f)) implies p_input_item(toks, cfg, st, f) == g by {
                     assert(f > 0);
                     assert(pdone(p_semicolon_list(toks, cfg, st, seq![], (f - 1) as u64)));
                 }
             }
-            (Ok(Some(Stmt::Block(lst))), Ghost(g))
+            (Ok(Some(idx)), Ghost(g))
         }
     }
 
     /// Parses a list of statements separated by semicolons.
     #[verifier::rlimit(300)]
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_semicolon_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<Stmt>, BcError>, Ghost<GResult>))
+    fn parse_semicolon_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<usize>, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
             r_lres(r.0, *final(self), toks, cfg, st, r.1@),
             forall|f: u64| #![trigger p_semicolon_list(toks, cfg, st, seq![], f)] pdone(p_semicolon_list(toks, cfg, st, seq![], f)) ==> p_semicolon_list(toks, cfg, st, seq![], f) == r.1@,
     {
-        let mut stmts: Vec<Stmt> = Vec::new();
+        let mut stmts: Vec<usize> = Vec::new();
         let ghost mut cur = st;
         let ghost mut acc = Seq::<usize>::empty();
         proof { lemma_semi_start(toks, cfg, st); }
@@ -2414,7 +2437,7 @@ impl Parser {
                 cur.nodes.len() - st.nodes.len() <= 2 * (cur.cur - st.cur),
                 cur.depth == st.depth,
                 st.nodes.len() <= 2 * st.cur,
-                r_stmts(stmts@, cur.nodes, acc),
+                stmts@ == acc,
                 semi_chain(toks, cfg, st, cur, acc),
         {
             let ghost (c, a0) = (cur, acc);
@@ -2465,10 +2488,6 @@ impl Parser {
                     },
                 };
                 let ghost a1 = a0.push(i.node);
-                proof {
-                    lemma_r_stmts_extend(old_stmts, c.nodes, i.st.nodes, a0);
-                    lemma_r_stmts_push(old_stmts, i.st.nodes, a0, x, i.node);
-                }
                 stmts.push(x);
                 proof { assert(stmts@ =~= old_stmts.push(x)); }
                 if !matches!(self.current_token.token_type, TokenType::Semicolon) {
@@ -2510,14 +2529,14 @@ impl Parser {
     /// Parses a list of statements within a block (with newline and semicolon separations).
     #[verifier::rlimit(300)]
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_statement_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<Stmt>, BcError>, Ghost<GResult>))
+    fn parse_statement_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<usize>, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
             r_lres(r.0, *final(self), toks, cfg, st, r.1@),
             forall|f: u64| #![trigger p_statement_list(toks, cfg, st, seq![], f)] pdone(p_statement_list(toks, cfg, st, seq![], f)) ==> p_statement_list(toks, cfg, st, seq![], f) == r.1@,
     {
-        let mut stmts: Vec<Stmt> = Vec::new();
+        let mut stmts: Vec<usize> = Vec::new();
         let ghost mut cur = st;
         let ghost mut acc = Seq::<usize>::empty();
         proof { lemma_sl_start(toks, cfg, st); }
@@ -2529,7 +2548,7 @@ impl Parser {
                 cur.nodes.len() - st.nodes.len() <= 2 * (cur.cur - st.cur),
                 cur.depth == st.depth,
                 st.nodes.len() <= 2 * st.cur,
-                r_stmts(stmts@, cur.nodes, acc),
+                stmts@ == acc,
                 sl_chain(toks, cfg, st, cur, acc),
         {
             let ghost (c, a0) = (cur, acc);
@@ -2573,10 +2592,6 @@ impl Parser {
                 },
             };
             let ghost a1 = a0.push(i.node);
-            proof {
-                lemma_r_stmts_extend(old_stmts, c.nodes, i.st.nodes, a0);
-                lemma_r_stmts_push(old_stmts, i.st.nodes, a0, x, i.node);
-            }
             stmts.push(x);
             proof { assert(stmts@ =~= old_stmts.push(x)); }
             let nk = self.current_token.token_type;
@@ -2632,7 +2647,7 @@ impl Parser {
 
     /// Parses one statement as one level of nesting.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_statement(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_statement(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -2674,7 +2689,7 @@ impl Parser {
 
     /// Parses a loop body, tracking the loop nesting for `break`.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_loop_body(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_loop_body(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -2713,7 +2728,7 @@ impl Parser {
 
     #[verifier::rlimit(100)]
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_statement_inner(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_statement_inner(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -2809,7 +2824,7 @@ impl Parser {
     }
 
     /// Parses a string statement.
-    fn parse_string_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_string_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             cur_tok(toks, st).kind is Str,
@@ -2823,14 +2838,14 @@ impl Parser {
             Ok(()) => {},
             Err(x) => return (Err(x), Ghost(e)),
         }
+        let idx = self.add_stmt(PNode::Str(val), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e.st), Ghost(Node::Str(val@)), Ghost(0u64));
         let ghost g = add_node(e.st, Node::Str(val@), 0u64);
-        proof { lemma_stmt_node(*self, toks, cfg, st, e.st, Node::Str(val@), 0u64); }
-        (Ok(Stmt::StringLiteral(val)), Ghost(g))
+        (Ok(idx), Ghost(g))
     }
 
     /// Parses `break`, which must be inside a loop. GNU bc reports a stray `break` on its own
     /// line, and a stray `return` on the line of the token after it.
-    fn parse_break_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_break_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             cur_tok(toks, st).kind is Break,
@@ -2846,14 +2861,14 @@ impl Parser {
             Ok(()) => {},
             Err(x) => return (Err(x), Ghost(e)),
         }
+        let idx = self.add_stmt(PNode::Break, Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e.st), Ghost(Node::Break), Ghost(0u64));
         let ghost g = add_node(e.st, Node::Break, 0u64);
-        proof { lemma_stmt_node(*self, toks, cfg, st, e.st, Node::Break, 0u64); }
-        (Ok(Stmt::Break), Ghost(g))
+        (Ok(idx), Ghost(g))
     }
 
     /// Parses `return`, which must be inside a function.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_return_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_return_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             cur_tok(toks, st).kind is Return,
@@ -2895,7 +2910,7 @@ impl Parser {
 
     /// Parses `{ statement_list }`.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_block(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_block(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             cur_tok(toks, st).kind is Lbrace,
@@ -2934,21 +2949,20 @@ impl Parser {
                 return (Err(x), Ghost(e2));
             },
         }
+        let idx = self.add_stmt(PNode::Block(stmts), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e2.st), Ghost(Node::Block(l.list)), Ghost(0u64));
         let ghost g = add_node(e2.st, Node::Block(l.list), 0u64);
         proof {
-            lemma_stmt_node(*self, toks, cfg, st, e2.st, Node::Block(l.list), 0u64);
-            lemma_r_stmts_extend(stmts@, l.st.nodes, g.st.nodes, l.list);
             assert forall|f: u64| #![trigger p_block(toks, cfg, st, f)] pdone(p_block(toks, cfg, st, f)) implies p_block(toks, cfg, st, f) == g by {
                 assert(f > 0);
                 assert(pdone(p_statement_list(toks, cfg, e.st, seq![], (f - 1) as u64)));
             }
         }
-        (Ok(Stmt::Block(stmts)), Ghost(g))
+        (Ok(idx), Ghost(g))
     }
 
     /// Parses an expression statement; a relational one is a GNU extension.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_expr_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_expr_stmt(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
         ensures
@@ -2968,28 +2982,27 @@ impl Parser {
                 return (Err(y), Ghost(a));
             },
         };
-        proof { lemma_is_rel(x, a.st.nodes, a.node); }
+        proof { assert(r_node(self.nodes@[x as int], a.st.nodes[x as int])); }
         let ghost st2 = if a.st.nodes[a.node as int] is Rel { s_extension(toks, cfg, a.st, comparison_msg()) } else { a.st };
-        if matches!(x, Expr::RelationalOp(..)) {
+        if matches!(self.nodes[x], PNode::Rel(..)) {
             self.extension(comparison_text(), Ghost(toks), Ghost(cfg), Ghost(a.st), Ghost(comparison_msg()));
         }
+        let idx = self.add_stmt(PNode::ExprStmt(x), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(st2), Ghost(Node::ExprStmt(a.node)), Ghost(0u64));
         let ghost g = add_node(st2, Node::ExprStmt(a.node), 0u64);
         proof {
             assert(cur_tok(toks, st2) == cur_tok(toks, a.st));
-            lemma_stmt_node(*self, toks, cfg, st, st2, Node::ExprStmt(a.node), 0u64);
-            lemma_r_expr_extend(x, a.st.nodes, g.st.nodes, a.node);
             assert forall|f: u64| #![trigger p_expr_stmt(toks, cfg, st, f)] pdone(p_expr_stmt(toks, cfg, st, f)) implies p_expr_stmt(toks, cfg, st, f) == g by {
                 assert(f > 0);
                 assert(pdone(p_relational(toks, cfg, st, (f - 1) as u64)));
             }
         }
-        (Ok(Stmt::Expr(x)), Ghost(g))
+        (Ok(idx), Ghost(g))
     }
 
     /// Parses the `for` statement.
     #[verifier::rlimit(60)]
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_for(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_for(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             cur_tok(toks, st).kind is For,
@@ -3108,13 +3121,9 @@ impl Parser {
             },
         };
         let ghost nd = Node::For(i.node, c.node, u.node, b.node);
+        let idx = self.add_stmt(PNode::For(init, cond, post, body), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(b.st), Ghost(nd), Ghost(0u64));
         let ghost g = add_node(b.st, nd, 0u64);
         proof {
-            lemma_stmt_node(*self, toks, cfg, st, b.st, nd, 0u64);
-            lemma_r_expr_extend(init, i.st.nodes, g.st.nodes, i.node);
-            lemma_r_expr_extend(cond, c.st.nodes, g.st.nodes, c.node);
-            lemma_r_expr_extend(post, u.st.nodes, g.st.nodes, u.node);
-            lemma_r_stmt_extend(body, b.st.nodes, g.st.nodes, b.node);
             assert forall|f: u64| #![trigger p_for(toks, cfg, st, f)] pdone(p_for(toks, cfg, st, f)) implies p_for(toks, cfg, st, f) == g by {
                 assert(f > 0);
                 assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
@@ -3123,12 +3132,12 @@ impl Parser {
                 assert(pdone(p_loop_body(toks, cfg, e5.st, (f - 1) as u64)));
             }
         }
-        (Ok(Stmt::For(init, cond, post, Box::new(body))), Ghost(g))
+        (Ok(idx), Ghost(g))
     }
 
     /// Parses the keyword `if` or `while` and the `( relational_expression )` after it.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_cond(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Expr, BcError>, Ghost<GResult>))
+    fn parse_cond(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             !(cur_tok(toks, st).kind is Eof),
@@ -3177,7 +3186,7 @@ impl Parser {
 
     /// Parses the `if` statement.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_if(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_if(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             cur_tok(toks, st).kind is If,
@@ -3212,23 +3221,21 @@ impl Parser {
                 return (Err(x), Ghost(b));
             },
         };
+        let idx = self.add_stmt(PNode::If(cond, body), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(b.st), Ghost(Node::If(c.node, b.node)), Ghost(0u64));
         let ghost g = add_node(b.st, Node::If(c.node, b.node), 0u64);
         proof {
-            lemma_stmt_node(*self, toks, cfg, st, b.st, Node::If(c.node, b.node), 0u64);
-            lemma_r_expr_extend(cond, c.st.nodes, g.st.nodes, c.node);
-            lemma_r_stmt_extend(body, b.st.nodes, g.st.nodes, b.node);
             assert forall|f: u64| #![trigger p_if(toks, cfg, st, f)] pdone(p_if(toks, cfg, st, f)) implies p_if(toks, cfg, st, f) == g by {
                 assert(f > 0);
                 assert(pdone(p_cond(toks, cfg, st, (f - 1) as u64)));
                 assert(pdone(p_statement(toks, cfg, c.st, (f - 1) as u64)));
             }
         }
-        (Ok(Stmt::If(cond, Box::new(body))), Ghost(g))
+        (Ok(idx), Ghost(g))
     }
 
     /// Parses the `while` statement.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_while(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_while(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             cur_tok(toks, st).kind is While,
@@ -3263,24 +3270,22 @@ impl Parser {
                 return (Err(x), Ghost(b));
             },
         };
+        let idx = self.add_stmt(PNode::While(cond, body), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(b.st), Ghost(Node::While(c.node, b.node)), Ghost(0u64));
         let ghost g = add_node(b.st, Node::While(c.node, b.node), 0u64);
         proof {
-            lemma_stmt_node(*self, toks, cfg, st, b.st, Node::While(c.node, b.node), 0u64);
-            lemma_r_expr_extend(cond, c.st.nodes, g.st.nodes, c.node);
-            lemma_r_stmt_extend(body, b.st.nodes, g.st.nodes, b.node);
             assert forall|f: u64| #![trigger p_while(toks, cfg, st, f)] pdone(p_while(toks, cfg, st, f)) implies p_while(toks, cfg, st, f) == g by {
                 assert(f > 0);
                 assert(pdone(p_cond(toks, cfg, st, (f - 1) as u64)));
                 assert(pdone(p_loop_body(toks, cfg, c.st, (f - 1) as u64)));
             }
         }
-        (Ok(Stmt::While(cond, Box::new(body))), Ghost(g))
+        (Ok(idx), Ghost(g))
     }
 
     /// Parses `return`, `return (e)`, or the GNU extension `return e`.
     #[verifier::rlimit(60)]
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_return(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_return(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             cur_tok(toks, st).kind is Return,
@@ -3306,9 +3311,9 @@ impl Parser {
                     Ok(()) => {},
                     Err(x) => return (Err(x), Ghost(e3)),
                 }
+                let idx = self.add_stmt(PNode::Return(None), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e3.st), Ghost(Node::Return(false, 0usize)), Ghost(0u64));
                 let ghost g = add_node(e3.st, Node::Return(false, 0usize), 0u64);
-                proof { lemma_stmt_node(*self, toks, cfg, st, e3.st, Node::Return(false, 0usize), 0u64); }
-                return (Ok(Stmt::Return(None)), Ghost(g));
+                return (Ok(idx), Ghost(g));
             }
             let (res, Ghost(v)) = self.parse_expression(Ghost(toks), Ghost(cfg), Ghost(e2.st));
             let x = match res {
@@ -3336,16 +3341,15 @@ impl Parser {
                     return (Err(y), Ghost(e3));
                 },
             }
+            let idx = self.add_stmt(PNode::Return(Some(x)), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e3.st), Ghost(Node::Return(true, v.node)), Ghost(0u64));
             let ghost g = add_node(e3.st, Node::Return(true, v.node), 0u64);
             proof {
-                lemma_stmt_node(*self, toks, cfg, st, e3.st, Node::Return(true, v.node), 0u64);
-                lemma_r_expr_extend(x, v.st.nodes, g.st.nodes, v.node);
                 assert forall|f: u64| #![trigger p_return(toks, cfg, st, f)] pdone(p_return(toks, cfg, st, f)) implies p_return(toks, cfg, st, f) == g by {
                     assert(f > 0);
                     assert(pdone(p_expr_prec(toks, cfg, e2.st, 0i8, (f - 1) as u64)));
                 }
             }
-            return (Ok(Stmt::Return(Some(x))), Ghost(g));
+            return (Ok(idx), Ghost(g));
         }
         // GNU extension: return without parentheses
         let nt = self.current_token.token_type;
@@ -3367,32 +3371,31 @@ impl Parser {
             };
             self.extension(return_paren_text(), Ghost(toks), Ghost(cfg), Ghost(v.st), Ghost(return_paren_msg()));
             let ghost st2 = s_extension(toks, cfg, v.st, return_paren_msg());
+            let idx = self.add_stmt(PNode::Return(Some(x)), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(st2), Ghost(Node::Return(true, v.node)), Ghost(0u64));
             let ghost g = add_node(st2, Node::Return(true, v.node), 0u64);
             proof {
                 assert(cur_tok(toks, st2) == cur_tok(toks, v.st));
-                lemma_stmt_node(*self, toks, cfg, st, st2, Node::Return(true, v.node), 0u64);
-                lemma_r_expr_extend(x, v.st.nodes, g.st.nodes, v.node);
                 assert forall|f: u64| #![trigger p_return(toks, cfg, st, f)] pdone(p_return(toks, cfg, st, f)) implies p_return(toks, cfg, st, f) == g by {
                     assert(f > 0);
                     assert(pdone(p_expr_prec(toks, cfg, e.st, 0i8, (f - 1) as u64)));
                 }
             }
-            (Ok(Stmt::Return(Some(x))), Ghost(g))
+            (Ok(idx), Ghost(g))
         } else {
+            let idx = self.add_stmt(PNode::Return(None), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e.st), Ghost(Node::Return(false, 0usize)), Ghost(0u64));
             let ghost g = add_node(e.st, Node::Return(false, 0usize), 0u64);
             proof {
-                lemma_stmt_node(*self, toks, cfg, st, e.st, Node::Return(false, 0usize), 0u64);
                 assert forall|f: u64| #![trigger p_return(toks, cfg, st, f)] pdone(p_return(toks, cfg, st, f)) implies p_return(toks, cfg, st, f) == g by {
                     assert(f > 0);
                 }
             }
-            (Ok(Stmt::Return(None)), Ghost(g))
+            (Ok(idx), Ghost(g))
         }
     }
 
     /// Parses a function definition `define f(x) { ... }`.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_function(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_function(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             cur_tok(toks, st).kind is Define,
@@ -3449,7 +3452,7 @@ impl Parser {
 
     /// Parses the rest of a function definition after its parameter list.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_function_body(&mut self, name: String, name_bytes: &[u8], params: Vec<Param>, Ghost(sname): Ghost<GBytes>, Ghost(sparams): Ghost<GParams>, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_function_body(&mut self, name: String, name_bytes: &[u8], params: Vec<Param>, Ghost(sname): Ghost<GBytes>, Ghost(sparams): Ghost<GParams>, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             text_view(name) == sname,
@@ -3460,7 +3463,7 @@ impl Parser {
             match r.0 {
                 Ok(x) => r.1@.ok && r.1@.flag && r_p(*final(self), toks, cfg, r.1@.st) && extends(st.nodes, r.1@.st.nodes) && r.1@.st.cur > st.cur
                     && r.1@.st.nodes.len() - st.nodes.len() <= 2 * (r.1@.st.cur - st.cur) && r.1@.st.depth == st.depth
-                    && r_stmt(x, r.1@.st.nodes, r.1@.node),
+                    && x == r.1@.node && x < r.1@.st.nodes.len(),
                 Err(x) => r_perr(x, final(self).extension_uses@, r.1@),
             },
             forall|f: u64| #![trigger p_function_body(toks, cfg, st, sname, sparams, f)] pdone(p_function_body(toks, cfg, st, sname, sparams, f)) ==> p_function_body(toks, cfg, st, sname, sparams, f) == r.1@,
@@ -3525,7 +3528,7 @@ impl Parser {
 
     /// Parses the statements of a function body, with `in_function` set and no enclosing loop.
     #[verifier::exec_allows_no_decreases_clause]
-    fn parse_function_stmts(&mut self, name: String, params: Vec<Param>, autos: Vec<Param>, Ghost(sname): Ghost<GBytes>, Ghost(sparams): Ghost<GParams>, Ghost(sautos): Ghost<GParams>, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Stmt, BcError>, Ghost<GResult>))
+    fn parse_function_stmts(&mut self, name: String, params: Vec<Param>, autos: Vec<Param>, Ghost(sname): Ghost<GBytes>, Ghost(sparams): Ghost<GParams>, Ghost(sautos): Ghost<GParams>, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
             text_view(name) == sname,
@@ -3535,7 +3538,7 @@ impl Parser {
             match r.0 {
                 Ok(x) => r.1@.ok && r.1@.flag && r_p(*final(self), toks, cfg, r.1@.st) && extends(st.nodes, r.1@.st.nodes) && r.1@.st.cur > st.cur
                     && r.1@.st.nodes.len() - st.nodes.len() <= 2 * (r.1@.st.cur - st.cur) && r.1@.st.depth == st.depth
-                    && r_stmt(x, r.1@.st.nodes, r.1@.node),
+                    && x == r.1@.node && x < r.1@.st.nodes.len(),
                 Err(x) => r_perr(x, final(self).extension_uses@, r.1@),
             },
             forall|f: u64| #![trigger p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)] pdone(p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)) ==> p_function_stmts(toks, cfg, st, sname, sparams, sautos, f) == r.1@,
@@ -3577,22 +3580,22 @@ impl Parser {
             },
         }
         let ghost nd = Node::Define(sname, sparams, sautos, l.list);
+        let idx = self.add_stmt(PNode::Define(name, params, autos, body), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e8.st), Ghost(nd), Ghost(0u64));
         let ghost g = add_node(e8.st, nd, 0u64);
         proof {
-            lemma_stmt_node(*self, toks, cfg, st, e8.st, nd, 0u64);
-            lemma_r_stmts_extend(body@, l.st.nodes, g.st.nodes, l.list);
             assert forall|f: u64| #![trigger p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)] pdone(p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)) implies p_function_stmts(toks, cfg, st, sname, sparams, sautos, f) == g by {
                 assert(f > 0);
                 assert(pdone(p_statement_list(toks, cfg, st1, seq![], (f - 1) as u64)));
             }
         }
-        (Ok(Stmt::FunctionDef(FunctionDef { name, params, autos, body })), Ghost(g))
+        (Ok(idx), Ghost(g))
     }
 
     /// Parses the program fully, returning Err on lexical/syntax error or `"quit"`. The proved
     /// theorem is that of `parse_program_ref` (connected to the specification in `run_unit`).
     #[verifier::external_body]
-    pub fn try_parse_program(&mut self) -> Result<Vec<Stmt>, BcError> {
+    /// Parses the program: the indices of its statements in the arena [`Parser::take_code`].
+    pub fn try_parse_program(&mut self) -> Result<Vec<usize>, BcError> {
         self.parse_program_ref(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
     }
 }
@@ -3621,14 +3624,14 @@ proof fn lemma_tokenize_wf(t: Seq<u8>)
 
 /// Parses a unit of at most `BC_UNIT_MAX` bytes: the statements or the error, and the extension
 /// uses, are those of the specification's `parse_unit`, unless the specification runs out of fuel.
-pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: usize, Ghost(cfg): Ghost<GCfg>) -> (r: (Result<Vec<Stmt>, BcError>, Vec<(usize, String)>))
+pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: usize, Ghost(cfg): Ghost<GCfg>) -> (r: (Result<Vec<usize>, BcError>, Vec<(usize, String)>, Code))
     requires
         unit@.len() <= 1_000_000_000,
         max_depth < usize::MAX - 2,
         (policy != ExtensionPolicy::Allow) == cfg.record_extensions,
         max_depth as u64 == cfg.max_depth,
     ensures
-        pdone(parse_unit(tokenize(unit@), cfg)) ==> r_parsed(r.0, r.1@, parse_unit(tokenize(unit@), cfg)),
+        pdone(parse_unit(tokenize(unit@), cfg)) ==> r_parsed(r.0, r.1@, r.2, parse_unit(tokenize(unit@), cfg)),
 {
     let ghost toks = tokenize(unit@);
     let ghost st0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: seq![] };
@@ -3639,7 +3642,7 @@ pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: us
         Err(e) => {
             let none = Vec::new();
             proof { assert(r_ext(none@, st0.ext)); }
-            return (Err(e), none);
+            return (Err(e), none, Code { nodes: Vec::new() });
         },
     };
     let mut parser = Parser {
@@ -3652,6 +3655,7 @@ pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: us
         depth: 0,
         last_line: 1,
         max_depth,
+        nodes: Vec::new(),
     };
     proof {
         assert(toks.skip(0) =~= toks);
@@ -3660,6 +3664,7 @@ pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: us
     }
     let (res, Ghost(p)) = parser.parse_program_ref(Ghost(toks), Ghost(cfg), Ghost(st0));
     let ext = parser.extension_uses;
+    let code = Code { nodes: parser.nodes };
     proof {
         let whole = parse_unit(toks, cfg);
         if pdone(whole) {
@@ -3667,7 +3672,7 @@ pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: us
             assert(whole == p);
         }
     }
-    (res, ext)
+    (res, ext, code)
 }
 
 } // verus!
@@ -3686,10 +3691,18 @@ impl Parser {
             depth: 0,
             last_line: 1,
             max_depth: DEFAULT_MAX_DEPTH,
+            nodes: Vec::new(),
         })
     }
 
     /// Sets the nesting limit (see [`DEFAULT_MAX_DEPTH`]).
+    /// The arena of the nodes parsed so far, which it leaves empty.
+    pub fn take_code(&mut self) -> Code {
+        Code {
+            nodes: core::mem::take(&mut self.nodes),
+        }
+    }
+
     pub fn set_max_depth(&mut self, max_depth: usize) {
         self.max_depth = max_depth;
     }
@@ -3709,16 +3722,5 @@ impl Parser {
     /// GNU bc's descriptions (e.g. `multiple letter name - abc`).
     pub fn take_extension_uses(&mut self) -> Vec<(usize, String)> {
         core::mem::take(&mut self.extension_uses)
-    }
-
-    /// Parses the program fully (entry point).
-    #[cfg(test)]
-    pub fn parse_program(&mut self) -> Vec<Stmt> {
-        self.try_parse_program().unwrap_or_else(|e| {
-            if e == BcError::Quit {
-                panic!("quit");
-            }
-            panic!("{:?}", e);
-        })
     }
 }

@@ -5,7 +5,7 @@
 //! Conforms to standard POSIX bc lexical and syntax grammar rules, supporting
 //! operator precedence climbing and backslash-newline continuation.
 
-use alloc::boxed::Box;
+use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 #[cfg(not(verus_keep_ghost))]
@@ -37,6 +37,8 @@ mod lexer;
     reason = "the code keeps the forms that the proofs reason about"
 )]
 mod parse;
+#[cfg(test)]
+pub(crate) mod test_tree;
 #[cfg(test)]
 mod tests;
 
@@ -127,6 +129,15 @@ pub(crate) fn ascii_string(b: &[u8]) -> (r: String)
     b.iter().map(|&x| char::from(x)).collect()
 }
 
+/// Trusted: cloning an `Rc` shares the same value.
+#[verifier::external_body]
+pub(crate) fn share_code(c: &Rc<Code>) -> (r: Rc<Code>)
+    ensures
+        *r == **c,
+{
+    Rc::clone(c)
+}
+
 } // verus!
 
 // --- AST Node Definitions ---
@@ -176,59 +187,62 @@ pub enum AssignOp {
     Compound(BinOp),
 }
 
-/// Enum representing an expression in bc AST.
+/// A call argument: an expression (a node of the arena) or a whole array `a[]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expr {
+pub enum Arg {
+    Expr(usize),
+    Array(String),
+}
+
+/// One node of the syntax tree. Children are indices into the arena [`Code`], and always smaller
+/// than the node's own index. The variants and the order in which the parser adds them are those
+/// of the specification's `Node` (`crates/bc_spec`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Node {
     Number(String),
-    Variable(String),
-    ArrayAccess(String, Box<Expr>),
-    RegisterAccess(Register),
+    Var(String),
+    Array(String, usize),
+    Reg(Register),
     /// Unary minus.
-    Negate(Box<Expr>),
-    BinaryOp(BinOp, Box<Expr>, Box<Expr>),
-    RelationalOp(RelOp, Box<Expr>, Box<Expr>),
+    Neg(usize),
+    Binary(BinOp, usize, usize),
+    Rel(RelOp, usize, usize),
     /// `++`/`--` as `(increment, prefix, target)`.
-    Update(bool, bool, Box<Expr>),
+    Update(bool, bool, usize),
     /// `(operator, target, value)`.
-    AssignOp(AssignOp, Box<Expr>, Box<Expr>),
-    Call(String, Vec<ExprOrArray>),
-    LengthCall(Box<Expr>),
-    SqrtCall(Box<Expr>),
-    ScaleCall(Box<Expr>),
+    Assign(AssignOp, usize, usize),
+    Call(String, Vec<Arg>),
+    Length(usize),
+    Sqrt(usize),
+    ScaleOf(usize),
     /// A parenthesized expression; kept so that `(a = 5)` is printed while `a = 5` is not.
-    Paren(Box<Expr>),
+    Paren(usize),
+    Block(Vec<usize>),
+    ExprStmt(usize),
+    Str(Vec<u8>),
+    Break,
+    Return(Option<usize>),
+    If(usize, usize),
+    While(usize, usize),
+    /// `(init, condition, post, body)`.
+    For(usize, usize, usize, usize),
+    /// `(name, parameters, autos, body)`.
+    Define(String, Vec<Param>, Vec<Param>, Vec<usize>),
 }
 
-/// Enum wrapper for function call arguments which can be standard expressions
-/// or whole arrays (e.g. `a[]`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ExprOrArray {
-    Expr(Expr),
-    ArrayArg(String),
+/// The syntax trees of one input unit. A flat arena: dropping or copying it does not recurse,
+/// whatever the depth of the trees.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Code {
+    pub nodes: Vec<Node>,
 }
 
-/// Struct representing a function definition in bc AST.
+/// A defined function: the `Node::Define` at index `def` of the unit that defined it. The unit
+/// is shared, so a call does not copy the body and a running body survives its redefinition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionDef {
-    pub name: String,
-    pub params: Vec<Param>,
-    pub autos: Vec<Param>,
-    pub body: Vec<Stmt>,
-}
-
-/// Enum representing a statement in bc AST.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Stmt {
-    Block(Vec<Stmt>),
-    Expr(Expr),
-    StringLiteral(Vec<u8>),
-    Break,
-    Quit,
-    Return(Option<Expr>),
-    If(Expr, Box<Stmt>),
-    While(Expr, Box<Stmt>),
-    For(Expr, Expr, Expr, Box<Stmt>),
-    FunctionDef(FunctionDef),
+    pub code: Rc<Code>,
+    pub def: usize,
 }
 
 /// How the parser treats the non-POSIX syntax listed in `docs/COMPATIBILITY.md` §4.
@@ -277,19 +291,19 @@ pub struct ExAssignOp(AssignOp);
 
 #[cfg(verus_keep_ghost)]
 #[verifier::external_type_specification]
-pub struct ExExpr(Expr);
+pub struct ExArg(Arg);
 
 #[cfg(verus_keep_ghost)]
 #[verifier::external_type_specification]
-pub struct ExExprOrArray(ExprOrArray);
+pub struct ExNode(Node);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExCode(Code);
 
 #[cfg(verus_keep_ghost)]
 #[verifier::external_type_specification]
 pub struct ExFunctionDef(FunctionDef);
-
-#[cfg(verus_keep_ghost)]
-#[verifier::external_type_specification]
-pub struct ExStmt(Stmt);
 
 #[cfg(verus_keep_ghost)]
 #[verifier::external_type_specification]
