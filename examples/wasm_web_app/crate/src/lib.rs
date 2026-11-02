@@ -34,8 +34,8 @@ impl BcWriter for SharedBuffer {
 
 /// Nesting limit (`docs/COMPATIBILITY.md` §2). Measured in V8 by `tests/nesting_limit.mjs`: one
 /// level takes at most about 480 bytes of the 1 MiB stack in linear memory, so 1000 levels use 46%
-/// of it, and they also run with half of V8's default stack (492 KB). Other engines are not
-/// measured. An overflow of either stack kills the instance.
+/// of it, and they also run with half of V8's default stack (492 KB). They also ran in Firefox 159,
+/// up to 2000 levels. Safari is not measured. An overflow of either stack kills the instance.
 const WASM_MAX_DEPTH: usize = 1000;
 
 fn new_evaluator(math_enabled: bool, out_buf: &SharedBuffer, err_buf: &SharedBuffer) -> Evaluator {
