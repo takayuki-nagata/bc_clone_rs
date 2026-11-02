@@ -1201,6 +1201,20 @@ mod tests {
 
     #[cfg(all(not(miri), target_pointer_width = "64"))]
     #[test]
+    fn test_accumulator_clone_keeps_the_scan_and_debug_shows_the_lines() {
+        let mut acc = UnitAccumulator::new();
+        assert_eq!(acc.push_line(b"{\n"), None);
+        let mut copy = acc.clone();
+        assert_eq!(copy.push_line(b"}\n"), Some((b"{\n}\n".to_vec(), 1)));
+        assert_eq!(acc.push_line(b"}\n"), Some((b"{\n}\n".to_vec(), 1)));
+        assert_eq!(
+            UnitAccumulator::default().push_line(b"1\n"),
+            Some((b"1\n".to_vec(), 1))
+        );
+        assert!(alloc::format!("{:?}", copy).contains("next_line: 3"));
+    }
+
+    #[test]
     fn unit_beyond_the_limit_is_rejected_without_being_scanned() {
         use crate::verified_kernels::BC_UNIT_MAX;
         // An open brace and a final continuation would both keep the unit waiting, but the text
