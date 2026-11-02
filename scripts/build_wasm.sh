@@ -46,5 +46,16 @@ wasm-bindgen \
     --out-name bc_wasm \
     "${WASM_BIN}"
 
+# 4. Nesting limit on the built module, in V8's baseline and optimizing compilers
+if command -v node >/dev/null; then
+    for tier in "--liftoff --no-wasm-tier-up" "--no-liftoff"; do
+        echo "Checking the nesting limit (node ${tier})..."
+        # shellcheck disable=SC2086
+        node ${tier} "${REPO_ROOT}/examples/wasm_web_app/tests/nesting_limit.mjs" "${PKG_DIR}"
+    done
+else
+    echo "Notice: node not found. Skipping the nesting limit check."
+fi
+
 echo ""
 echo "=== bc_clone WebAssembly build and packaging PASSED successfully! ==="

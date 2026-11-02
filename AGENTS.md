@@ -249,6 +249,26 @@ The gaps listed above are known and remain open. Do not describe any layer as pr
   run at the nesting limit, so a larger per-level stack use shows up as a test failure there:
   on QEMU, `CONFIG_HW_STACK_PROTECTION` turns an overflow into a fatal error, and `main.c`'s
   fatal-error handler exits QEMU with a failure status.
+- **Nesting limits of Wasm and the M5Stamp C3** come from the workloads in
+  `crates/bc_qemu_riscv32/src/stack_workloads.rs`, mirrored in
+  `examples/wasm_web_app/tests/nesting_limit.mjs`. `deepest` finds the largest input the limit
+  accepts, so each workload reaches the limit. The QEMU runner and the M5Stamp self-tests run them.
+  - M5Stamp C3 (`M5STAMP_MAX_DEPTH` = 128): the criteria are at most 60% of the 185 KB stack and
+    completing in the 128 KiB heap. `scripts/measure_m5stamp_stack.sh` gives 82 KB of stack and
+    90 KB of heap at 128; 116 KB of heap at 160, which we consider too close for an allocator we
+    did not measure with; and no heap left at 192. It measures a QEMU build with the same
+    optimization settings and another allocator, **not the application on the board**. The
+    application's self-tests fail above 60%, but they have not run on the board since this limit
+    was set. An overflow runs into `.bss`; esp-hal's watchpoint only sees a write to its one guard
+    word, so it may miss one.
+  - Wasm (`WASM_MAX_DEPTH` = 1000): the criteria are at most 50% of the 1 MiB stack in linear
+    memory, and at least twice the limit before an engine failure. `nesting_limit.mjs`, which
+    `scripts/build_wasm.sh` runs when `node` is available, checks the first on the built module
+    (46%). With the `stack-probe` feature, 2000 levels ran and 3000 did not, and 1000 levels ran
+    with `--stack-size=492`, half of V8's default, but not with 250. **Only V8 is measured**, not
+    Firefox or Safari.
+  - A change to the per-level stack use, such as an evaluator with an explicit stack, requires
+    measuring again.
 - **C API**: `bc_c_api` embeds a 64 KiB LLFF heap on `no_std` targets. Status codes are defined in
   `include/bc_core.h`.
 - **ESP32-C3** (`examples/m5stamp_c3`): built in CI by `scripts/build_m5stamp_c3.sh`. Flashing

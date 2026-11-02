@@ -8,6 +8,14 @@ value truncated toward zero at `scale`. The lexer, the parser and the unit split
 The loops of the front ends are not; `bc_clone` has its own loop over the proved parts. AGENTS.md
 lists what the proofs assume.
 
+### Changed
+- **Nesting limit on Wasm and the M5Stamp C3.** Both now set their limit from measurements of the
+  stack, instead of inheriting the library default. Wasm allows 1000 levels (it was 128), so
+  deeper programs run in the browser. The M5Stamp C3 keeps 128, now stated explicitly, and its
+  self-tests run inputs at the limit and report the stack high-water mark. The M5Stamp figures come
+  from a QEMU build with the same settings and are not yet confirmed on the board; the Wasm
+  figures come from V8 only (`AGENTS.md`).
+
 ### Verification
 - The parsing of an input is proved against the specification, so that without `-l` the theorem now
   covers `Evaluator::run_source`, and by composition (`lemma_outcome`) a run from the initial state:

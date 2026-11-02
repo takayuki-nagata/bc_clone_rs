@@ -48,7 +48,7 @@ ser.dtr = False
 ser.rts = False
 
 start = time.time()
-while time.time() - start < 8:
+while time.time() - start < 60:
     line = ser.readline().decode('utf-8', errors='replace')
     if line:
         print(line, end='')

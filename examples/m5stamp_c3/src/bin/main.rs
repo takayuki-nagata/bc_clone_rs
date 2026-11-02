@@ -5,6 +5,13 @@
 
 extern crate alloc;
 
+#[path = "../../../../crates/bc_qemu_riscv32/src/stack_workloads.rs"]
+#[allow(
+    dead_code,
+    reason = "shared with the QEMU runner, which also uses the builders"
+)]
+mod stack_workloads;
+
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -21,6 +28,17 @@ use esp_println::{print, println};
 
 /// Longest input line the serial REPL accepts (see `bc_zephyr::REPL_MAX_LINE`).
 const REPL_MAX_LINE: usize = 1024;
+
+/// Nesting limit (`docs/COMPATIBILITY.md` §2). Measured on QEMU with the same optimization settings
+/// and a 128 KiB heap (`bc_qemu_riscv32`'s `m5stamp-probe`), not yet on the board: at 128 levels the
+/// workloads use at most 82 KB of stack (see [`MAX_STACK_PERCENT`]) and 90 KB of heap. At 160 the
+/// heap reaches 116 KB, too close to the limit for an allocator we did not measure with; at 192
+/// it runs out. Running out of heap is not recoverable here, so the heap decides this limit.
+const M5STAMP_MAX_DEPTH: usize = 128;
+
+/// The self-tests fail if they use more of the stack than this. The measurement behind
+/// [`M5STAMP_MAX_DEPTH`] used another build, so the margin is large.
+const MAX_STACK_PERCENT: usize = 60;
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -85,13 +103,30 @@ fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> Strin
         Box::new(out_buf.clone()),
     );
     ev.set_scale(default_scale);
+    ev.max_depth = M5STAMP_MAX_DEPTH;
 
     eval_bc_non_panicking(code, &mut ev);
 
     out_buf.0.borrow().clone()
 }
 
+/// The stack region: above esp-hal's guard word, which must not be written, up to its top.
+fn stack_region() -> (usize, usize) {
+    unsafe extern "C" {
+        static __stack_chk_guard: u32;
+        static _stack_start: u8;
+    }
+    (
+        core::ptr::addr_of!(__stack_chk_guard) as usize + 4,
+        core::ptr::addr_of!(_stack_start) as usize,
+    )
+}
+
 fn run_self_tests() -> bool {
+    let (stack_bottom, stack_top) = stack_region();
+    // SAFETY: the region is the stack, and everything below the current frame is unused.
+    unsafe { stack_workloads::paint_stack(stack_bottom) };
+
     println!("\n=================================================");
     println!("  bc_clone (bc_core) on M5Stamp C3 (ESP32-C3)    ");
     println!("=================================================");
@@ -188,6 +223,32 @@ fn run_self_tests() -> bool {
         }
     }
 
+    // Every workload at the limit; `deepest` also checks that one level more is an error.
+    for workload in &stack_workloads::WORKLOADS {
+        print!("  Running: limit, {:<28} ... ", workload.name);
+        let mut run = |code: &str, math: bool, scale: usize| eval_bc_string(code, math, scale);
+        match stack_workloads::deepest(workload, &mut run, M5STAMP_MAX_DEPTH) {
+            Ok(_) => println!("[PASS]"),
+            Err(message) => {
+                println!("[FAIL]");
+                println!("    {}", message);
+                all_passed = false;
+            }
+        }
+    }
+
+    // SAFETY: the region painted above.
+    let used = unsafe { stack_workloads::stack_high_water(stack_bottom, stack_top) };
+    let size = stack_top - stack_bottom;
+    println!(
+        "[ESP32-C3] Stack high-water mark: {} of {} bytes.",
+        used, size
+    );
+    if used * 100 > size * MAX_STACK_PERCENT {
+        println!("  [FAIL] over {}% of the stack", MAX_STACK_PERCENT);
+        all_passed = false;
+    }
+
     println!("-------------------------------------------------");
     if all_passed {
         println!("ALL M5STAMP-C3 BC_CORE TESTS PASSED (100%)!");
@@ -222,6 +283,7 @@ fn main() -> ! {
         Box::new(SerialWriter),
         Box::new(SerialWriter),
     );
+    evaluator.max_depth = M5STAMP_MAX_DEPTH;
 
     let mut line_buf = Vec::new();
     let mut acc = UnitAccumulator::new();

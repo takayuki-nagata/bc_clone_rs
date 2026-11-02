@@ -8,6 +8,11 @@
 extern crate alloc;
 
 mod qemu_exit;
+#[allow(
+    dead_code,
+    reason = "the stack measurement is used by the m5stamp-probe feature and the M5Stamp C3"
+)]
+mod stack_workloads;
 mod uart;
 
 use alloc::boxed::Box;
@@ -21,8 +26,59 @@ use embedded_alloc::LlffHeap as Heap;
 use riscv_rt::entry;
 use uart::Uart;
 
+#[cfg(not(feature = "m5stamp-probe"))]
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
+
+#[cfg(feature = "m5stamp-probe")]
+static HEAP: Heap = Heap::empty();
+
+/// Allocator that records the largest number of bytes in use.
+#[cfg(feature = "m5stamp-probe")]
+struct PeakAllocator {
+    used: core::sync::atomic::AtomicUsize,
+    peak: core::sync::atomic::AtomicUsize,
+}
+
+#[cfg(feature = "m5stamp-probe")]
+impl PeakAllocator {
+    fn reset_peak(&self) {
+        use core::sync::atomic::Ordering::Relaxed;
+        self.peak.store(self.used.load(Relaxed), Relaxed);
+    }
+
+    fn peak(&self) -> usize {
+        self.peak.load(core::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+// SAFETY: every call is passed on to `HEAP`.
+#[cfg(feature = "m5stamp-probe")]
+unsafe impl core::alloc::GlobalAlloc for PeakAllocator {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        use core::sync::atomic::Ordering::Relaxed;
+        let used = self.used.load(Relaxed) + layout.size();
+        self.used.store(used, Relaxed);
+        self.peak.store(self.peak.load(Relaxed).max(used), Relaxed);
+        // SAFETY: the caller's contract.
+        unsafe { HEAP.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
+        use core::sync::atomic::Ordering::Relaxed;
+        self.used
+            .store(self.used.load(Relaxed) - layout.size(), Relaxed);
+        // SAFETY: the caller's contract.
+        unsafe { HEAP.dealloc(ptr, layout) }
+    }
+}
+
+#[cfg(feature = "m5stamp-probe")]
+#[global_allocator]
+static ALLOCATOR: PeakAllocator = PeakAllocator {
+    used: core::sync::atomic::AtomicUsize::new(0),
+    peak: core::sync::atomic::AtomicUsize::new(0),
+};
 
 struct SingleHartCs;
 unsafe impl critical_section::Impl for SingleHartCs {
@@ -31,8 +87,12 @@ unsafe impl critical_section::Impl for SingleHartCs {
 }
 critical_section::set_impl!(SingleHartCs);
 
-// 2MB static heap buffer for baremetal calculations
+// 2MB static heap buffer for baremetal calculations, or the M5Stamp C3's 128 KiB when measuring
+// for it
+#[cfg(not(feature = "m5stamp-probe"))]
 const HEAP_SIZE: usize = 2 * 1024 * 1024;
+#[cfg(feature = "m5stamp-probe")]
+const HEAP_SIZE: usize = 128 * 1024;
 static mut HEAP_MEM: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 /// A reference-counted, interior-mutable String buffer implementing BcWriter.
@@ -60,6 +120,11 @@ const QEMU_MAX_DEPTH: usize = 1000;
 
 /// Evaluates a bc program string on baremetal RISC-V and returns the captured output string.
 fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> String {
+    eval_bc_at_depth(code, math_enabled, default_scale, QEMU_MAX_DEPTH)
+}
+
+/// [`eval_bc_string`] with the given nesting limit.
+fn eval_bc_at_depth(code: &str, math_enabled: bool, default_scale: usize, depth: usize) -> String {
     let out_buf = SharedBuffer::default();
 
     let mut evaluator = Evaluator::new(
@@ -68,7 +133,7 @@ fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> Strin
         Box::new(out_buf.clone()),
     );
     evaluator.set_scale(default_scale);
-    evaluator.max_depth = QEMU_MAX_DEPTH;
+    evaluator.max_depth = depth;
 
     evaluator.run_source(code.as_bytes(), STDIN_SOURCE);
 
@@ -76,6 +141,10 @@ fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> Strin
 }
 
 #[entry]
+#[cfg_attr(
+    feature = "m5stamp-probe",
+    allow(unreachable_code, reason = "run_probe does not return")
+)]
 fn main() -> ! {
     // 1. Initialize global heap
     unsafe {
@@ -84,6 +153,8 @@ fn main() -> ! {
     }
 
     let mut uart = Uart::new();
+    #[cfg(feature = "m5stamp-probe")]
+    run_probe(&mut uart);
     let _ = writeln!(uart, "=================================================");
     let _ = writeln!(uart, " bc_clone RISC-V 32 Baremetal Test Suite on QEMU ");
     let _ = writeln!(uart, "=================================================");
@@ -184,13 +255,7 @@ fn main() -> ! {
 
     // QEMU_MAX_DEPTH levels of nesting must run without overflowing the stack; one more is an
     // error. A call nests 2 levels, a parenthesis or block 1 (plus 3 for the statement).
-    let recursion = |n: usize| {
-        alloc::format!(
-            "define f(n) {{\n  if (n == 0) return (0)\n  return (f(n - 1))\n}}\nf({n})\n"
-        )
-    };
-    let parens = |n: usize| alloc::format!("{}1{}\n", "(".repeat(n), ")".repeat(n));
-    let blocks = |n: usize| alloc::format!("{}1{}\n", "{".repeat(n), "}".repeat(n));
+    use stack_workloads::{blocks, parens, recursion};
     let max_calls = QEMU_MAX_DEPTH / 2 - 3;
     let max_parens = QEMU_MAX_DEPTH - 3;
     let deep_cases = [
@@ -227,6 +292,21 @@ fn main() -> ! {
         }
     }
 
+    // Every workload at the limit; `deepest` also checks that one level more is an error.
+    for workload in &stack_workloads::WORKLOADS {
+        let _ = write!(uart, "  Running: limit, {:<28} ... ", workload.name);
+        let mut run = |code: &str, math: bool, scale: usize| eval_bc_string(code, math, scale);
+        match stack_workloads::deepest(workload, &mut run, QEMU_MAX_DEPTH) {
+            Ok(_) => {
+                let _ = writeln!(uart, "[PASS]");
+            }
+            Err(message) => {
+                let _ = writeln!(uart, "[FAIL]\n    {message}");
+                all_passed = false;
+            }
+        }
+    }
+
     let _ = writeln!(uart, "-------------------------------------------------");
     if all_passed {
         let _ = writeln!(uart, "ALL RISC-V 32 BAREMETAL TESTS PASSED (100%)!");
@@ -237,6 +317,51 @@ fn main() -> ! {
         let _ = writeln!(uart, "=================================================");
         qemu_exit::exit_failure();
     }
+}
+
+/// Measures every workload for the M5Stamp C3: the nesting limit and the workload to start from
+/// come from the words at [`PROBE_ARGS`], put there by QEMU's `-device loader`.
+#[cfg(feature = "m5stamp-probe")]
+fn run_probe(uart: &mut Uart) -> ! {
+    unsafe extern "C" {
+        static _stack_start: u8;
+    }
+    /// Above the image and below the stack (`memory.x`).
+    const PROBE_ARGS: usize = 0x80ff_fff0;
+    /// Far more than the 181 KiB stack of the M5Stamp C3.
+    const PROBED_STACK: usize = 1024 * 1024;
+
+    // SAFETY: the loader wrote the two words, in RAM that nothing else uses.
+    let (limit, first) = unsafe {
+        (
+            core::ptr::read_volatile(PROBE_ARGS as *const u32) as usize,
+            core::ptr::read_volatile((PROBE_ARGS + 4) as *const u32) as usize,
+        )
+    };
+    let top = core::ptr::addr_of!(_stack_start) as usize;
+    let bottom = top - PROBED_STACK;
+    let mut run = |code: &str, math: bool, scale: usize| eval_bc_at_depth(code, math, scale, limit);
+    for (index, workload) in stack_workloads::WORKLOADS.iter().enumerate().skip(first) {
+        // Printed first: running out of heap ends the run in the panic handler.
+        let _ = write!(uart, "{index} {}: ", workload.name);
+        // SAFETY: the stack in use is far smaller than PROBED_STACK, and nothing else is there.
+        unsafe { stack_workloads::paint_stack(bottom) };
+        ALLOCATOR.reset_peak();
+        let result = stack_workloads::deepest(workload, &mut run, limit);
+        // SAFETY: as for `paint_stack` above.
+        let stack = unsafe { stack_workloads::stack_high_water(bottom, top) };
+        let heap = ALLOCATOR.peak();
+        match result {
+            Ok(n) => {
+                let _ = writeln!(uart, "n={n} stack={stack} heap={heap}");
+            }
+            Err(message) => {
+                let _ = writeln!(uart, "FAILED {message}");
+            }
+        }
+    }
+    let _ = writeln!(uart, "PROBE DONE");
+    qemu_exit::exit_success();
 }
 
 #[cfg(not(test))]

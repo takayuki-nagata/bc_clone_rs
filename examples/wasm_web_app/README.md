@@ -25,6 +25,10 @@ bash scripts/build_wasm.sh
 
 This compiles `bc_wasm` into `examples/wasm_web_app/pkg/` (`bc_wasm_bg.wasm` and `bc_wasm.js`).
 
+The script also runs `tests/nesting_limit.mjs` when `node` is available. It checks the nesting limit
+of 1000 levels (`WASM_MAX_DEPTH`) and how much of the stack it takes. The limit was measured in V8
+only.
+
 ## Running the Web Application Locally
 
 To build and start a local HTTP server:

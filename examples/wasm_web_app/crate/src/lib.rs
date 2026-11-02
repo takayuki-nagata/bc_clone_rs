@@ -32,6 +32,22 @@ impl BcWriter for SharedBuffer {
     }
 }
 
+/// Nesting limit (`docs/COMPATIBILITY.md` §2). Measured in V8 by `tests/nesting_limit.mjs`: one
+/// level takes at most about 480 bytes of the 1 MiB stack in linear memory, so 1000 levels use 46%
+/// of it, and they also run with half of V8's default stack (492 KB). Other engines are not
+/// measured. An overflow of either stack kills the instance.
+const WASM_MAX_DEPTH: usize = 1000;
+
+fn new_evaluator(math_enabled: bool, out_buf: &SharedBuffer, err_buf: &SharedBuffer) -> Evaluator {
+    let mut ev = Evaluator::new(
+        math_enabled,
+        Box::new(out_buf.clone()),
+        Box::new(err_buf.clone()),
+    );
+    ev.max_depth = WASM_MAX_DEPTH;
+    ev
+}
+
 fn eval_into_wasm(code: &str, ev: &mut Evaluator) {
     ev.run_source(code.as_bytes(), STDIN_SOURCE);
 }
@@ -42,11 +58,7 @@ pub fn eval_bc(code: &str, math_enabled: bool, default_scale: u32) -> String {
     let out_buf = SharedBuffer::default();
     let err_buf = SharedBuffer::default();
 
-    let mut ev = Evaluator::new(
-        math_enabled,
-        Box::new(out_buf.clone()),
-        Box::new(err_buf.clone()),
-    );
+    let mut ev = new_evaluator(math_enabled, &out_buf, &err_buf);
     ev.set_scale(default_scale as usize);
 
     eval_into_wasm(code, &mut ev);
@@ -74,11 +86,7 @@ impl BcSession {
         let out_buf = SharedBuffer::default();
         let err_buf = SharedBuffer::default();
 
-        let evaluator = Evaluator::new(
-            math_enabled,
-            Box::new(out_buf.clone()),
-            Box::new(err_buf.clone()),
-        );
+        let evaluator = new_evaluator(math_enabled, &out_buf, &err_buf);
 
         BcSession {
             evaluator,
@@ -114,11 +122,13 @@ impl BcSession {
         self.out_buf.0.borrow_mut().clear();
         self.err_buf.0.borrow_mut().clear();
 
-        self.evaluator = Evaluator::new(
-            math_enabled,
-            Box::new(self.out_buf.clone()),
-            Box::new(self.err_buf.clone()),
-        );
+        self.evaluator = new_evaluator(math_enabled, &self.out_buf, &self.err_buf);
+    }
+
+    /// Sets the nesting limit, to measure the stack use of other limits.
+    #[cfg(feature = "stack-probe")]
+    pub fn set_max_depth(&mut self, max_depth: usize) {
+        self.evaluator.max_depth = max_depth;
     }
 
     /// Sets the default scale precision.
@@ -195,6 +205,15 @@ mod tests {
         sess.set_extension_policy(0);
         sess.set_scale(u32::MAX);
         assert_eq!(sess.get_scale(), 1_000_000_000);
+    }
+
+    #[test]
+    fn test_every_evaluator_has_the_wasm_nesting_limit() {
+        let mut sess = BcSession::new(false);
+        assert_eq!(sess.evaluator.max_depth, WASM_MAX_DEPTH);
+        sess.evaluator.max_depth = 1;
+        sess.reset(false);
+        assert_eq!(sess.evaluator.max_depth, WASM_MAX_DEPTH);
     }
 
     #[test]

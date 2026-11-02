@@ -59,6 +59,11 @@ cargo run --release
   Running: Transcendental Sine & Cosine        ... [PASS]
   Running: Base Conversion (Hex to Binary)     ... [PASS]
   Running: Arrays and Dynamic Auto Scoping     ... [PASS]
+  Running: Error Recovery (Div by Zero)        ... [PASS]
+  Running: limit, parentheses                  ... [PASS]
+  ...
+  Running: limit, long output at the bottom    ... [PASS]
+[ESP32-C3] Stack high-water mark: N of 185204 bytes.
 -------------------------------------------------
 ALL M5STAMP-C3 BC_CORE TESTS PASSED (100%)!
 =================================================

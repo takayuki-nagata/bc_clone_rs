@@ -10,6 +10,10 @@ name = "bc_qemu_riscv32"
 test = false
 bench = false
 
+[features]
+# Measures the stack and heap use of the workloads for the M5Stamp C3 instead of running the tests.
+m5stamp-probe = []
+
 [dependencies]
 bc_core = { path = "../bc_core" }
 riscv = "0.16"
