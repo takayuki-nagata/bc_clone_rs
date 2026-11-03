@@ -128,10 +128,10 @@ pub proof fn lemma_bs_args(nodes: Seq<Node>, a: Seq<Arg>, p: Seq<Param>, st: ESt
     if f <= g { lemma_ev_args_mono(nodes, a, p, st, acc, f, g); } else { lemma_ev_args_mono(nodes, a, p, st, acc, g, f); }
 }
 
-/// `is_assignment` of an expression that evaluates from `st`, with enough fuel.
-pub open spec fn is_asg(nodes: Seq<Node>, e: usize, st: EState) -> bool {
-    let f = choose|f: u64| f < u64::MAX && done(#[trigger] ev(nodes, e, st, f));
-    is_assignment(nodes, e, (f + 1) as u64)
+/// `is_assignment` with enough fuel for any expression that evaluates
+/// (`lemma_is_assignment_stable`).
+pub open spec fn is_asg(nodes: Seq<Node>, e: usize) -> bool {
+    is_assignment(nodes, e, 0xFFFF_FFFF_FFFF_FFFFu64)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -159,12 +159,12 @@ pub enum K {
     /// The value argument for parameter `name`: `(nodes, function, rest of the arguments, rest of
     /// the parameters, name, values so far)`.
     ArgVal(Seq<Node>, Func, Seq<Arg>, Seq<Param>, Seq<u8>, Seq<ArgVal>),
-    /// A running function body.
-    Call(Func, Saved),
+    /// A running function body, and the arena of its caller.
+    Call(Func, Saved, Seq<Node>),
     Body(Seq<Node>, Seq<usize>),
     List(Seq<Node>, Seq<usize>),
-    /// An expression statement: the expression and the state it started from.
-    ExprStmt(Seq<Node>, usize, EState),
+    /// An expression statement.
+    ExprStmt(Seq<Node>, usize),
     Return,
     IfCond(Seq<Node>, usize),
     ForInit(Seq<Node>, usize, usize, usize),
@@ -290,11 +290,11 @@ pub open spec fn apply(k: K, x: ER) -> ER {
             let v = ArgVal { is_array: false, name: name, val: x.val, frame: empty_frame() };
             after_args(f, bs_args(nodes, a, p, x.st, acc.push(v)))
         },
-        K::Call(f, s) => leave(f, s, x),
+        K::Call(f, s, _) => leave(f, s, x),
         K::Body(nodes, rest) => if !x.ok { x } else if x.st.ret { x } else { bs_body(nodes, rest, x.st) },
         K::List(nodes, rest) => if !x.ok { x } else if x.st.brk || x.st.ret { x } else { bs_list(nodes, rest, x.st) },
-        K::ExprStmt(nodes, e, st0) => if !x.ok { x }
-            else if is_asg(nodes, e, st0) { er_ok(x.st, zero_num()) }
+        K::ExprStmt(nodes, e) => if !x.ok { x }
+            else if is_asg(nodes, e) { er_ok(x.st, zero_num()) }
             else { er_ok(print(x.st, format_num_nl(x)), zero_num()) },
         K::Return => if !x.ok { x } else { er_ok(with_flags(x.st, x.st.brk, true, x.val), zero_num()) },
         K::IfCond(nodes, b) => if !x.ok { x }
@@ -698,7 +698,7 @@ pub proof fn lemma_body_end(nodes: Seq<Node>, l: Seq<usize>, st: EState)
 
 pub proof fn lemma_step_expr_stmt(nodes: Seq<Node>, n: usize, e: usize, st: EState)
     requires done(bs_exec_node(nodes, n, st)), n < nodes.len(), nodes[n as int] == Node::ExprStmt(e), !st.brk, !st.ret,
-    ensures bs_exec_node(nodes, n, st) == apply(K::ExprStmt(nodes, e, st), bs_ev(nodes, e, st)),
+    ensures bs_exec_node(nodes, n, st) == apply(K::ExprStmt(nodes, e), bs_ev(nodes, e, st)),
 {
     let f = lemma_exec_node_fuel(nodes, n, st);
     assert(f >= 2);
@@ -708,11 +708,7 @@ pub proof fn lemma_step_expr_stmt(nodes: Seq<Node>, n: usize, e: usize, st: ESta
     assert(done(x));
     lemma_bs_ev(nodes, e, st, g);
     if x.ok {
-        assert(g < u64::MAX && done(ev(nodes, e, st, g)));
-        let h = choose|h: u64| h < u64::MAX && done(#[trigger] ev(nodes, e, st, h));
-        if h <= g { lemma_ev_mono(nodes, e, st, h, g); } else { lemma_ev_mono(nodes, e, st, g, h); }
-        let m = if h <= g { h } else { g };
-        lemma_is_assignment_stable(nodes, e, st, m, (h + 1) as u64, (f - 1) as u64);
+        lemma_is_assignment_stable(nodes, e, st, g, 0xFFFF_FFFF_FFFF_FFFFu64, (f - 1) as u64);
     }
 }
 

@@ -133,11 +133,12 @@ GNU's own results are *not* exact at the requested scale. When you change a func
 section of `docs/MATH_ERROR_BOUNDS.md` in sync.
 
 ### Evaluator (`src/eval/`)
-- Expressions run on an explicit stack of frames (`eval/machine.rs`), so their nesting does not
-  use the native stack. A frame is what remains of one syntactic form once a sub-computation has
+- Expressions and statements run on an explicit stack of frames (`eval/machine.rs`), so their
+  nesting does not use the native stack. A frame is what remains of one syntactic form once a sub-computation has
   a result; the proof relates it to the specification's `bc_spec::den::K` and keeps the meaning
   of the stack (`den`) equal to the result of the whole evaluation, so `eval_ref` has the same
-  theorem as when it recursed. A function call still recurses natively through `eval_call`.
+  theorem as when it recursed; `exec_ref` likewise. A function call still recurses natively
+  through `eval_call`.
 - Dynamic scoping: each variable or array name maps to a stack. Function parameters and `auto`
   locals push a new entry on entry. `BTreeMap` keeps the storage `no_std`-friendly and deterministic.
 - `Evaluator::leave_call` pops the parameter and `auto` frames and restores the caller's
