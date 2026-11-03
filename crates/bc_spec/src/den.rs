@@ -591,6 +591,27 @@ pub proof fn lemma_step_call(nodes: Seq<Node>, n: usize, name: Seq<u8>, args: Se
     }
 }
 
+/// A call of a function that is not defined.
+pub proof fn lemma_step_call_undefined(nodes: Seq<Node>, n: usize, name: Seq<u8>, args: Seq<Arg>, st: EState)
+    requires done(bs_ev_node(nodes, n, st)), n < nodes.len(), nodes[n as int] == Node::Call(name, args), find_func(st.funcs, name) is None,
+    ensures bs_ev_node(nodes, n, st) == er_err(st, msg_undefined_function(name)),
+{
+    let f = lemma_ev_node_fuel(nodes, n, st);
+    assert(f >= 2);
+    assert(ev_node(nodes, n, st, f) == ev_call(nodes, name, args, st, (f - 1) as u64));
+}
+
+/// A call with the wrong number of arguments.
+pub proof fn lemma_step_call_mismatch(nodes: Seq<Node>, n: usize, name: Seq<u8>, args: Seq<Arg>, st: EState, g: Func)
+    requires done(bs_ev_node(nodes, n, st)), n < nodes.len(), nodes[n as int] == Node::Call(name, args),
+        find_func(st.funcs, name) == Some(g), args.len() != g.params.len(),
+    ensures bs_ev_node(nodes, n, st) == er_err(st, msg_parameter_mismatch()),
+{
+    let f = lemma_ev_node_fuel(nodes, n, st);
+    assert(f >= 2);
+    assert(ev_node(nodes, n, st, f) == ev_call(nodes, name, args, st, (f - 1) as u64));
+}
+
 /// The value arguments are its frame applied to the first one.
 pub proof fn lemma_step_arg(nodes: Seq<Node>, f: Func, a: Seq<Arg>, p: Seq<Param>, st: EState, acc: Seq<ArgVal>)
     requires done(bs_args(nodes, a, p, st, acc).r), a.len() > 0, p.len() > 0, !p[0].is_array, !a[0].is_array,

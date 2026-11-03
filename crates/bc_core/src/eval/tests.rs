@@ -1274,3 +1274,46 @@ fn test_front_end_control_methods() {
     assert!(!evaluator.break_flag);
     assert!(!evaluator.return_flag);
 }
+
+/// Evaluation does not use the native stack: deep recursion, a deep error unwinding through
+/// every call, and loops and array arguments inside deep recursion run on a 256 KiB thread.
+#[test]
+fn test_deep_recursion_on_a_small_stack() {
+    let run = |src: String| {
+        std::thread::Builder::new()
+            .stack_size(256 << 10)
+            .spawn(move || {
+                let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let err = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                let mut ev = Evaluator::new(
+                    false,
+                    Box::new(TestWriter { buf: out.clone() }),
+                    Box::new(TestWriter { buf: err.clone() }),
+                );
+                ev.max_depth = 1_000_000;
+                let summary = ev.run_source(src.as_bytes(), "(test)");
+                let out = String::from_utf8(out.lock().unwrap().clone()).unwrap();
+                let err = String::from_utf8(err.lock().unwrap().clone()).unwrap();
+                (out, err, summary.errors)
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    };
+    let (out, err, _) = run(
+        "define f(n) {\nif (n == 0) return (0)\nreturn (f(n - 1) + 1)\n}\nf(100000)\n".to_string(),
+    );
+    assert_eq!((out.as_str(), err.as_str()), ("100000\n", ""));
+    let (out, err, failed) = run(
+        "define f(n) {\nif (n == 0) return (1 / 0)\nreturn (f(n - 1))\n}\nf(100000)\n".to_string(),
+    );
+    assert_eq!(out, "");
+    assert!(err.contains("Divide by zero"), "{err}");
+    assert_eq!(failed, 1);
+    let (out, _, _) = run(
+        "define g(a[], n) {\nauto i, s\nfor (i = 0; i < 3; i++) s = s + a[i]\nif (n == 0) return (s)\nreturn (g(a[], n - 1))\n}\n\
+         a[0] = 1; a[1] = 2; a[2] = 3\ng(a[], 50000)\n"
+            .to_string(),
+    );
+    assert_eq!(out, "6\n");
+}

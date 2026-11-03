@@ -35,7 +35,6 @@ impl Evaluator {
             PNode::Reg(reg) => self.eval_register(*reg, Ghost(nodes), Ghost(n), Ghost(st)),
             PNode::Number(t) => self.eval_number(t, Ghost(nodes), Ghost(n), Ghost(st)),
             PNode::Var(name) => self.eval_variable(name, Ghost(nodes), Ghost(n), Ghost(st)),
-            PNode::Call(name, args) => self.eval_call(code, Ghost(n), name, args, Ghost(nodes), Ghost(st)),
             _ => Ok(BCNum::zero()),
         }
     }

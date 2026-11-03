@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-//! The statements of a unit, runtime diagnostics, and the `-l` functions (`eval_math`).
+//! The statements of a unit and runtime diagnostics.
 
 use super::*;
 
@@ -250,78 +250,6 @@ impl Evaluator {
         }
     }
 
-    /// `-l`'s functions, for a name that has no definition when the math library is enabled:
-    /// `s`, `c`, `a`, `l`, `e` with one expression argument and `j` with two; any other name or
-    /// argument list is undefined. The arguments are evaluated first, then the function runs at
-    /// the `scale` that the evaluation left. An `Ok` result is the function's exact value at
-    /// some argument values, truncated toward zero at that scale (`mathlib::math_result`); which
-    /// values is not stated, because the refinement theorem excludes `-l` (`r_state` requires
-    /// `!math_enabled`).
-    #[verifier::exec_allows_no_decreases_clause]
-    #[allow(clippy::ptr_arg, reason = "the call's argument list")]
-    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
-    pub(crate) fn eval_math(&mut self, code: &Rc<Code>, name: &String, args: &Vec<PArg>) -> (r: Result<BCNum, BcError>)
-        requires
-            old(self).inv(),
-        ensures
-            final(self).inv(),
-            final(self).eval_depth == old(self).eval_depth,
-            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            r is Ok ==> r->Ok_0.scale == final(self).scale,
-            r is Ok ==> math_ok(text_view(*name), r->Ok_0),
-    {
-        let nb = name.as_str().as_bytes();
-        if nb.len() == 1 && args.len() == 1 {
-            let c = nb[0];
-            if let PArg::Expr(expr) = &args[0] {
-                // s, c, a, l, e
-                if c == 115 || c == 99 || c == 97 || c == 108 || c == 101 {
-                    let x = self.eval_ref(code, *expr, Ghost(arbitrary()), Ghost(arbitrary()))?;
-                    let scale = self.scale;
-                    let res = if c == 115 {
-                        bc_sin(&x, scale)
-                    } else if c == 99 {
-                        bc_cos(&x, scale)
-                    } else if c == 97 {
-                        bc_atan(&x, scale)
-                    } else if c == 108 {
-                        bc_ln(&x, scale)
-                    } else {
-                        bc_exp(&x, scale)
-                    };
-                    return match res {
-                        Ok(v) => {
-                            proof {
-                                assert(nb@ =~= seq![c]);
-                                lemma_math_ok(text_view(*name), x, v, v);
-                            }
-                            Ok(v)
-                        },
-                        Err(kind) => Err(BcError::Runtime { kind, func: None }),
-                    };
-                }
-            }
-        }
-        if nb.len() == 1 && nb[0] == 106 && args.len() == 2 {
-            if let PArg::Expr(expr_n) = &args[0] {
-                if let PArg::Expr(expr_x) = &args[1] {
-                    let n_val = self.eval_ref(code, *expr_n, Ghost(arbitrary()), Ghost(arbitrary()))?;
-                    let x_val = self.eval_ref(code, *expr_x, Ghost(arbitrary()), Ghost(arbitrary()))?;
-                    return match bc_bessel(&n_val, &x_val, self.scale) {
-                        Ok(v) => {
-                            proof {
-                                assert(nb@ =~= seq![106u8]);
-                                lemma_math_ok(text_view(*name), n_val, x_val, v);
-                            }
-                            Ok(v)
-                        },
-                        Err(kind) => Err(BcError::Runtime { kind, func: None }),
-                    };
-                }
-            }
-        }
-        Err(BcError::Runtime { kind: RuntimeError::UndefinedFunction(name.clone()), func: None })
-    }
 }
 
 } // verus!

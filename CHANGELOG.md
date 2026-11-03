@@ -9,6 +9,9 @@ The loops of the front ends are not; `bc_clone` has its own loop over the proved
 lists what the proofs assume.
 
 ### Changed
+- **Evaluation runs on an explicit stack.** Expressions, statements and function calls no longer
+  recurse on the native stack, so deep recursion in a bc program needs heap, not stack. The
+  parser still recurses within the nesting limit.
 - **The syntax tree is a flat arena.** The public `Expr`, `Stmt` and `ExprOrArray` are replaced by
   `Code`, `Node` and `Arg`; `Evaluator::try_evaluate` and `try_execute` take the arena and a node
   index, and `Parser::try_parse_program` returns indices into `Parser::take_code`. A function call

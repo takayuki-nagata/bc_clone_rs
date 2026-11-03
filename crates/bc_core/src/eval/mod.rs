@@ -595,10 +595,6 @@ pub(crate) type SpecNum = ();
 #[cfg(not(verus_keep_ghost))]
 pub(crate) type SpecState = ();
 #[cfg(verus_keep_ghost)]
-pub(crate) type SpecArgs = Seq<bc_spec::parser::Arg>;
-#[cfg(not(verus_keep_ghost))]
-pub(crate) type SpecArgs = ();
-#[cfg(verus_keep_ghost)]
 pub(crate) type SpecParams = Seq<bc_spec::parser::Param>;
 #[cfg(not(verus_keep_ghost))]
 pub(crate) type SpecParams = ();

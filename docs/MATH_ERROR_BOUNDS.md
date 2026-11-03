@@ -171,8 +171,8 @@ orders use the definition J_−n = (−1)^n J_n (`bessel_int_r`), and the first 
   `crates/bc_core/src/trusted_math.rs` (each with its DLMF section), the `num-bigint` wrappers in
   `trusted_bigint.rs`, and Verus, Z3 and rustc.
 - They are partial correctness: that a series loop (and the search for k in `l(x)`) ends is argued
-  in §2, not proved. The evaluator calls the functions from `Evaluator::eval_math`, which is
-  verified: it establishes their preconditions and ensures that an `Ok` result is the function's
+  in §2, not proved. The evaluator calls the functions from `Evaluator::finish_math1` and `finish_bessel`, which are
+  verified: they establish their preconditions and ensure that an `Ok` result is the function's
   exact value at some argument values (`mathlib::math_ok`). The math library is not part of the
   refinement theorem of the evaluator (`r_state` excludes `-l`), so which argument values is not
   stated.
