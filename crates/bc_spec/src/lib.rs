@@ -47,6 +47,8 @@
 )]
 
 pub mod convert;
+#[cfg(verus_keep_ghost)]
+pub mod den;
 pub mod eval;
 pub mod format;
 pub mod fuel;

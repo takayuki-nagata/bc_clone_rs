@@ -99,6 +99,16 @@ use vstd::prelude::*;
 
 mod call;
 mod expr;
+// Some bindings are used only by the proofs, which a normal build erases.
+#[cfg_attr(not(verus_keep_ghost), allow(unused_variables))]
+#[allow(
+    clippy::collapsible_if,
+    clippy::len_zero,
+    clippy::ptr_arg,
+    clippy::too_many_arguments,
+    reason = "the code keeps the forms that the proofs reason about"
+)]
+mod machine;
 mod stmt;
 #[cfg(test)]
 mod tests;
