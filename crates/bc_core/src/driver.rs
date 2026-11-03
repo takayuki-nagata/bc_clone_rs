@@ -105,7 +105,8 @@ pub(crate) open spec fn r_top(e: Evaluator, st: EState) -> bool {
 
 /// The options of the specification are the evaluator's extension policy and nesting limit.
 pub(crate) open spec fn r_opts(e: Evaluator, opts: Options) -> bool {
-    r_settings(e.extension_policy, e.max_depth, opts)
+    &&& r_settings(e.extension_policy, e.max_depth, opts)
+    &&& opts.max_eval_depth == e.max_eval_depth as u64
 }
 
 /// The options of the specification are this extension policy and nesting limit.
@@ -1006,11 +1007,11 @@ pub(crate) open spec fn r_source(r: RunSummary, e0: Evaluator, e: Evaluator, opt
 
 /// A front end may set the nesting limit of a new evaluator: the state is then the initial one
 /// for that limit.
-pub(crate) proof fn lemma_set_limit(e: Evaluator, d: u64, limit: usize)
+pub(crate) proof fn lemma_set_limit(e: Evaluator, d: u64, limit: usize, eval_limit: usize)
     requires
         r_top(e, initial(d)),
     ensures
-        r_top(Evaluator { max_depth: limit, ..e }, initial(limit as u64)),
+        r_top(Evaluator { max_depth: limit, max_eval_depth: eval_limit, ..e }, initial(eval_limit as u64)),
 {
 }
 
@@ -1114,15 +1115,15 @@ proof fn lemma_sources(es: Seq<Evaluator>, ss: Seq<RunSummary>, opts: Options, r
 /// `push_line` and `run_unit`.
 pub(crate) proof fn lemma_outcome(es: Seq<Evaluator>, ss: Seq<RunSummary>, opts: Options, inputs: Seq<Input>)
     requires
-        r_top(es[0], initial(opts.max_depth)),
-        r_sources(es, ss, opts, RunState { st: initial(opts.max_depth), errors: 0u64, quit: false, not_modeled: false }, inputs),
+        r_top(es[0], initial(opts.max_eval_depth)),
+        r_sources(es, ss, opts, RunState { st: initial(opts.max_eval_depth), errors: 0u64, quit: false, not_modeled: false }, inputs),
         !run(opts, inputs).not_modeled,
     ensures
         out_log(&es.last().stdout_writer) == run(opts, inputs).stdout,
         err_log(&es.last().stderr_writer) == run(opts, inputs).stderr,
         run(opts, inputs).status == (if any_errors(ss) { 1u8 } else { 0u8 }),
 {
-    let rs = RunState { st: initial(opts.max_depth), errors: 0u64, quit: false, not_modeled: false };
+    let rs = RunState { st: initial(opts.max_eval_depth), errors: 0u64, quit: false, not_modeled: false };
     lemma_sources(es, ss, opts, rs, inputs);
     let g = run_inputs(opts, rs, inputs);
     assert(r_state(Evaluator { eval_depth: 0, invocation_ibase: None, ..es.last() }, with_call(with_depth(g.st, 0), g.st.calls, false, g.st.inv_ibase)));

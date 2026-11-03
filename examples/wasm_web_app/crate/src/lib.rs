@@ -45,6 +45,7 @@ fn new_evaluator(math_enabled: bool, out_buf: &SharedBuffer, err_buf: &SharedBuf
         Box::new(err_buf.clone()),
     );
     ev.max_depth = WASM_MAX_DEPTH;
+    ev.max_eval_depth = WASM_MAX_DEPTH;
     ev
 }
 
@@ -129,6 +130,7 @@ impl BcSession {
     #[cfg(feature = "stack-probe")]
     pub fn set_max_depth(&mut self, max_depth: usize) {
         self.evaluator.max_depth = max_depth;
+        self.evaluator.max_eval_depth = max_depth;
     }
 
     /// Sets the default scale precision.
@@ -212,6 +214,7 @@ mod tests {
         let mut sess = BcSession::new(false);
         assert_eq!(sess.evaluator.max_depth, WASM_MAX_DEPTH);
         sess.evaluator.max_depth = 1;
+        sess.evaluator.max_eval_depth = 1;
         sess.reset(false);
         assert_eq!(sess.evaluator.max_depth, WASM_MAX_DEPTH);
     }

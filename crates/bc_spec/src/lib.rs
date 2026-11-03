@@ -37,7 +37,8 @@
 //!
 //! **Not modeled** (the oracle exits with `NOT_MODELED`): `-l`, the interactive REPL and SIGINT,
 //! unreadable files, memory exhaustion. `BC_SPEC_MAX_DEPTH` sets `max_depth` (default 100000,
-//! the release build of `bc_clone`).
+//! the release build of `bc_clone`) and `BC_SPEC_MAX_EVAL_DEPTH` sets `max_eval_depth` (default
+//! 2000000, as `bc_clone`).
 
 // Imports used only by `spec fn`s and proofs are unused once `verus!` erases them.
 #![cfg_attr(not(verus_keep_ghost), allow(unused_imports))]

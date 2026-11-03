@@ -288,6 +288,7 @@ pub fn run_single_test(tc: &TestCase) -> bool {
     );
     ev.set_scale(tc.scale);
     ev.max_depth = ZEPHYR_MAX_DEPTH;
+    ev.max_eval_depth = ZEPHYR_MAX_DEPTH;
 
     eval_bc_non_panicking(tc.code, &mut ev);
 
@@ -323,6 +324,7 @@ pub fn run_test_suite(cases: &[TestCase]) -> bool {
         Box::new(ZephyrConsoleWriter),
     );
     ev_cb.max_depth = ZEPHYR_MAX_DEPTH;
+    ev_cb.max_eval_depth = ZEPHYR_MAX_DEPTH;
     eval_bc_non_panicking("2^16\n", &mut ev_cb);
 
     zephyr_println!("-------------------------------------------------");
@@ -363,6 +365,7 @@ pub fn run_repl_with<G, P, S, W>(
     let err_buf = SharedBuffer::default();
     let mut evaluator = Evaluator::new(true, Box::new(out_buf.clone()), Box::new(err_buf.clone()));
     evaluator.max_depth = ZEPHYR_MAX_DEPTH;
+    evaluator.max_eval_depth = ZEPHYR_MAX_DEPTH;
     let mut line_buf = String::new();
     let mut acc = UnitAccumulator::new();
     let mut steps = 0;

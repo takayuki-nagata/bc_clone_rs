@@ -412,19 +412,22 @@ pub unsafe extern "C" fn bc_session_reset(session: *mut BcSession, math_enabled:
     sess.err_shared.0.borrow_mut().clear();
     // The nesting limit describes the caller's stack, not language state: keep it.
     let max_depth = sess.evaluator.max_depth;
+    let max_eval_depth = sess.evaluator.max_eval_depth;
     sess.evaluator = Evaluator::new(
         math_enabled,
         Box::new(sess.out_shared.clone()),
         Box::new(sess.err_shared.clone()),
     );
     sess.evaluator.max_depth = max_depth;
+    sess.evaluator.max_eval_depth = max_eval_depth;
 }
 
-/// Sets a session's nesting limit (`docs/COMPATIBILITY.md` §2): how deeply statements,
-/// expressions, and function calls may nest. Deeper input is the error `nesting too deep`
-/// instead of a stack overflow. The default, `BC_DEFAULT_MAX_DEPTH` (128), suits a 256 KiB stack;
-/// one level takes up to about 2 KB of stack. It is kept by `bc_session_reset`.
-/// Returns `BcStatus::ErrExecution` for 0.
+/// Sets both of a session's nesting limits (`docs/COMPATIBILITY.md` §2): how deeply the syntax
+/// of an input may nest, and how deeply evaluation may nest, function calls included. Deeper
+/// input is the error `nesting too deep` instead of a stack overflow or memory exhaustion. The
+/// default, `BC_DEFAULT_MAX_DEPTH` (128), suits a 256 KiB stack; one level of syntax takes up to
+/// about 2 KB of stack while parsing. `bc_session_set_max_eval_depth` then sets the second limit
+/// alone. Both are kept by `bc_session_reset`. Returns `BcStatus::ErrExecution` for 0.
 ///
 /// # Safety
 /// - `session` must be a valid pointer obtained from `bc_session_create` or null.
@@ -439,7 +442,31 @@ pub unsafe extern "C" fn bc_session_set_max_depth(
     if max_depth == 0 {
         return BcStatus::ErrExecution;
     }
-    unsafe { &mut *session }.evaluator.max_depth = max_depth;
+    let sess = unsafe { &mut *session };
+    sess.evaluator.max_depth = max_depth;
+    sess.evaluator.max_eval_depth = max_depth;
+    BcStatus::Ok
+}
+
+/// Sets how deeply a session's evaluation may nest, function calls included
+/// (`docs/COMPATIBILITY.md` §2). Evaluation does not use the native stack, so the limit bounds the
+/// heap that deep recursion takes. It is kept by `bc_session_reset`.
+/// Returns `BcStatus::ErrExecution` for 0.
+///
+/// # Safety
+/// - `session` must be a valid pointer obtained from `bc_session_create` or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bc_session_set_max_eval_depth(
+    session: *mut BcSession,
+    max_eval_depth: usize,
+) -> BcStatus {
+    if session.is_null() {
+        return BcStatus::ErrNullPtr;
+    }
+    if max_eval_depth == 0 {
+        return BcStatus::ErrExecution;
+    }
+    unsafe { &mut *session }.evaluator.max_eval_depth = max_eval_depth;
     BcStatus::Ok
 }
 
@@ -692,6 +719,38 @@ mod tests {
         );
         assert_eq!(
             unsafe { bc_session_set_max_depth(core::ptr::null_mut(), 8) },
+            BcStatus::ErrNullPtr
+        );
+
+        // The evaluation limit alone: recursion two calls deep needs more than 4 levels.
+        assert_eq!(
+            unsafe { bc_session_set_max_depth(session, 128) },
+            BcStatus::Ok
+        );
+        let rec =
+            CString::new("define f(n) {\nif (n == 0) return (0)\nreturn (f(n - 1))\n}\nf(2)\n")
+                .unwrap();
+        assert_eq!(
+            unsafe { bc_session_eval(session, rec.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+            BcStatus::Ok
+        );
+        assert_eq!(read(&buf), "0\n");
+        assert_eq!(
+            unsafe { bc_session_set_max_eval_depth(session, 4) },
+            BcStatus::Ok
+        );
+        unsafe { bc_session_reset(session, false) };
+        assert_eq!(
+            unsafe { bc_session_eval(session, rec.as_ptr(), buf.as_mut_ptr(), buf.len()) },
+            BcStatus::ErrExecution
+        );
+        assert!(read(&buf).contains("nesting too deep"), "{}", read(&buf));
+        assert_eq!(
+            unsafe { bc_session_set_max_eval_depth(session, 0) },
+            BcStatus::ErrExecution
+        );
+        assert_eq!(
+            unsafe { bc_session_set_max_eval_depth(core::ptr::null_mut(), 8) },
             BcStatus::ErrNullPtr
         );
         unsafe { bc_session_destroy(session) };

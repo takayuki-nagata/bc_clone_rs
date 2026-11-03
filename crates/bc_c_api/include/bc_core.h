@@ -152,16 +152,28 @@ bc_status_t bc_session_set_extension_policy(bc_session_t *session, unsigned int 
 #define BC_DEFAULT_MAX_DEPTH 128
 
 /**
- * Sets how deeply statements, expressions, and function calls may nest in a session
- * (see docs/COMPATIBILITY.md, section 2). Deeper input fails with "nesting too deep" instead of
- * overflowing the stack. One level takes up to about 2 KB of stack; the default,
- * BC_DEFAULT_MAX_DEPTH, suits a 256 KiB stack. The limit is kept by bc_session_reset.
+ * Sets both nesting limits of a session (see docs/COMPATIBILITY.md, section 2): how deeply the
+ * syntax of an input may nest, and how deeply evaluation may nest, function calls included.
+ * Deeper input fails with "nesting too deep" instead of overflowing the stack. One level of
+ * syntax takes up to about 2 KB of stack while parsing; the default, BC_DEFAULT_MAX_DEPTH, suits
+ * a 256 KiB stack. Both limits are kept by bc_session_reset.
  *
  * @param session Pointer to active bc session.
  * @param max_depth Nesting limit, at least 1.
  * @return BC_STATUS_OK, BC_STATUS_ERR_NULL_PTR, or BC_STATUS_ERR_EXECUTION for 0.
  */
 bc_status_t bc_session_set_max_depth(bc_session_t *session, size_t max_depth);
+
+/**
+ * Sets how deeply evaluation may nest in a session, function calls included, after
+ * bc_session_set_max_depth. Evaluation does not use the native stack, so this limit bounds the
+ * heap that deep recursion takes. It is kept by bc_session_reset.
+ *
+ * @param session Pointer to active bc session.
+ * @param max_eval_depth Nesting limit of evaluation, at least 1.
+ * @return BC_STATUS_OK, BC_STATUS_ERR_NULL_PTR, or BC_STATUS_ERR_EXECUTION for 0.
+ */
+bc_status_t bc_session_set_max_eval_depth(bc_session_t *session, size_t max_eval_depth);
 
 /**
  * Destroys a bc session and frees associated memory.

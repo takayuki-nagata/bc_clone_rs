@@ -1290,7 +1290,7 @@ fn test_deep_recursion_on_a_small_stack() {
                     Box::new(TestWriter { buf: out.clone() }),
                     Box::new(TestWriter { buf: err.clone() }),
                 );
-                ev.max_depth = 1_000_000;
+                ev.max_eval_depth = 1_000_000;
                 let summary = ev.run_source(src.as_bytes(), "(test)");
                 let out = String::from_utf8(out.lock().unwrap().clone()).unwrap();
                 let err = String::from_utf8(err.lock().unwrap().clone()).unwrap();
@@ -1316,4 +1316,30 @@ fn test_deep_recursion_on_a_small_stack() {
             .to_string(),
     );
     assert_eq!(out, "6\n");
+}
+
+/// The evaluation limit stops runaway recursion, and the state is usable afterwards.
+#[test]
+fn test_evaluation_limit_stops_recursion() {
+    let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let err = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut ev = Evaluator::new(
+        false,
+        Box::new(TestWriter { buf: out.clone() }),
+        Box::new(TestWriter { buf: err.clone() }),
+    );
+    ev.max_eval_depth = 1000;
+    let summary = ev.run_source(
+        b"define f(n) {\nreturn (f(n + 1))\n}\nf(0)\n1 + 1\n",
+        "(test)",
+    );
+    assert_eq!(summary.errors, 1);
+    assert_eq!(
+        String::from_utf8(out.lock().unwrap().clone()).unwrap(),
+        "2\n"
+    );
+    assert_eq!(
+        String::from_utf8(err.lock().unwrap().clone()).unwrap(),
+        "Runtime error (func=f): nesting too deep\n"
+    );
 }

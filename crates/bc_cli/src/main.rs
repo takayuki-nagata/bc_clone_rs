@@ -274,6 +274,7 @@ where
     }
     let mut evaluator = create_evaluator(math_enabled, stdout_writer, stderr_writer);
     evaluator.max_depth = MAX_DEPTH.load(Ordering::SeqCst);
+    evaluator.max_eval_depth = MAX_EVAL_DEPTH.load(Ordering::SeqCst);
     evaluator.set_scale(verified_cli_initial_scale(math_enabled));
     evaluator.extension_policy = extension_policy;
 
@@ -344,6 +345,13 @@ const ENGINE_MAX_DEPTH: usize = if cfg!(debug_assertions) {
 /// Nesting limit that [`run_app`] gives its evaluator: [`DEFAULT_MAX_DEPTH`] unless the input
 /// runs on the large engine thread.
 static MAX_DEPTH: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_DEPTH);
+
+/// Nesting limit of evaluation (`docs/COMPATIBILITY.md` §2). Evaluation runs on the heap, so it
+/// does not depend on the thread's stack; it bounds the memory of runaway recursion.
+const ENGINE_MAX_EVAL_DEPTH: usize = 2_000_000;
+
+/// Evaluation limit that [`run_app`] gives its evaluator.
+static MAX_EVAL_DEPTH: AtomicUsize = AtomicUsize::new(ENGINE_MAX_EVAL_DEPTH);
 
 /// Runs [`run_app`] on the process's standard streams.
 fn run_on_stdio(args: &[String], is_interactive: bool) -> i32 {

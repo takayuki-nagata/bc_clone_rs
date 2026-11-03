@@ -9,9 +9,13 @@ The loops of the front ends are not; `bc_clone` has its own loop over the proved
 lists what the proofs assume.
 
 ### Changed
-- **Evaluation runs on an explicit stack.** Expressions, statements and function calls no longer
-  recurse on the native stack, so deep recursion in a bc program needs heap, not stack. The
-  parser still recurses within the nesting limit.
+- **Evaluation runs on an explicit stack, with its own nesting limit.** Expressions, statements
+  and function calls no longer recurse on the native stack, so deep recursion in a bc program
+  needs heap, not stack. The nesting limit is split in two: `Evaluator::max_depth` still bounds
+  the syntax (the parser recurses), and the new `Evaluator::max_eval_depth`
+  (`bc_session_set_max_eval_depth` in the C API) bounds evaluation. `bc_clone` allows 2 000 000
+  levels of evaluation, so recursion about 1 000 000 calls deep (it was about 50 000), which
+  takes about 630 MB; the other targets keep their limit for both (`docs/COMPATIBILITY.md` §2).
 - **The syntax tree is a flat arena.** The public `Expr`, `Stmt` and `ExprOrArray` are replaced by
   `Code`, `Node` and `Arg`; `Evaluator::try_evaluate` and `try_execute` take the arena and a node
   index, and `Parser::try_parse_program` returns indices into `Parser::take_code`. A function call

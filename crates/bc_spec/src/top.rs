@@ -18,12 +18,13 @@ pub const NOT_MODELED: u8 = 125;
 
 exec_spec_verified! {
 
-/// Command-line options that the specification models (`-s` and `-w`), and
-/// `Evaluator::max_depth` of the front end.
+/// Command-line options that the specification models (`-s` and `-w`), and the nesting limits
+/// of the front end: `Evaluator::max_depth` (parsing) and `Evaluator::max_eval_depth`.
 pub struct Options {
     pub reject_extensions: bool,
     pub warn_extensions: bool,
     pub max_depth: u64,
+    pub max_eval_depth: u64,
 }
 
 /// One input source: a file operand, or standard input (named `(standard_in)`), as bytes.
@@ -171,7 +172,7 @@ pub open spec fn run_inputs(opts: Options, rs: RunState, inputs: Seq<Input>) -> 
 /// The meaning of `bc_clone` with `opts` on `inputs` (the file operands in order, then
 /// standard input): exit status 1 if any unit failed.
 pub open spec fn run(opts: Options, inputs: Seq<Input>) -> Outcome {
-    let rs = run_inputs(opts, RunState { st: initial(opts.max_depth), errors: 0u64, quit: false, not_modeled: false }, inputs);
+    let rs = run_inputs(opts, RunState { st: initial(opts.max_eval_depth), errors: 0u64, quit: false, not_modeled: false }, inputs);
     Outcome { stdout: rs.st.out, stderr: rs.st.err, status: if rs.errors > 0 { 1u8 } else { 0u8 }, not_modeled: rs.not_modeled }
 }
 

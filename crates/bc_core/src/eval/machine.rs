@@ -571,7 +571,7 @@ impl Evaluator {
             m_eval(*old(self), old(frames)@, *code, nodes, n, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
     {
         let ghost hyp = m_eval(*self, frames@, *code, nodes, n, g, goal);
-        if !verified_nesting_within_limit(self.eval_depth, 1, self.max_depth) {
+        if !verified_nesting_within_limit(self.eval_depth, 1, self.max_eval_depth) {
             let ghost x = bs_ev(nodes, n, g.s);
             let r = Err(BcError::Runtime { kind: RuntimeError::NestingTooDeep, func: None });
             proof {
@@ -1548,7 +1548,7 @@ impl Evaluator {
             m_exec(*old(self), old(frames)@, *code, nodes, n, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
     {
         let ghost hyp = m_exec(*self, frames@, *code, nodes, n, g, goal);
-        if !verified_nesting_within_limit(self.eval_depth, 1, self.max_depth) {
+        if !verified_nesting_within_limit(self.eval_depth, 1, self.max_eval_depth) {
             let ghost x = bs_exec(nodes, n, g.s);
             let r = Err(BcError::Runtime { kind: RuntimeError::NestingTooDeep, func: None });
             proof {
@@ -1954,7 +1954,7 @@ impl Evaluator {
     /// The arguments of the call at node `n` from the `i`-th on (the specification's `ev_args`),
     /// then the call.
     #[verifier::exec_allows_no_decreases_clause]
-    #[verifier::rlimit(40)]
+    #[verifier::rlimit(80)]
     fn args_next(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, fd: FunctionDef, i0: usize, vals0: Vec<(String, ArgValue)>, Ghost(nodes): Ghost<SpecNodes>, Ghost(gf): Ghost<SpecFunc>, Ghost(acc0): Ghost<SpecArgVals>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),

@@ -41,6 +41,10 @@ const MAX_DEPTH: &str = if cfg!(debug_assertions) {
     "100000"
 };
 
+/// `Evaluator::max_eval_depth` of the `bc_clone` binary under test
+/// (`bc_cli::ENGINE_MAX_EVAL_DEPTH`).
+const MAX_EVAL_DEPTH: &str = "2000000";
+
 /// The oracle's path, or `None` (with a note, once) when the tests should be skipped.
 fn oracle() -> Option<String> {
     static ORACLE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
@@ -65,7 +69,10 @@ fn check_against_spec(input: &[u8], flags: &[&str]) -> bool {
     let Some(oracle) = oracle() else {
         return false;
     };
-    let envs = [("BC_SPEC_MAX_DEPTH", MAX_DEPTH)];
+    let envs = [
+        ("BC_SPEC_MAX_DEPTH", MAX_DEPTH),
+        ("BC_SPEC_MAX_EVAL_DEPTH", MAX_EVAL_DEPTH),
+    ];
     let (spec_code, spec_out, spec_err) = run_command_raw(&oracle, flags, &envs, input);
     if spec_code == TIMED_OUT || spec_code == NOT_MODELED {
         return false;
@@ -253,7 +260,15 @@ proptest! {
     #[test]
     fn prop_spec_matches_gnu_bc(prog in program()) {
         if let Some(oracle) = oracle() {
-            check_against_gnu(&oracle, &[("BC_SPEC_MAX_DEPTH", MAX_DEPTH)], &prog, &[]);
+            check_against_gnu(
+                &oracle,
+                &[
+                    ("BC_SPEC_MAX_DEPTH", MAX_DEPTH),
+                    ("BC_SPEC_MAX_EVAL_DEPTH", MAX_EVAL_DEPTH),
+                ],
+                &prog,
+                &[],
+            );
         }
     }
 }

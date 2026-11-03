@@ -20,10 +20,15 @@ fn parse_args(args: &[String]) -> (ExecOptions, Vec<String>) {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000);
+    let max_eval_depth = std::env::var("BC_SPEC_MAX_EVAL_DEPTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2_000_000);
     let mut opts = ExecOptions {
         reject_extensions: false,
         warn_extensions: false,
         max_depth,
+        max_eval_depth,
     };
     let mut files = Vec::new();
     let mut operands_only = false;

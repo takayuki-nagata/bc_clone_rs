@@ -209,6 +209,9 @@ pub struct Evaluator {
     /// the native stack that parsing and evaluation use (`docs/COMPATIBILITY.md` §2), so a
     /// front end sets it for the stack it runs on.
     pub max_depth: usize,
+    /// How many levels evaluation may nest, function calls included (`docs/COMPATIBILITY.md`
+    /// §2). Evaluation runs on the heap, so this bounds the memory of deep recursion.
+    pub max_eval_depth: usize,
     /// Expressions and statements currently being evaluated.
     pub(crate) eval_depth: usize,
     /// `ibase` when the innermost executing function was invoked (`None` at top level). POSIX:
@@ -274,7 +277,7 @@ pub(crate) open spec fn r_state(e: Evaluator, st: EState) -> bool {
     &&& e.break_flag == st.brk && e.return_flag == st.ret && r_num(e.return_value, st.ret_val)
     &&& !e.quit_flag
     &&& r_calls(e.call_stack@, st.calls)
-    &&& e.eval_depth == st.depth && e.max_depth == st.max_depth
+    &&& e.eval_depth == st.depth && e.max_eval_depth == st.max_depth
     &&& match e.invocation_ibase {
         Some(b) => st.has_inv && b == st.inv_ibase,
         None => !st.has_inv,
@@ -671,6 +674,7 @@ pub(crate) open spec fn same_but_storage(e1: Evaluator, e2: Evaluator) -> bool {
     &&& e1.extension_policy == e2.extension_policy
     &&& e1.call_stack == e2.call_stack
     &&& e1.max_depth == e2.max_depth
+    &&& e1.max_eval_depth == e2.max_eval_depth
     &&& e1.eval_depth == e2.eval_depth
     &&& e1.invocation_ibase == e2.invocation_ibase
 }
@@ -701,6 +705,7 @@ pub(crate) open spec fn same_but_err(e1: Evaluator, e2: Evaluator) -> bool {
     &&& e1.extension_policy == e2.extension_policy
     &&& e1.call_stack == e2.call_stack
     &&& e1.max_depth == e2.max_depth
+    &&& e1.max_eval_depth == e2.max_eval_depth
     &&& e1.eval_depth == e2.eval_depth
     &&& e1.invocation_ibase == e2.invocation_ibase
 }
@@ -796,6 +801,7 @@ pub(crate) open spec fn same_but_depth(e1: Evaluator, e2: Evaluator) -> bool {
     &&& e1.extension_policy == e2.extension_policy
     &&& e1.call_stack == e2.call_stack
     &&& e1.max_depth == e2.max_depth
+    &&& e1.max_eval_depth == e2.max_eval_depth
     &&& e1.invocation_ibase == e2.invocation_ibase
 }
 
@@ -816,6 +822,7 @@ impl Evaluator {
             r.inv(),
             r.math_enabled == math_enabled,
             r.max_depth == max_depth,
+            r.max_eval_depth == max_depth,
             r.extension_policy == ExtensionPolicy::Allow,
             (!math_enabled && out_log(&stdout_writer) == Seq::<u8>::empty() && out_col(&stdout_writer) == 0
                 && err_log(&stderr_writer) == Seq::<u8>::empty())
@@ -838,6 +845,7 @@ impl Evaluator {
             extension_policy: ExtensionPolicy::Allow,
             call_stack: Vec::new(),
             max_depth,
+            max_eval_depth: max_depth,
             eval_depth: 0,
             invocation_ibase: None,
         };

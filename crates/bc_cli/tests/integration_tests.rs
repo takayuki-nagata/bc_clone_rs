@@ -934,9 +934,11 @@ fn test_math_library_extreme_arguments() {
     }
 }
 
-/// Deep nesting and deep recursion run on the CLI's large engine stack, and input beyond the
-/// nesting limit is an error rather than a stack overflow (`docs/COMPATIBILITY.md` §2). The
-/// sizes are within the limit of debug builds too.
+/// Deep nesting runs on the CLI's large engine stack and deep recursion on the heap, and input
+/// beyond either nesting limit is an error rather than a stack overflow or memory exhaustion
+/// (`docs/COMPATIBILITY.md` §2). The sizes are within the limits of debug builds too. Reaching
+/// the evaluation limit takes about 630 MB, so the unit tests of `bc_core` check it with a small
+/// limit instead.
 #[test]
 fn test_deep_nesting_and_recursion() {
     let bin = env!("CARGO_BIN_EXE_bc_clone");
@@ -945,11 +947,7 @@ fn test_deep_nesting_and_recursion() {
     };
     let cases = [
         (recursion(5_000), "0\n".to_string(), ""),
-        (
-            recursion(1_000_000),
-            String::new(),
-            "Runtime error (func=f): nesting too deep\n",
-        ),
+        (recursion(200_000), "0\n".to_string(), ""),
         (
             format!("1{}\n", "+1".repeat(15_000)),
             "15001\n".to_string(),

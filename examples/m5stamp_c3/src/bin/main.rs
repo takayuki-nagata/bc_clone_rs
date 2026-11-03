@@ -103,6 +103,7 @@ fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> Strin
     );
     ev.set_scale(default_scale);
     ev.max_depth = M5STAMP_MAX_DEPTH;
+    ev.max_eval_depth = M5STAMP_MAX_DEPTH;
 
     eval_bc_non_panicking(code, &mut ev);
 
@@ -283,6 +284,7 @@ fn main() -> ! {
         Box::new(SerialWriter),
     );
     evaluator.max_depth = M5STAMP_MAX_DEPTH;
+    evaluator.max_eval_depth = M5STAMP_MAX_DEPTH;
 
     let mut line_buf = Vec::new();
     let mut acc = UnitAccumulator::new();

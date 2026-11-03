@@ -134,6 +134,7 @@ fn eval_bc_at_depth(code: &str, math_enabled: bool, default_scale: usize, depth:
     );
     evaluator.set_scale(default_scale);
     evaluator.max_depth = depth;
+    evaluator.max_eval_depth = depth;
 
     evaluator.run_source(code.as_bytes(), STDIN_SOURCE);
 
