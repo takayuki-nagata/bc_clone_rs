@@ -21,12 +21,16 @@
 //! `Evaluator::exec_ref`: if `r_state(e, st)` and `r_code(code, nodes)`, then for node `n` and
 //! every fuel with which the specification's `ev` (or `exec`) finishes, the result and the new
 //! state correspond to it (`r_result`; `bc_spec::fuel` shows that every finishing fuel gives the
-//! same result).
+//! same result). They are proved of the explicit-stack machine (`eval/machine.rs`): the
+//! specification's fuel-free semantics (`bc_spec::den`) gives a meaning to the machine's frames,
+//! each step keeps that meaning equal to the result of the whole evaluation, and the fast path
+//! (`eval/machine/quick.rs`) has the theorems of the steps it replaces.
 
 use crate::error::{BcError, RuntimeError};
 use crate::math::BCNum;
 use crate::parser::{
-    Arg as PArg, AssignOp, BinOp, Code, FunctionDef, Node as PNode, Param, Register, RelOp,
+    Arg as PArg, AssignOp, BinOp, Code, FunctionDecl, FunctionDef, Node as PNode, Param, Register,
+    RelOp,
 };
 use crate::spec_num::*;
 use crate::trusted_std::axiom_string_view_injective;
@@ -166,10 +170,15 @@ pub open spec fn r_node(p: PNode, s: Node) -> bool {
         PNode::If(c, b) => s == Node::If(c, b),
         PNode::While(c, b) => s == Node::While(c, b),
         PNode::For(i, c, u, b) => s == Node::For(i, c, u, b),
-        PNode::Define(name, params, autos, body) => match s {
-            Node::Define(y, ps, qs, ns) => y == text_view(name) && r_params(params@, ps) && r_params(autos@, qs) && ns == body@,
-            _ => false,
-        },
+        PNode::Define(decl) => r_decl(*decl, s),
+    }
+}
+
+/// A function definition: its own function, so that the proofs about other nodes do not unfold it.
+pub open spec fn r_decl(decl: FunctionDecl, s: Node) -> bool {
+    match s {
+        Node::Define(y, ps, qs, ns) => y == text_view(decl.name) && r_params(decl.params@, ps) && r_params(decl.autos@, qs) && ns == decl.body@,
+        _ => false,
     }
 }
 

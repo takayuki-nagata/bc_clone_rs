@@ -288,7 +288,7 @@ pub(crate) open spec fn call_named(code: Rc<Code>, n: usize, name: Seq<u8>) -> b
 pub(crate) open spec fn fd_params(fd: FunctionDef) -> Seq<Param> {
     if fd.def < fd.code.nodes@.len() {
         match fd.code.nodes@[fd.def as int] {
-            PNode::Define(_, params, _, _) => params@,
+            PNode::Define(decl) => decl.params@,
             _ => Seq::empty(),
         }
     } else {
@@ -1988,7 +1988,7 @@ impl Evaluator {
             return (Step::Ret(Ok(BCNum::zero())), Ghost(g));
         }
         let nparams = match &fd.code.nodes[fd.def] {
-            PNode::Define(_, params, _, _) => params.len(),
+            PNode::Define(decl) => decl.params.len(),
             _ => { return (Step::Ret(Ok(BCNum::zero())), Ghost(g)); },
         };
         if args.len() != nparams {
@@ -2043,7 +2043,7 @@ impl Evaluator {
             _ => { return (Step::Ret(Ok(BCNum::zero())), Ghost(g)); },
         };
         let params = match &fd.code.nodes[fd.def] {
-            PNode::Define(_, params, _, _) => params,
+            PNode::Define(decl) => &decl.params,
             _ => { return (Step::Ret(Ok(BCNum::zero())), Ghost(g)); },
         };
         loop
@@ -2055,7 +2055,7 @@ impl Evaluator {
                 n < code.nodes@.len(),
                 code.nodes@[n as int] matches PNode::Call(_, a) && a == *args,
                 fd.def < fd.code.nodes@.len(),
-                fd.code.nodes@[fd.def as int] matches PNode::Define(_, p, _, _) && p == *params,
+                fd.code.nodes@[fd.def as int] matches PNode::Define(decl) && decl.params == *params,
                 sargs == call_args(nodes, n),
                 hyp == m_args(*old(self), old(frames)@, *code, nodes, n, fd, i0, vals0@, gf, acc0, g, goal),
                 hyp ==> r_params(params@, gf.params) && r_args(args@, sargs) && sargs.len() == gf.params.len(),
@@ -2195,7 +2195,7 @@ impl Evaluator {
         let callee = share_code(&fd.code);
         let def = fd.def;
         let (params, autos) = match &callee.nodes[def] {
-            PNode::Define(_, params, autos, _) => (params, autos),
+            PNode::Define(decl) => (&decl.params, &decl.autos),
             _ => { return (Step::Ret(Ok(BCNum::zero())), Ghost(g)); },
         };
         let ghost s0 = g.s;
@@ -2267,7 +2267,8 @@ impl Evaluator {
         let ghost hyp = m_body(*self, frames@, *code, nodes, def, i, g, goal);
         proof { if hyp { assert(r_node(code.nodes@[def as int], nodes[def as int])); } }
         if def < code.nodes.len() {
-            if let PNode::Define(_, _, _, body) = &code.nodes[def] {
+            if let PNode::Define(decl) = &code.nodes[def] {
+                let body = &decl.body;
                 let ghost rest = body@.skip(i as int);
                 let ghost parent = bs_body(nodes, rest, g.s);
                 if i >= body.len() {
@@ -2322,7 +2323,7 @@ impl Evaluator {
             return (Step::Leave(caller, Ok(BCNum::zero())), Ghost(MG { nodes: cn, ks: ks1, s: x.st, x: y }));
         }
         let (params, autos) = match &code.nodes[def] {
-            PNode::Define(_, params, autos, _) => (params, autos),
+            PNode::Define(decl) => (&decl.params, &decl.autos),
             _ => { return (Step::Leave(caller, Ok(BCNum::zero())), Ghost(MG { nodes: cn, ks: ks1, s: x.st, x: y })); },
         };
         let ghost sl = if ret is Ok { x.st } else { with_depth(x.st, d as u64) };
@@ -2383,7 +2384,7 @@ impl Evaluator {
         proof { if hyp { assert(r_node(fd.code.nodes@[fd.def as int], gf.nodes[fd.def as int])); } }
         let pn = if fd.def < fd.code.nodes.len() {
             match &fd.code.nodes[fd.def] {
-                PNode::Define(_, params, _, _) => if i < params.len() { params[i].name.clone() } else { String::new() },
+                PNode::Define(decl) => if i < decl.params.len() { decl.params[i].name.clone() } else { String::new() },
                 _ => String::new(),
             }
         } else {

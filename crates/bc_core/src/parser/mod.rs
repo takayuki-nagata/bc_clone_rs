@@ -5,6 +5,7 @@
 //! Conforms to standard POSIX bc lexical and syntax grammar rules, supporting
 //! operator precedence climbing and backslash-newline continuation.
 
+use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -226,8 +227,18 @@ pub enum Node {
     While(usize, usize),
     /// `(init, condition, post, body)`.
     For(usize, usize, usize, usize),
-    /// `(name, parameters, autos, body)`.
-    Define(String, Vec<Param>, Vec<Param>, Vec<usize>),
+    /// A function definition, boxed so that it does not make every node larger.
+    Define(Box<FunctionDecl>),
+}
+
+/// The parts of `Node::Define`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionDecl {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub autos: Vec<Param>,
+    /// The statements of the body.
+    pub body: Vec<usize>,
 }
 
 /// The syntax trees of one input unit. A flat arena: dropping or copying it does not recurse,
@@ -292,6 +303,10 @@ pub struct ExAssignOp(AssignOp);
 #[cfg(verus_keep_ghost)]
 #[verifier::external_type_specification]
 pub struct ExArg(Arg);
+
+#[cfg(verus_keep_ghost)]
+#[verifier::external_type_specification]
+pub struct ExFunctionDecl(FunctionDecl);
 
 #[cfg(verus_keep_ghost)]
 #[verifier::external_type_specification]

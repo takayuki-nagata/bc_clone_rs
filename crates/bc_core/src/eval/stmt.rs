@@ -71,7 +71,8 @@ impl Evaluator {
                 }
                 Ok(())
             },
-            PNode::Define(name, _, _, _) => {
+            PNode::Define(decl) => {
+                let name = &decl.name;
                 let ghost m = self.functions@;
                 proof {
                     axiom_string_obeys_cmp();

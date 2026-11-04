@@ -278,24 +278,24 @@ The gaps listed above are known and remain open. Do not describe any layer as pr
   `examples/wasm_web_app/tests/nesting_limit.mjs`. `deepest` finds the largest input the limit
   accepts, so each workload reaches the limit. The QEMU runner and the M5Stamp self-tests run them.
   - M5Stamp C3 (`M5STAMP_MAX_DEPTH` = 128): the criteria are at most 60% of the 185 KB stack and
-    completing in the 128 KiB heap. `scripts/measure_m5stamp_stack.sh` gives 82 KB of stack and
-    90 KB of heap at 128; 116 KB of heap at 160, which we consider too close for an allocator we
-    did not measure with; and no heap left at 192. It measures a QEMU build with the same
-    optimization settings and another allocator. The application's self-tests, which fail above
-    60%, passed on a board: 82 104 of 185 204 bytes of stack (44%). The REPL has the same limit, and
-    the self-tests take the board about 7 seconds to reach the prompt. The heap use is not measured
-    on the board. An overflow runs into `.bss`; esp-hal's watchpoint only sees a write to its one guard
+    completing in the 128 KiB heap. Since evaluation runs on an explicit stack, the heap decides:
+    `scripts/measure_m5stamp_stack.sh` gives 34 KB of stack and 87 KB of heap at 128 (nested
+    `for`), and no heap left at 160. It measures a QEMU build with the same optimization settings
+    and another allocator. The application's self-tests, which fail above 60% of the stack, passed
+    on a board with the recursive evaluator (82 104 of 185 204 bytes, 44%); they have not been run
+    on a board since. The REPL has the same limit, and the self-tests take the board about 7
+    seconds to reach the prompt. The heap use is not measured on the board. An overflow runs into `.bss`; esp-hal's watchpoint only sees a write to its one guard
     word, so it may miss one.
   - Wasm (`WASM_MAX_DEPTH` = 1000): the criteria are at most 50% of the 1 MiB stack in linear
     memory, and at least twice the limit before an engine failure. `nesting_limit.mjs`, which
     `scripts/build_wasm.sh` runs when `node` is available, checks the first on the built module
-    (46%). With the `stack-probe` feature, 2000 levels ran and 3000 did not, and 1000 levels ran
+    (21.5%; 46% with the recursive evaluator). With the recursive evaluator and the `stack-probe` feature, 2000 levels ran and 3000 did not, and 1000 levels ran
     with `--stack-size=492`, half of V8's default, but not with 250. The workloads also ran once by
     hand in headless Firefox 159 on aarch64, with the same stack use: 1000 and 2000 levels ran, 3000
     did not; the margin of Firefox's own stack was not measured separately. No automated test runs
     in a browser, and **Safari is not measured**.
-  - A change to the per-level stack use, such as an evaluator with an explicit stack, requires
-    measuring again.
+  - A change to the per-level stack or heap use (the size of `Node` or `Frame`, the frames a
+    construct pushes, the fast path's budget) requires measuring again.
 - **C API**: `bc_c_api` embeds a 64 KiB LLFF heap on `no_std` targets. Status codes are defined in
   `include/bc_core.h`.
 - **ESP32-C3** (`examples/m5stamp_c3`): built in CI by `scripts/build_m5stamp_c3.sh`. Flashing

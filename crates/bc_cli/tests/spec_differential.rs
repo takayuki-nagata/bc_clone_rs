@@ -385,8 +385,11 @@ mod parser_relation {
             (Node::For(i, c, p, b), ExecNode::For(a, d, e, f)) => {
                 i == a && c == d && p == e && b == f
             }
-            (Node::Define(name, ps, autos, body), ExecNode::Define(m, qs, rs, ns)) => {
-                m == name.as_bytes() && r_params(ps, qs) && r_params(autos, rs) && body == ns
+            (Node::Define(decl), ExecNode::Define(m, qs, rs, ns)) => {
+                m == decl.name.as_bytes()
+                    && r_params(&decl.params, qs)
+                    && r_params(&decl.autos, rs)
+                    && &decl.body == ns
             }
             _ => false,
         }

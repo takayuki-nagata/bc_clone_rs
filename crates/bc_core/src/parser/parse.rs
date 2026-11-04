@@ -9,8 +9,8 @@ use super::lexer::syntax_error_text;
 #[cfg(verus_keep_ghost)]
 use super::lexer::{r_lex_err, r_next, tok_of, tok_view};
 use super::{
-    Arg as PArg, AssignOp, BinOp, Code, ExtensionPolicy, Lexer, Node as PNode, Param, Register,
-    RelOp, Token, TokenType,
+    Arg as PArg, AssignOp, BinOp, Code, ExtensionPolicy, FunctionDecl, Lexer, Node as PNode, Param,
+    Register, RelOp, Token, TokenType,
 };
 #[cfg(verus_keep_ghost)]
 use crate::driver::{r_ext, r_parsed};
@@ -24,6 +24,7 @@ use crate::verified_kernels::{
     TOK_ASSIGN_OP, TOK_EXP_OP, TOK_MUL_OP, TOK_PLUS_MINUS, verified_nesting_within_limit,
     verified_pratt_infix_info,
 };
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
@@ -3580,7 +3581,7 @@ impl Parser {
             },
         }
         let ghost nd = Node::Define(sname, sparams, sautos, l.list);
-        let idx = self.add_stmt(PNode::Define(name, params, autos, body), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e8.st), Ghost(nd), Ghost(0u64));
+        let idx = self.add_stmt(PNode::Define(Box::new(FunctionDecl { name, params, autos, body })), Ghost(toks), Ghost(cfg), Ghost(st), Ghost(e8.st), Ghost(nd), Ghost(0u64));
         let ghost g = add_node(e8.st, nd, 0u64);
         proof {
             assert forall|f: u64| #![trigger p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)] pdone(p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)) implies p_function_stmts(toks, cfg, st, sname, sparams, sautos, f) == g by {

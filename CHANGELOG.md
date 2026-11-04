@@ -18,7 +18,8 @@ lists what the proofs assume.
   levels of evaluation, so recursion about 1 000 000 calls deep (it was about 50 000), which
   takes about 630 MB; the other targets keep their limit for both (`docs/COMPATIBILITY.md` §2).
 - **The syntax tree is a flat arena.** The public `Expr`, `Stmt` and `ExprOrArray` are replaced by
-  `Code`, `Node` and `Arg`; `Evaluator::try_evaluate` and `try_execute` take the arena and a node
+  `Code`, `Node` and `Arg` (`Node::Define` holds a boxed `FunctionDecl`, which keeps a node at
+  24 bytes on 32-bit targets); `Evaluator::try_evaluate` and `try_execute` take the arena and a node
   index, and `Parser::try_parse_program` returns indices into `Parser::take_code`. A function call
   no longer copies the function's body.
 - **Nesting limit on Wasm and the M5Stamp C3.** Both now set their limit from measurements of the

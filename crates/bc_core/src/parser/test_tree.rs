@@ -3,7 +3,7 @@
 //! Syntax trees for the unit tests: they build their inputs and state their expectations as
 //! trees, which are converted to and from the arena that the parser and the evaluator use.
 
-use super::{Arg, AssignOp, BinOp, Code, Node, Param, Parser, Register, RelOp};
+use super::{Arg, AssignOp, BinOp, Code, FunctionDecl, Node, Param, Parser, Register, RelOp};
 use crate::error::BcError;
 use crate::eval::Evaluator;
 use crate::math::BCNum;
@@ -126,7 +126,12 @@ pub fn lower_stmt(code: &mut Code, s: &Stmt) -> usize {
         }
         Stmt::FunctionDef(fd) => {
             let body = fd.body.iter().map(|x| lower_stmt(code, x)).collect();
-            Node::Define(fd.name.clone(), fd.params.clone(), fd.autos.clone(), body)
+            Node::Define(Box::new(FunctionDecl {
+                name: fd.name.clone(),
+                params: fd.params.clone(),
+                autos: fd.autos.clone(),
+                body,
+            }))
         }
     };
     push(code, n)
@@ -177,11 +182,11 @@ pub fn raise_stmt(code: &Code, n: usize) -> Stmt {
             raise_expr(code, *p),
             Box::new(raise_stmt(code, *b)),
         ),
-        Node::Define(name, params, autos, body) => Stmt::FunctionDef(FunctionDef {
-            name: name.clone(),
-            params: params.clone(),
-            autos: autos.clone(),
-            body: list(body),
+        Node::Define(decl) => Stmt::FunctionDef(FunctionDef {
+            name: decl.name.clone(),
+            params: decl.params.clone(),
+            autos: decl.autos.clone(),
+            body: list(&decl.body),
         }),
         other => panic!("not a statement: {other:?}"),
     }
