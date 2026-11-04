@@ -204,10 +204,9 @@ pub struct Evaluator {
     /// Names of the user functions currently executing, innermost last (for diagnostics).
     pub(crate) call_stack: Vec<String>,
 
-    /// Nesting limit: the syntax tree of an input unit is at most this deep, and at most this
-    /// many expressions and statements (across function calls) are evaluated at once. It bounds
-    /// the native stack that parsing and evaluation use (`docs/COMPATIBILITY.md` §2), so a
-    /// front end sets it for the stack it runs on.
+    /// Nesting limit of the syntax: the syntax tree of an input unit is at most this deep. It
+    /// bounds the native stack that parsing uses (`docs/COMPATIBILITY.md` §2), so a front end
+    /// sets it for the stack it runs on. It does not limit evaluation; `max_eval_depth` does.
     pub max_depth: usize,
     /// How many levels evaluation may nest, function calls included (`docs/COMPATIBILITY.md`
     /// §2). Evaluation runs on the heap, so this bounds the memory of deep recursion.
@@ -308,7 +307,7 @@ impl Evaluator {
     /// ends, and the glue `run_unit`): `new` establishes it (`with_streams`); every public
     /// method that changes a field it reads is verified to keep it (`set_scale`, `try_*`, …);
     /// and those fields are `pub(crate)` and written only by verified code. The public fields
-    /// `max_depth` and `extension_policy` are not part of it.
+    /// `max_depth`, `max_eval_depth` and `extension_policy` are not part of it.
     pub closed spec fn inv(&self) -> bool {
         &&& self.scale <= BC_SCALE_MAX
         &&& 2 <= self.ibase <= IBASE_MAX

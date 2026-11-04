@@ -289,7 +289,7 @@ The gaps listed above are known and remain open. Do not describe any layer as pr
   - Wasm (`WASM_MAX_DEPTH` = 1000): the criteria are at most 50% of the 1 MiB stack in linear
     memory, and at least twice the limit before an engine failure. `nesting_limit.mjs`, which
     `scripts/build_wasm.sh` runs when `node` is available, checks the first on the built module
-    (21.5%; 46% with the recursive evaluator). With the recursive evaluator and the `stack-probe` feature, 2000 levels ran and 3000 did not, and 1000 levels ran
+    (12.3%; 46% with the recursive evaluator). With the recursive evaluator and the `stack-probe` feature, 2000 levels ran and 3000 did not, and 1000 levels ran
     with `--stack-size=492`, half of V8's default, but not with 250. The workloads also ran once by
     hand in headless Firefox 159 on aarch64, with the same stack use: 1000 and 2000 levels ran, 3000
     did not; the margin of Firefox's own stack was not measured separately. No automated test runs

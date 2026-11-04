@@ -17,6 +17,8 @@ lists what the proofs assume.
   (`bc_session_set_max_eval_depth` in the C API) bounds evaluation. `bc_clone` allows 2 000 000
   levels of evaluation, so recursion about 1 000 000 calls deep (it was about 50 000), which
   takes about 630 MB; the other targets keep their limit for both (`docs/COMPATIBILITY.md` §2).
+  A program that raised only `max_depth` must now raise `max_eval_depth` too: a new `Evaluator`
+  starts both at `DEFAULT_MAX_DEPTH` (128).
 - **The syntax tree is a flat arena.** The public `Expr`, `Stmt` and `ExprOrArray` are replaced by
   `Code`, `Node` and `Arg` (`Node::Define` holds a boxed `FunctionDecl`, which keeps a node at
   24 bytes on 32-bit targets); `Evaluator::try_evaluate` and `try_execute` take the arena and a node
