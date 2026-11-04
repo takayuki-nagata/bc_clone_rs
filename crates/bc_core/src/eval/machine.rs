@@ -13,6 +13,13 @@ use super::*;
 #[cfg(verus_keep_ghost)]
 use bc_spec::den::*;
 
+#[allow(
+    clippy::single_match,
+    reason = "a match arm that only updates ghost state is empty outside Verus"
+)]
+mod quick;
+use quick::*;
+
 /// One pending syntactic form. See `bc_spec::den::K`, frame by frame.
 pub(crate) enum Frame {
     /// The level of `eval_ref`: the depth to restore.
@@ -571,6 +578,12 @@ impl Evaluator {
             m_eval(*old(self), old(frames)@, *code, nodes, n, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
     {
         let ghost hyp = m_eval(*self, frames@, *code, nodes, n, g, goal);
+        if Self::quick_ok(code, n, QUICK_BUDGET) {
+            let ghost x = bs_ev(nodes, n, g.s);
+            proof { if hyp { lemma_den_done(g.ks, x); } }
+            let r = self.quick_eval(code, n, QUICK_BUDGET, Ghost(nodes), Ghost(g.s));
+            return (Step::Ret(r), Ghost(MG { nodes: nodes, ks: g.ks, s: g.s, x }));
+        }
         if !verified_nesting_within_limit(self.eval_depth, 1, self.max_eval_depth) {
             let ghost x = bs_ev(nodes, n, g.s);
             let r = Err(BcError::Runtime { kind: RuntimeError::NestingTooDeep, func: None });
@@ -609,8 +622,48 @@ impl Evaluator {
     }
 
     /// A form whose first sub-computation is node `child`.
+    /// Evaluates `child` for the frame `f`: by the fast path when it can, else on a new frame.
     #[verifier::exec_allows_no_decreases_clause]
     fn push_sub(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, f: Frame, child: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(parent): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+        requires
+            old(self).inv(),
+            frames_ok(old(frames)@, old(self).eval_depth, d0),
+            mframe_ok(f),
+            !(f is Depth) && !(f is DepthS),
+            gives_value(f) == wants(old(frames)@, d0),
+            takes_value(f),
+        ensures
+            final(self).inv(),
+            frames_ok(final(frames)@, final(self).eval_depth, d0),
+            step_ok(r.0, final(frames)@, d0),
+            (r_rc(*code, nodes) && r_state(*old(self), g.s) && r_mframes(old(frames)@, g.ks, *code, nodes)
+                && r_mframe(f, k, *code, nodes) && done(goal) && den(g.ks, parent) == goal
+                && (done(parent) ==> parent == apply(k, bs_ev(nodes, child, g.s))))
+                ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+    {
+        let ghost hyp = r_rc(*code, nodes) && r_state(*self, g.s) && r_mframes(frames@, g.ks, *code, nodes)
+            && r_mframe(f, k, *code, nodes) && done(goal) && den(g.ks, parent) == goal
+            && (done(parent) ==> parent == apply(k, bs_ev(nodes, child, g.s)));
+        // An argument is not taken here: its frame leads to the next argument, so the recursion
+        // through `ret_ok` would be as deep as the call has arguments.
+        if !matches!(f, Frame::ArgVal(..)) && Self::quick_ok(code, child, QUICK_BUDGET) {
+            let ghost x = bs_ev(nodes, child, g.s);
+            proof {
+                if hyp {
+                    lemma_den_done(g.ks, parent);
+                    if !done(x) { lemma_apply_not_done(k, x); }
+                }
+            }
+            return match self.quick_eval(code, child, QUICK_BUDGET, Ghost(nodes), Ghost(g.s)) {
+                Ok(v) => self.ret_ok(frames, code, f, v, Ghost(nodes), Ghost(k), Ghost(g.ks), Ghost(x), Ghost(goal), Ghost(d0)),
+                Err(e) => (Step::Ret(Err(e)), Ghost(MG { nodes: nodes, ks: g.ks, s: g.s, x: parent })),
+            };
+        }
+        self.push_frame(frames, code, f, child, Ghost(nodes), Ghost(k), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0))
+    }
+
+    #[verifier::exec_allows_no_decreases_clause]
+    fn push_frame(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, f: Frame, child: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(parent): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
             frames_ok(old(frames)@, old(self).eval_depth, d0),
@@ -1548,6 +1601,15 @@ impl Evaluator {
             m_exec(*old(self), old(frames)@, *code, nodes, n, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
     {
         let ghost hyp = m_exec(*self, frames@, *code, nodes, n, g, goal);
+        if Self::quick_stmt_ok(code, n, QUICK_BUDGET) {
+            let ghost x = bs_exec(nodes, n, g.s);
+            proof { if hyp { lemma_den_done(g.ks, x); } }
+            let r = match self.quick_exec(code, n, QUICK_BUDGET, Ghost(nodes), Ghost(g.s)) {
+                Ok(()) => Ok(BCNum::zero()),
+                Err(e) => Err(e),
+            };
+            return (Step::Ret(r), Ghost(MG { nodes: nodes, ks: g.ks, s: g.s, x }));
+        }
         if !verified_nesting_within_limit(self.eval_depth, 1, self.max_eval_depth) {
             let ghost x = bs_exec(nodes, n, g.s);
             let r = Err(BcError::Runtime { kind: RuntimeError::NestingTooDeep, func: None });
@@ -2593,10 +2655,13 @@ impl Evaluator {
         proof {
             assert(r_mframes(Seq::<Frame>::empty(), Seq::<K>::empty(), *code, nodes));
         }
-        let r = self.run(code, Step::Exec(n), Ghost(nodes), Ghost(st), Ghost(goal), Ghost(false));
-        let r = match r {
-            Ok(_) => Ok(()),
-            Err(e) => Err(e),
+        let r = if Self::quick_stmt_ok(code, n, QUICK_BUDGET) {
+            self.quick_exec(code, n, QUICK_BUDGET, Ghost(nodes), Ghost(st))
+        } else {
+            match self.run(code, Step::Exec(n), Ghost(nodes), Ghost(st), Ghost(goal), Ghost(false)) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            }
         };
         proof {
             if r_state(e0, st) && r_rc(*code, nodes) {

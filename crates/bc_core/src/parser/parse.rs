@@ -3655,7 +3655,7 @@ pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: us
         depth: 0,
         last_line: 1,
         max_depth,
-        nodes: Vec::new(),
+        nodes: Vec::with_capacity(8),
     };
     proof {
         assert(toks.skip(0) =~= toks);

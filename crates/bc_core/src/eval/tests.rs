@@ -1348,3 +1348,35 @@ fn test_evaluation_limit_stops_recursion() {
         "Runtime error (func=f): nesting too deep\n"
     );
 }
+
+/// The evaluation limit counts the same levels whether an expression is shallow enough for the
+/// fast path or deeper: a statement is one level, and each parenthesis, operator and operand
+/// one more.
+#[test]
+fn test_evaluation_limit_counts_every_level() {
+    for k in 1..24 {
+        let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let err = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut ev = Evaluator::new(
+            false,
+            Box::new(TestWriter { buf: out.clone() }),
+            Box::new(TestWriter { buf: err.clone() }),
+        );
+        ev.max_eval_depth = 12;
+        let parens = format!("{}1{}\n", "(".repeat(k), ")".repeat(k));
+        let negs = format!("{}1\n", "- ".repeat(k));
+        let sums = format!("{}1\n", "1+".repeat(k));
+        let summary = ev.run_source(format!("{parens}{negs}{sums}").as_bytes(), "(test)");
+        // The levels are the statement, `k` operators and the number: within the limit while
+        // they number fewer than 12. The fast path takes the shallower ones.
+        let fails = |levels: usize| usize::from(levels >= 12);
+        let expected = 3 * fails(k + 2);
+        let err = String::from_utf8(err.lock().unwrap().clone()).unwrap();
+        assert_eq!(summary.errors, expected, "k = {k}");
+        assert_eq!(
+            err.matches("nesting too deep").count(),
+            expected,
+            "k = {k}: {err}"
+        );
+    }
+}

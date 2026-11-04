@@ -10,7 +10,8 @@ lists what the proofs assume.
 
 ### Changed
 - **Evaluation runs on an explicit stack, with its own nesting limit.** Expressions, statements
-  and function calls no longer recurse on the native stack, so deep recursion in a bc program
+  and function calls no longer recurse on the native stack (beyond a fixed eight levels for
+  shallow call-free code, which runs without frames), so deep recursion in a bc program
   needs heap, not stack. The nesting limit is split in two: `Evaluator::max_depth` still bounds
   the syntax (the parser recurses), and the new `Evaluator::max_eval_depth`
   (`bc_session_set_max_eval_depth` in the C API) bounds evaluation. `bc_clone` allows 2 000 000

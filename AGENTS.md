@@ -139,8 +139,15 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   of the stack (`den`) equal to the result of the whole evaluation, so `eval_ref` has the same
   theorem as when it recursed; `exec_ref` likewise. Function calls are frames too (the
   arguments, the running body and the caller's saved state), and so are the arguments of the
-  `-l` functions, so no part of evaluation recurses on the native stack: recursion depth is
-  bounded by `max_depth` and the heap. The parser still recurses, within `max_depth`.
+  `-l` functions, so recursion depth is bounded by `max_eval_depth` and the heap, not by the
+  native stack. The parser still recurses, within `max_depth`.
+- The fast path (`eval/machine/quick.rs`) runs a call-free expression, or a statement made of
+  them, by native recursion when it is at most `QUICK_BUDGET` (8) levels deep: it saves the
+  frames of the common shallow cases, and its recursion is bounded by the budget, not by the
+  input. Its functions have the theorems of the machine's steps (`bs_ev`, `bs_exec`, …), and
+  it counts the levels of `max_eval_depth` as the machine does. A shortcut whose recursion
+  grows with the input (such as one argument after another, which `push_sub` therefore leaves
+  to the machine) must not be added.
 - Dynamic scoping: each variable or array name maps to a stack. Function parameters and `auto`
   locals push a new entry on entry. `BTreeMap` keeps the storage `no_std`-friendly and deterministic.
 - `Evaluator::leave_call` pops the parameter and `auto` frames and restores the caller's
@@ -155,7 +162,7 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
 - The evaluator's state (variables, arrays, functions, registers, flags, output streams) is
   `pub(crate)`, so `Evaluator::inv` is established by `new` (the verified `with_streams`) and
   kept by the verified functions alone, the public setters included; the documentation of
-  `inv` gives the argument. Front ends configure it (`set_scale`, `max_depth`, `extension_policy`) and use
+  `inv` gives the argument. Front ends configure it (`set_scale`, `max_depth`, `max_eval_depth`, `extension_policy`) and use
   `stderr_writer`, `request_quit`, `clear_quit` and `reset_control_flags`; do not add a method
   that stores a number without going through the verified storage layer.
 
@@ -178,10 +185,13 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   C API, Zephyr, QEMU, ESP32-C3, Wasm) uses this driver, so error recovery is identical on all
   targets. The driver takes bytes; the CLI and the C API pass their input without decoding it.
 - Recursion is bounded: `Evaluator::max_depth` limits the depth of the syntax tree (checked while
-  parsing, so that evaluation stays within it) and the number of
-  nested `try_evaluate`/`try_execute` calls, including across function calls. Each front end
-  sets it for the stack it runs on; `bc_cli` runs the engine on a 512 MiB-stack thread. When
-  you add a recursive walk over the AST, it must stay within the same bound.
+  parsing, the only part whose native recursion grows with the input), and `Evaluator::max_eval_depth` the number of
+  levels evaluated at once, function calls included, on the heap (`eval/machine.rs`). Each front
+  end sets the first for the stack it runs on (`bc_cli` runs the engine on a 512 MiB-stack
+  thread) and the second for the heap (`bc_cli`: 2 000 000, about 320 bytes a level; the other
+  targets use one limit for both). Do not add a recursive walk over the arena: the trees in it
+  can be as deep as `max_depth`, and evaluation must not use more native stack than the fast
+  path's constant budget.
 - `bc_cli` additionally wraps each unit in `catch_unwind`. A panic there is a bug in `bc_core`; it
   is reported as `bc_clone: internal error: …` and counted as a failed unit. After such a panic
   the evaluator's state may be inconsistent (frames of an interrupted call are not popped).
