@@ -537,12 +537,15 @@ impl WriteHelper for std::path::PathBuf {
 #[test]
 fn test_real_ctrlc_signal() {
     let bin_path = env!("CARGO_BIN_EXE_bc_clone");
-    let child = Command::new(bin_path)
+    let mut child = Command::new(bin_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to spawn");
+    // Held until the child exits: `wait_with_output` would close it, and `bc_clone` could then
+    // read end of input and exit before its handler thread runs.
+    let stdin = child.stdin.take();
 
     // Wait a brief moment to ensure setup_ctrlc_handler has run
     std::thread::sleep(std::time::Duration::from_millis(1200));
@@ -556,6 +559,7 @@ fn test_real_ctrlc_signal() {
     assert!(status.success());
 
     let output = child.wait_with_output().expect("failed to wait");
+    drop(stdin);
     assert!(output.status.success());
     let stderr_str = String::from_utf8_lossy(&output.stderr);
     assert!(stderr_str.contains("(interrupt) Exiting bc."));
