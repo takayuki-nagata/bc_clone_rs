@@ -1277,8 +1277,14 @@ fn test_front_end_control_methods() {
 
 /// Evaluation does not use the native stack: deep recursion, a deep error unwinding through
 /// every call, and loops and array arguments inside deep recursion run on a 256 KiB thread.
+/// Miri runs the same programs less deep, since it interprets every step.
 #[test]
 fn test_deep_recursion_on_a_small_stack() {
+    let (n, m) = if cfg!(miri) {
+        (200, 100)
+    } else {
+        (100_000, 50_000)
+    };
     let run = |src: String| {
         std::thread::Builder::new()
             .stack_size(256 << 10)
@@ -1300,21 +1306,20 @@ fn test_deep_recursion_on_a_small_stack() {
             .join()
             .unwrap()
     };
-    let (out, err, _) = run(
-        "define f(n) {\nif (n == 0) return (0)\nreturn (f(n - 1) + 1)\n}\nf(100000)\n".to_string(),
-    );
-    assert_eq!((out.as_str(), err.as_str()), ("100000\n", ""));
-    let (out, err, failed) = run(
-        "define f(n) {\nif (n == 0) return (1 / 0)\nreturn (f(n - 1))\n}\nf(100000)\n".to_string(),
-    );
+    let (out, err, _) = run(format!(
+        "define f(n) {{\nif (n == 0) return (0)\nreturn (f(n - 1) + 1)\n}}\nf({n})\n"
+    ));
+    assert_eq!((out, err.as_str()), (format!("{n}\n"), ""));
+    let (out, err, failed) = run(format!(
+        "define f(n) {{\nif (n == 0) return (1 / 0)\nreturn (f(n - 1))\n}}\nf({n})\n"
+    ));
     assert_eq!(out, "");
     assert!(err.contains("Divide by zero"), "{err}");
     assert_eq!(failed, 1);
-    let (out, _, _) = run(
-        "define g(a[], n) {\nauto i, s\nfor (i = 0; i < 3; i++) s = s + a[i]\nif (n == 0) return (s)\nreturn (g(a[], n - 1))\n}\n\
-         a[0] = 1; a[1] = 2; a[2] = 3\ng(a[], 50000)\n"
-            .to_string(),
-    );
+    let (out, _, _) = run(format!(
+        "define g(a[], n) {{\nauto i, s\nfor (i = 0; i < 3; i++) s = s + a[i]\nif (n == 0) return (s)\nreturn (g(a[], n - 1))\n}}\n\
+         a[0] = 1; a[1] = 2; a[2] = 3\ng(a[], {m})\n"
+    ));
     assert_eq!(out, "6\n");
 }
 
