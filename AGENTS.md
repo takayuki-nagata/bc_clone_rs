@@ -282,9 +282,9 @@ The gaps listed above are known and remain open. Do not describe any layer as pr
     `scripts/measure_m5stamp_stack.sh` gives 34 KB of stack and 87 KB of heap at 128 (nested
     `for`), and no heap left at 160. It measures a QEMU build with the same optimization settings
     and another allocator. The application's self-tests, which fail above 60% of the stack, passed
-    on a board with the recursive evaluator (82 104 of 185 204 bytes, 44%); they have not been run
-    on a board since. The REPL has the same limit, and the self-tests take the board about 7
-    seconds to reach the prompt. The heap use is not measured on the board. An overflow runs into `.bss`; esp-hal's watchpoint only sees a write to its one guard
+    on a board: 32 376 of 185 204 bytes of stack (17%; 82 104 bytes, 44%, with the recursive
+    evaluator). The REPL has the same limit, and the self-tests take the board about 5 seconds to
+    reach the prompt. The heap use is not measured on the board. An overflow runs into `.bss`; esp-hal's watchpoint only sees a write to its one guard
     word, so it may miss one.
   - Wasm (`WASM_MAX_DEPTH` = 1000): the criteria are at most 50% of the 1 MiB stack in linear
     memory, and at least twice the limit before an engine failure. `nesting_limit.mjs`, which

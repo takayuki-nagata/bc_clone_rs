@@ -28,7 +28,7 @@ lists what the proofs assume.
   stack, instead of inheriting the library default. Wasm allows 1000 levels (it was 128), so
   deeper programs run in the browser. The M5Stamp C3 keeps 128, now stated explicitly, and its
   self-tests run inputs at the limit and report the stack high-water mark, which adds to the time
-  from reset to the prompt (about 7 seconds). The stack use is confirmed on the board; Wasm was
+  from reset to the prompt (about 5 seconds). The stack use is confirmed on the board; Wasm was
   measured in V8 and Firefox, not in Safari (`AGENTS.md`).
 
 ### Verification
