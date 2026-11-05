@@ -3,7 +3,10 @@
 //! The fast path of the machine: a call-free expression, or a statement made of call-free
 //! expressions, at most [`QUICK_BUDGET`] levels deep, runs by native recursion instead of
 //! frames. The recursion is bounded by the budget, not by the input, so the native stack
-//! stays bounded; anything else (calls, subscripted targets, deeper trees) goes to the
+//! stays bounded. Verus checks this: each function decreases `(b, stage)`, where `stage`
+//! orders the functions that pass the same budget `b` on (`quick_eval` 2, `quick_node` 1,
+//! the operators 0; `quick_exec` 3, `quick_stmt` 2, `quick_for` 1, the rest 0), and only the
+//! loop in `quick_loop` is exempt, because a `while` need not end. Anything else (calls, subscripted targets, deeper trees) goes to the
 //! machine. Each function has the theorem of the machine's: its result is the
 //! specification's `bs_ev`, `bs_ev_node`, `bs_exec` or `bs_exec_node`.
 
@@ -137,7 +140,6 @@ impl Evaluator {
     }
 
     /// Evaluates node `n` with its nesting level (the specification's `ev`).
-    #[verifier::exec_allows_no_decreases_clause]
     pub(super) fn quick_eval(&mut self, code: &Rc<Code>, n: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
@@ -147,6 +149,7 @@ impl Evaluator {
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_ev(nodes, n, st))) ==> r_result(r, *final(self), bs_ev(nodes, n, st), old(self).eval_depth),
+        decreases b, 2u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_ev(nodes, n, st));
         if !verified_nesting_within_limit(self.eval_depth, 1, self.max_eval_depth) {
@@ -183,7 +186,6 @@ impl Evaluator {
     }
 
     /// Evaluates the form at node `n` (the specification's `ev_node`).
-    #[verifier::exec_allows_no_decreases_clause]
     fn quick_node(&mut self, code: &Rc<Code>, n: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
@@ -193,6 +195,7 @@ impl Evaluator {
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_ev_node(nodes, n, st))) ==> r_result(r, *final(self), bs_ev_node(nodes, n, st), old(self).eval_depth),
+        decreases b, 1u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_ev_node(nodes, n, st));
         proof { if hyp && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
@@ -227,7 +230,6 @@ impl Evaluator {
     }
 
     /// `-e`, `length(e)`, `sqrt(e)` and `scale(e)`.
-    #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     fn quick_unary(&mut self, code: &Rc<Code>, n: usize, which: u8, e: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
@@ -242,6 +244,7 @@ impl Evaluator {
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_ev_node(nodes, n, st))) ==> r_result(r, *final(self), bs_ev_node(nodes, n, st), old(self).eval_depth),
+        decreases b, 0u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_ev_node(nodes, n, st));
         let ghost x = bs_ev(nodes, e, st);
@@ -258,7 +261,6 @@ impl Evaluator {
         }
     }
 
-    #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     fn quick_binary(&mut self, code: &Rc<Code>, n: usize, op: BinOp, l: usize, r: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (res: Result<BCNum, BcError>)
         requires
@@ -273,6 +275,7 @@ impl Evaluator {
             final(self).eval_depth == old(self).eval_depth,
             res is Ok ==> res->Ok_0.scale <= BC_SCALE_MAX,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_ev_node(nodes, n, st))) ==> r_result(res, *final(self), bs_ev_node(nodes, n, st), old(self).eval_depth),
+        decreases b, 0u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_ev_node(nodes, n, st));
         let ghost x = bs_ev(nodes, l, st);
@@ -296,7 +299,6 @@ impl Evaluator {
         self.arith_ref(op, &a, &v, Ghost(x.val), Ghost(y.val), Ghost(y.st))
     }
 
-    #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     fn quick_rel(&mut self, code: &Rc<Code>, n: usize, op: RelOp, l: usize, r: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (res: Result<BCNum, BcError>)
         requires
@@ -311,6 +313,7 @@ impl Evaluator {
             final(self).eval_depth == old(self).eval_depth,
             res is Ok ==> res->Ok_0.scale <= BC_SCALE_MAX,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_ev_node(nodes, n, st))) ==> r_result(res, *final(self), bs_ev_node(nodes, n, st), old(self).eval_depth),
+        decreases b, 0u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_ev_node(nodes, n, st));
         let ghost x = bs_ev(nodes, l, st);
@@ -335,7 +338,6 @@ impl Evaluator {
     }
 
     /// `=` and `op=` to a target that is not a subscript (the specification's `assign_to`).
-    #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     fn quick_assign(&mut self, code: &Rc<Code>, n: usize, op: AssignOp, t: usize, v: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
@@ -350,6 +352,7 @@ impl Evaluator {
             final(self).eval_depth == old(self).eval_depth,
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_ev_node(nodes, n, st))) ==> r_result(r, *final(self), bs_ev_node(nodes, n, st), old(self).eval_depth),
+        decreases b, 0u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_ev_node(nodes, n, st));
         let ghost acode = assign_code(op);
@@ -404,7 +407,6 @@ impl Evaluator {
     }
 
     /// Executes node `n` with its nesting level (the specification's `exec`).
-    #[verifier::exec_allows_no_decreases_clause]
     pub(super) fn quick_exec(&mut self, code: &Rc<Code>, n: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
@@ -413,6 +415,7 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_exec(nodes, n, st))) ==> r_unit(r, *final(self), bs_exec(nodes, n, st), old(self).eval_depth),
+        decreases b, 3u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_exec(nodes, n, st));
         if !verified_nesting_within_limit(self.eval_depth, 1, self.max_eval_depth) {
@@ -449,7 +452,6 @@ impl Evaluator {
     }
 
     /// Executes the statement at node `n` (the specification's `exec_node`).
-    #[verifier::exec_allows_no_decreases_clause]
     fn quick_stmt(&mut self, code: &Rc<Code>, n: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
@@ -458,6 +460,7 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_exec_node(nodes, n, st))) ==> r_unit(r, *final(self), bs_exec_node(nodes, n, st), old(self).eval_depth),
+        decreases b, 2u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_exec_node(nodes, n, st));
         if !verified_should_abort_execution(self.break_flag, self.return_flag, self.quit_flag) {
@@ -484,7 +487,6 @@ impl Evaluator {
     }
 
     /// An expression statement.
-    #[verifier::exec_allows_no_decreases_clause]
     fn quick_expr_stmt(&mut self, code: &Rc<Code>, n: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
@@ -495,6 +497,7 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_exec_node(nodes, n, st))) ==> r_unit(r, *final(self), bs_exec_node(nodes, n, st), old(self).eval_depth),
+        decreases b, 0u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_exec_node(nodes, n, st));
         proof { if hyp { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
@@ -528,7 +531,6 @@ impl Evaluator {
     }
 
     /// `return (e)`.
-    #[verifier::exec_allows_no_decreases_clause]
     fn quick_return(&mut self, code: &Rc<Code>, n: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
@@ -539,6 +541,7 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_exec_node(nodes, n, st))) ==> r_unit(r, *final(self), bs_exec_node(nodes, n, st), old(self).eval_depth),
+        decreases b, 0u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_exec_node(nodes, n, st));
         proof { if hyp { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
@@ -560,7 +563,6 @@ impl Evaluator {
     }
 
     /// `if`.
-    #[verifier::exec_allows_no_decreases_clause]
     fn quick_if(&mut self, code: &Rc<Code>, n: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
@@ -571,6 +573,7 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_exec_node(nodes, n, st))) ==> r_unit(r, *final(self), bs_exec_node(nodes, n, st), old(self).eval_depth),
+        decreases b, 0u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_exec_node(nodes, n, st));
         proof { if hyp { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
@@ -594,7 +597,6 @@ impl Evaluator {
     }
 
     /// `for`: the initialization, then the loop.
-    #[verifier::exec_allows_no_decreases_clause]
     fn quick_for(&mut self, code: &Rc<Code>, n: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
@@ -605,6 +607,7 @@ impl Evaluator {
             final(self).inv(),
             final(self).eval_depth == old(self).eval_depth,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_exec_node(nodes, n, st))) ==> r_unit(r, *final(self), bs_exec_node(nodes, n, st), old(self).eval_depth),
+        decreases b, 1u32,
     {
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_exec_node(nodes, n, st));
         proof { if hyp { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
@@ -624,7 +627,6 @@ impl Evaluator {
     }
 
     /// The statements of the block at node `n` (the specification's `bs_list`).
-    #[verifier::exec_allows_no_decreases_clause]
     fn quick_list(&mut self, code: &Rc<Code>, n: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
@@ -635,6 +637,7 @@ impl Evaluator {
             final(self).eval_depth == old(self).eval_depth,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_list(nodes, block_of(*code, n), st)))
                 ==> r_unit(r, *final(self), bs_list(nodes, block_of(*code, n), st), old(self).eval_depth),
+        decreases b, 0u32,
     {
         let ghost e0 = *self;
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, st) && done(bs_list(nodes, block_of(*code, n), st));
@@ -662,6 +665,7 @@ impl Evaluator {
                 hyp == (r_rc(*code, nodes) && r_state(e0, st) && done(x0)),
                 x0 == bs_list(nodes, list@, st),
                 hyp ==> (r_state(*self, s) && bs_list(nodes, list@.skip(i as int), s) == x0),
+            decreases list.len() - i,
         {
             let ghost l = list@.skip(i as int);
             let ghost x = bs_exec(nodes, list@[i as int], s);
@@ -698,6 +702,7 @@ impl Evaluator {
 
     /// A loop from its condition on (the specification's `bs_loop`).
     #[verifier::exec_allows_no_decreases_clause]
+    #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     fn quick_loop(&mut self, code: &Rc<Code>, c: usize, p: Option<usize>, s: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
@@ -711,6 +716,7 @@ impl Evaluator {
             final(self).eval_depth == old(self).eval_depth,
             (r_rc(*code, nodes) && r_state(*old(self), st) && done(bs_loop(nodes, c, opt_index(p), p is Some, s, st)))
                 ==> r_unit(r, *final(self), bs_loop(nodes, c, opt_index(p), p is Some, s, st), old(self).eval_depth),
+        decreases b, 0u32,
     {
         let ghost e0 = *self;
         let ghost x0 = bs_loop(nodes, c, opt_index(p), p is Some, s, st);

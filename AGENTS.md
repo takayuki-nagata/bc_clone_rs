@@ -144,7 +144,9 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
 - The fast path (`eval/machine/quick.rs`) runs a call-free expression, or a statement made of
   them, by native recursion when it is at most `QUICK_BUDGET` (8) levels deep: it saves the
   frames of the common shallow cases, and its recursion is bounded by the budget, not by the
-  input. Its functions have the theorems of the machine's steps (`bs_ev`, `bs_exec`, …), and
+  input. Verus checks the bound: every function of the fast path decreases `(b, stage)`, where
+  `b` is the budget left and `stage` orders the functions that pass the same `b` on, and only
+  the loop of `while` and `for` in `quick_loop` is exempt (it need not end). Its functions have the theorems of the machine's steps (`bs_ev`, `bs_exec`, …), and
   it counts the levels of `max_eval_depth` as the machine does. A shortcut whose recursion
   grows with the input (such as one argument after another, which `push_sub` therefore leaves
   to the machine) must not be added.
