@@ -146,8 +146,13 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   frames of the common shallow cases, and its recursion is bounded by the budget, not by the
   input. Verus checks the bound: every function of the fast path decreases `(b, stage)`, where
   `b` is the budget left and `stage` orders the functions that pass the same `b` on, and only
-  the loop of `while` and `for` in `quick_loop` is exempt (it need not end). Its functions have the theorems of the machine's steps (`bs_ev`, `bs_exec`, …), and
-  it counts the levels of `max_eval_depth` as the machine does. A shortcut whose recursion
+  the loop of `while` and `for` in `quick_loop` is exempt (it need not end). The check of
+  whether a statement may take the fast path looks at no more than `QUICK_STMTS` (64)
+  statement nodes, the enclosing ones included, and leaves a larger statement to the machine,
+  which checks each statement inside again; so the check made at each step looks at a bounded
+  number of nodes however wide a block is (a block skipped by `if (0)` is not scanned on every
+  pass of a loop). Its functions have the theorems of the machine's steps (`bs_ev`, `bs_exec`,
+  …), and it counts the levels of `max_eval_depth` as the machine does. A shortcut whose recursion
   grows with the input (such as one argument after another, which `push_sub` therefore leaves
   to the machine) must not be added.
 - Dynamic scoping: each variable or array name maps to a stack. Function parameters and `auto`

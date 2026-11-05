@@ -6,8 +6,10 @@
 //! stays bounded. Verus checks this: each function decreases `(b, stage)`, where `stage`
 //! orders the functions that pass the same budget `b` on (`quick_eval` 2, `quick_node` 1,
 //! the operators 0; `quick_exec` 3, `quick_stmt` 2, `quick_for` 1, the rest 0), and only the
-//! loop in `quick_loop` is exempt, because a `while` need not end. Anything else (calls, subscripted targets, deeper trees) goes to the
-//! machine. Each function has the theorem of the machine's: its result is the
+//! loop in `quick_loop` is exempt, because a `while` need not end. Whether a statement may
+//! take the fast path is checked by looking at no more than [`QUICK_STMTS`] statement nodes,
+//! so that a wide block (one skipped by `if (0)` in a loop, say) is not scanned on every
+//! pass. Anything else (calls, subscripted targets, deeper trees) goes to the machine. Each function has the theorem of the machine's: its result is the
 //! specification's `bs_ev`, `bs_ev_node`, `bs_exec` or `bs_exec_node`.
 
 use super::*;
@@ -16,6 +18,9 @@ verus! {
 
 /// The levels below a node that the fast path runs by recursion.
 pub(crate) const QUICK_BUDGET: u32 = 8;
+
+/// The statements the fast path looks at before it leaves a statement to the machine.
+pub(crate) const QUICK_STMTS: u32 = 64;
 
 /// A target of `=` or `++` that is not a subscript.
 pub(crate) open spec fn plain_target(code: Rc<Code>, t: usize) -> bool {
@@ -96,46 +101,60 @@ impl Evaluator {
         }
     }
 
-    /// Whether `n` is [`quick_s`].
+    /// Whether `n` is [`quick_s`]. It looks at no more than [`QUICK_STMTS`] statement nodes
+    /// (`n` and the statements in it), and says no to a larger statement, which the machine then runs, so that one step of the
+    /// machine checks a bounded number of nodes however wide a block is.
     pub(super) fn quick_stmt_ok(code: &Rc<Code>, n: usize, b: u32) -> (r: bool)
         ensures
-            r == quick_s(*code, n, b),
+            r ==> quick_s(*code, n, b),
+    {
+        Self::quick_stmt_fit(code, n, b, QUICK_STMTS).is_some()
+    }
+
+    /// Whether `n` is [`quick_s`] with at most `k` statement nodes; if so, the rest of `k`.
+    fn quick_stmt_fit(code: &Rc<Code>, n: usize, b: u32, k: u32) -> (r: Option<u32>)
+        ensures
+            r matches Some(k2) ==> quick_s(*code, n, b) && k2 < k,
         decreases b,
     {
-        if n >= code.nodes.len() || b == 0 {
-            return false;
+        if n >= code.nodes.len() || b == 0 || k == 0 {
+            return None;
         }
+        let k = k - 1;
         match &code.nodes[n] {
-            PNode::ExprStmt(e) => Self::quick_ok(code, *e, b - 1),
-            PNode::Return(Some(e)) => Self::quick_ok(code, *e, b - 1),
-            PNode::Return(None) | PNode::Str(_) | PNode::Break => true,
+            PNode::ExprStmt(e) => if Self::quick_ok(code, *e, b - 1) { Some(k) } else { None },
+            PNode::Return(Some(e)) => if Self::quick_ok(code, *e, b - 1) { Some(k) } else { None },
+            PNode::Return(None) | PNode::Str(_) | PNode::Break => Some(k),
             PNode::Block(list) => {
                 let mut i = 0;
+                let mut left = k;
                 while i < list.len()
                     invariant
                         n < code.nodes@.len(),
                         code.nodes@[n as int] == PNode::Block(*list),
                         b > 0,
                         i <= list@.len(),
+                        left <= k,
                         forall|j: int| #![trigger list@[j]] 0 <= j < i ==> quick_s(*code, list@[j], (b - 1) as u32),
                     decreases list.len() - i,
                 {
-                    if !Self::quick_stmt_ok(code, list[i], b - 1) {
-                        proof {
-                            let j = i as int;
-                            assert(!quick_s(*code, list@[j], (b - 1) as u32));
-                            assert(code.nodes@[n as int] matches PNode::Block(l) && l@[j] == list@[j] && !quick_s(*code, l@[j], (b - 1) as u32));
-                        }
-                        return false;
+                    match Self::quick_stmt_fit(code, list[i], b - 1, left) {
+                        Some(rest) => { left = rest; },
+                        None => { return None; },
                     }
                     i += 1;
                 }
-                true
+                Some(left)
             },
-            PNode::If(c, s) | PNode::While(c, s) => Self::quick_ok(code, *c, b - 1) && Self::quick_stmt_ok(code, *s, b - 1),
-            PNode::For(i, c, p, s) => Self::quick_ok(code, *i, b - 1) && Self::quick_ok(code, *c, b - 1)
-                && Self::quick_ok(code, *p, b - 1) && Self::quick_stmt_ok(code, *s, b - 1),
-            _ => false,
+            PNode::If(c, s) | PNode::While(c, s) => if Self::quick_ok(code, *c, b - 1) { Self::quick_stmt_fit(code, *s, b - 1, k) } else { None },
+            PNode::For(i, c, p, s) => {
+                if Self::quick_ok(code, *i, b - 1) && Self::quick_ok(code, *c, b - 1) && Self::quick_ok(code, *p, b - 1) {
+                    Self::quick_stmt_fit(code, *s, b - 1, k)
+                } else {
+                    None
+                }
+            },
+            _ => None,
         }
     }
 
@@ -785,3 +804,36 @@ impl Evaluator {
 }
 
 } // verus!
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::{Lexer, Parser};
+    use alloc::format;
+
+    fn first_statement_is_quick(src: &str) -> bool {
+        let mut parser = Parser::try_new(Lexer::new(src.as_bytes())).unwrap();
+        let stmts = parser.try_parse_program().unwrap();
+        let code = Rc::new(parser.take_code());
+        Evaluator::quick_stmt_ok(&code, stmts[0], QUICK_BUDGET)
+    }
+
+    /// The check counts a statement's own node and every statement in it, and the parser
+    /// wraps the statements of a unit in a block of their own: a unit `{ 62 statements }` is
+    /// 64 nodes, the most the fast path takes, and an `if` around the block is one more.
+    #[test]
+    fn test_statement_budget_boundary() {
+        let n = QUICK_STMTS as usize;
+        let block = |w: usize| format!("{{\n{}}}\n", "x = x + 1\n".repeat(w));
+        assert!(first_statement_is_quick(&block(n - 2)));
+        assert!(!first_statement_is_quick(&block(n - 1)));
+        assert!(first_statement_is_quick(&format!(
+            "if (1) {}",
+            block(n - 3)
+        )));
+        assert!(!first_statement_is_quick(&format!(
+            "if (1) {}",
+            block(n - 2)
+        )));
+    }
+}

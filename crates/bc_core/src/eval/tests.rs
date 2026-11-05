@@ -1380,3 +1380,40 @@ fn test_evaluation_limit_counts_every_level() {
         );
     }
 }
+
+/// Blocks on either side of the fast path's statement budget give the same results: a block too
+/// wide for the budget runs on the machine, which tries the fast path again on each statement.
+#[test]
+fn test_blocks_wider_than_the_fast_path_budget() {
+    // Under Miri, which is slow, only the widths next to the budget of 64 statement nodes in
+    // each of the forms below.
+    let widths: Vec<usize> = if cfg!(miri) {
+        vec![1, 29, 30, 31, 57, 58, 59, 60, 61, 62, 63, 64, 65]
+    } else {
+        (1..=70)
+            .chain([127, 128, 129, 255, 256, 257, 300])
+            .collect()
+    };
+    let bound: usize = if cfg!(miri) { 100 } else { 1000 };
+    for w in widths {
+        let adds = "x = x + 1\n".repeat(w);
+        let input = format!(
+            "define f(n) {{\nreturn (n + 1)\n}}\n\
+             x = 0\n{{\n{adds}}}\nx\n\
+             x = 0\nif (1) {{\n{adds}}}\nx\n\
+             x = 0\nfor (i = 0; i < 3; i++) {{\nif (0) {{\n{adds}}}\n{adds}}}\nx\n\
+             x = 0\nwhile (1) {{\n{adds}break\n}}\nx\n\
+             x = 0\nfor (i = 0; i < 2; i++) {{\n{adds}x = f(x)\n}}\nx\n\
+             x = 0\nwhile (x < {bound}) {{\nif (1) {{\nif (1) {{\n{adds}}}\n}}\n}}\nx\n"
+        );
+        let (out, err) = test_eval(&input);
+        let w1 = w + 1;
+        let looped = bound.div_ceil(w) * w;
+        assert_eq!(
+            out,
+            format!("{w}\n{w}\n{}\n{w}\n{}\n{looped}\n", 3 * w, 2 * w1),
+            "w = {w}"
+        );
+        assert_eq!(err, "", "w = {w}");
+    }
+}
