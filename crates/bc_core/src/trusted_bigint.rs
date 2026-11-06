@@ -318,6 +318,11 @@ pub fn big_div_mod_floor(a: &BigInt, b: &BigInt) -> (r: (BigInt, BigInt))
 
 } // verus!
 
+// Not under Miri: the specification's arithmetic is too slow there, and the cases are pure
+// `num-bigint` arithmetic.
+#[cfg(all(test, not(miri)))]
+mod oracle_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

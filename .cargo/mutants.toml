@@ -18,6 +18,9 @@ exclude_globs = [
     # Property tests compiled only under `cfg(test)` (declared in `math.rs`, so cargo-mutants
     # does not see the attribute): their helpers are the reference, not the code under test.
     "crates/bc_core/src/math/proptests.rs",
+    # Likewise the tests of the trusted `num-bigint` wrappers against the specification
+    # (declared in `trusted_bigint.rs`).
+    "crates/bc_core/src/trusted_bigint/oracle_tests.rs",
     # The executable specification is the oracle, not the code under test: it is proved equal to
     # its `spec fn`s by Verus, and `cargo test` does not run it (spec_differential needs
     # BC_SPEC_ORACLE), so every mutant would be reported as missed.

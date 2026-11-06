@@ -22,6 +22,9 @@ bc_spec = { path = "../bc_spec", optional = true }
 
 [dev-dependencies]
 proptest = "1.5"
+# The executable decimal arithmetic of the specification, the reference of the tests of the trusted
+# `num-bigint` wrappers.
+bc_spec = { path = "../bc_spec" }
 
 [features]
 default = []
