@@ -154,7 +154,9 @@ pub(crate) fn shifted(xb: &Ball, k: i64) -> (r: Ball)
 #[verifier::exec_allows_no_decreases_clause]
 #[allow(
     clippy::cast_possible_wrap,
-    reason = "both bit counts are at most i64::MAX, checked just before; Verus checks the casts"
+    clippy::cast_possible_truncation,
+    reason = "both bit counts are at most i64::MAX, checked just before, and the digit count of k \
+              is cast to usize only below u32::MAX - prec; Verus checks the casts"
 )]
 pub(crate) fn ln_ball(x: &BCNum, prec: usize) -> (r: Option<Ball>)
     requires
@@ -218,15 +220,15 @@ pub(crate) fn ln_ball(x: &BCNum, prec: usize) -> (r: Option<Ball>)
     }
     let artanh = sum_series(y, &Series::Artanh { y_sq }, Ghost(yv))?;
     let k_big = big_from_i64(k);
-    let extra = if k == 0 {
+    let extra: u64 = if k == 0 {
         1
     } else {
         big_decimal_digits(&big_abs(&k_big))
     };
-    if extra >= u32::MAX as usize - prec {
+    if extra >= (u32::MAX as usize - prec) as u64 {
         return None;
     }
-    let k_ln2 = ln2(prec + extra).mul_int(&k_big).reduce_prec(prec);
+    let k_ln2 = ln2(prec + extra as usize).mul_int(&k_big).reduce_prec(prec);
     let r = artanh.mul_int(&big_from_i64(2)).add(&k_ln2);
     proof {
         lemma_ln_scaled(xv, k as int);

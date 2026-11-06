@@ -12,8 +12,7 @@ use crate::spec_num::*;
 #[cfg(verus_keep_ghost)]
 pub use crate::trusted_bigint::{axiom_bigint_size, big_view};
 pub use crate::trusted_bigint::{
-    big_add, big_bits, big_clone, big_cmp, big_decimal_digits, big_from_u64, big_isqrt, big_mul,
-    big_sub, big_tdiv_rem, big_to_i64,
+    big_add, big_bits, big_clone, big_cmp, big_from_u64, big_mul, big_sub, big_tdiv_rem, big_to_i64,
 };
 #[cfg(verus_keep_ghost)]
 use bc_spec::power::{lemma_pow_add, lemma_pow_mul, lemma_pow_positive};
@@ -342,11 +341,261 @@ pub fn big_shr(a: &BigInt, n: u64) -> (r: BigInt)
     q
 }
 
+
+/// `b^m <= b^n` for `b >= 1` and `m <= n`.
+proof fn lemma_pow_mono(b: int, m: nat, n: nat)
+    requires
+        b >= 1,
+        m <= n,
+    ensures
+        spec_pow_int(b, m) <= spec_pow_int(b, n),
+{
+    lemma_pow_add(b, m, (n - m) as nat);
+    lemma_pow_positive(b, m);
+    lemma_pow_positive(b, (n - m) as nat);
+    let (x, y) = (spec_pow_int(b, m), spec_pow_int(b, (n - m) as nat));
+    assert(x <= x * y) by (nonlinear_arith)
+        requires
+            x > 0,
+            y >= 1,
+    ;
+}
+
+/// `2^k <= 10^k`.
+proof fn lemma_pow2_le_pow10(k: nat)
+    ensures
+        spec_pow_int(2, k) <= pow10(k),
+    decreases k,
+{
+    if k > 0 {
+        lemma_pow2_le_pow10((k - 1) as nat);
+        lemma_pow_positive(2, (k - 1) as nat);
+    }
+}
+
+/// A Newton step from `x > 0` toward the integer square root of `n`, with `q = ⌊n/x⌋` and
+/// `y = ⌊(x + q)/2⌋`, does not go below it: `n < (y+1)²`.
+proof fn lemma_newton_above(n: int, x: int, q: int, y: int)
+    requires
+        x > 0,
+        x * q <= n < x * q + x,
+        2 * y <= x + q <= 2 * y + 1,
+    ensures
+        n < (y + 1) * (y + 1),
+{
+    let t = y + 1;
+    // x·(q+1) > n, and q + 1 <= 2t − x, so n < x·(2t − x) = t² − (t − x)² <= t².
+    assert(n < x * (q + 1)) by (nonlinear_arith)
+        requires
+            n < x * q + x,
+    ;
+    assert(x * (q + 1) <= x * (2 * t - x)) by (nonlinear_arith)
+        requires
+            x > 0,
+            q + 1 <= 2 * t - x,
+    ;
+    assert(x * (2 * t - x) == t * t - (t - x) * (t - x)) by (nonlinear_arith);
+    assert((t - x) * (t - x) >= 0) by (nonlinear_arith);
+}
+
+/// The Newton step stops decreasing only at the root: `y >= x` implies `x² <= n`.
+proof fn lemma_newton_stop(n: int, x: int, q: int, y: int)
+    requires
+        x > 0,
+        x * q <= n,
+        2 * y <= x + q,
+        y >= x,
+    ensures
+        x * x <= n,
+{
+    assert(q >= x);
+    assert(x * x <= x * q) by (nonlinear_arith)
+        requires
+            x > 0,
+            q >= x,
+    ;
+}
+
+/// The integer square root, by Newton's method from `2^⌈b/2⌉` (`b` the bit length), which is
+/// above the root; the iterates decrease strictly until the root.
+pub fn big_isqrt(n: &BigInt) -> (r: BigInt)
+    requires
+        big_view(n) >= 0,
+    ensures
+        is_isqrt(big_view(n), big_view(&r)),
+{
+    let ghost nv = big_view(n);
+    if big_is_zero(n) {
+        proof {
+            assert(is_isqrt(0, 0)) by (nonlinear_arith);
+        }
+        return big_zero();
+    }
+    let b = big_bits(n);
+    let h = b / 2 + b % 2;
+    let mut x = big_shl(&big_from_u64(1), h);
+    proof {
+        lemma_pow_add(2, h as nat, h as nat);
+        lemma_pow_mono(2, b as nat, (h + h) as nat);
+        lemma_pow_positive(2, h as nat);
+        let xv = big_view(&x);
+        assert(xv == spec_pow_int(2, h as nat));
+        assert(nv < (xv + 1) * (xv + 1)) by (nonlinear_arith)
+            requires
+                nv < xv * xv,
+                xv > 0,
+        ;
+    }
+    let mut done = false;
+    while !done
+        invariant
+            nv == big_view(n),
+            nv >= 1,
+            big_view(&x) > 0,
+            nv < (big_view(&x) + 1) * (big_view(&x) + 1),
+            done ==> big_view(&x) * big_view(&x) <= nv,
+        decreases 2 * big_view(&x) + (if done { 0int } else { 1int }),
+    {
+        let ghost xv = big_view(&x);
+        let q = big_tdiv(n, &x);
+        let y = big_tdiv_u64(&big_add(&x, &q), 2);
+        let ghost (qv, yv) = (big_view(&q), big_view(&y));
+        proof {
+            lemma_fundamental_div_mod(nv, xv);
+            lemma_mod_pos_bound(nv, xv);
+            assert(qv == nv / xv);
+            assert(xv * qv <= nv < xv * qv + xv) by (nonlinear_arith)
+                requires
+                    nv == xv * qv + nv % xv,
+                    0 <= nv % xv < xv,
+            ;
+            assert(qv >= 0) by (nonlinear_arith)
+                requires
+                    xv > 0,
+                    nv >= 0,
+                    nv < xv * qv + xv,
+            ;
+            lemma_fundamental_div_mod(xv + qv, 2);
+            lemma_mod_pos_bound(xv + qv, 2);
+            assert(yv == (xv + qv) / 2);
+            lemma_newton_above(nv, xv, qv, yv);
+        }
+        if matches!(big_cmp(&y, &x), Ordering::Less) {
+            proof {
+                assert(yv >= 1) by (nonlinear_arith)
+                    requires
+                        nv >= 1,
+                        nv < (yv + 1) * (yv + 1),
+                        2 * yv >= xv + qv - 1,
+                        xv > 0,
+                        qv >= 0,
+                ;
+            }
+            x = y;
+        } else {
+            proof {
+                lemma_newton_stop(nv, xv, qv, yv);
+            }
+            done = true;
+        }
+    }
+    x
+}
+
+/// The number of decimal digits of `a > 0`. It is below the bit length, so it fits in a `u64`
+/// (not always in a `usize` on 32-bit targets). The bit length gives an estimate from below
+/// (`log10 2 > 0.30102999566`), and the loops correct it.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "Verus proves est <= b - 1, so the u128 quotient fits in a u64"
+)]
+#[allow(clippy::assign_op_pattern, reason = "the code keeps the form that the proof reasons about")]
+pub fn big_decimal_digits(a: &BigInt) -> (r: u64)
+    requires
+        big_view(a) > 0,
+    ensures
+        is_digit_count(big_view(a), r as nat),
+{
+    let ghost av = big_view(a);
+    let b = big_bits(a);
+    let x = (b - 1) as u128;
+    let est = (x * 30102999566u128 / 100000000000u128) as u64;
+    proof {
+        assert(x * 30102999566 / 100000000000 <= x) by (nonlinear_arith)
+            requires
+                x >= 0,
+        ;
+    }
+    let ten = big_from_u64(10);
+    let mut p = big_pow(&ten, est);
+    let mut k = est + 1;
+    proof {
+        lemma_pow10_is_pow(est as nat);
+    }
+    // Down to `10^(k-1) <= a` (the estimate is from below, so this does not run in practice).
+    let mut above = matches!(big_cmp(&p, a), Ordering::Greater);
+    while above
+        invariant
+            av == big_view(a),
+            av >= 1,
+            k >= 1,
+            big_view(&p) == pow10((k - 1) as nat),
+            above == (big_view(&p) > av),
+        decreases k,
+    {
+        proof {
+            // pow10(0) = 1 <= a, so k >= 2.
+            assert(k >= 2);
+            let m = pow10((k - 2) as nat);
+            assert(pow10((k - 1) as nat) == 10 * m);
+            lemma_pow10_pos((k - 2) as nat);
+            lemma_fundamental_div_mod_converse(10 * m, 10, m, 0);
+        }
+        p = big_tdiv_u64(&p, 10);
+        k = k - 1;
+        above = matches!(big_cmp(&p, a), Ordering::Greater);
+    }
+    // Up to `a < 10^k`.
+    let mut q = big_mul(&p, &ten);
+    let mut fits = matches!(big_cmp(&q, a), Ordering::Greater);
+    while !fits
+        invariant
+            av == big_view(a),
+            k >= 1,
+            big_view(&p) == pow10((k - 1) as nat),
+            big_view(&p) <= av,
+            big_view(&q) == pow10(k as nat),
+            fits == (big_view(&q) > av),
+            big_view(&ten) == 10,
+            b >= 1,
+            av < spec_pow_int(2, b as nat),
+        decreases av - big_view(&p),
+    {
+        proof {
+            // 2^k <= 10^k <= a < 2^b, so k < b <= u64::MAX.
+            lemma_pow2_le_pow10(k as nat);
+            if k >= b {
+                lemma_pow_mono(2, b as nat, k as nat);
+            }
+            lemma_pow10_pos((k - 1) as nat);
+        }
+        p = q;
+        q = big_mul(&p, &ten);
+        k = k + 1;
+        proof {
+            assert(pow10(k as nat) == 10 * pow10((k - 1) as nat));
+        }
+        fits = matches!(big_cmp(&q, a), Ordering::Greater);
+    }
+    k
+}
+
 } // verus!
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
     use proptest::prelude::*;
 
     fn big(x: i128) -> BigInt {
@@ -381,6 +630,16 @@ mod tests {
             prop_assert_eq!(big_to_u64_small(&big(i128::from(x))), u64::from(x));
             prop_assert_eq!(big_from_usize(n), BigInt::from(n));
             prop_assert_eq!(big_mul_add_small(big(a), m, d), big(a * m as i128 + d as i128));
+        }
+
+        #[test]
+        fn isqrt_and_digit_count(a in 0i128..(1i128 << 100)) {
+            let r = big_isqrt(&big(a));
+            prop_assert!(&r * &r <= big(a) && big(a) < (&r + 1) * (&r + 1));
+            if a > 0 {
+                let k = big_decimal_digits(&big(a));
+                prop_assert_eq!(k, a.to_string().len() as u64);
+            }
         }
 
         #[test]

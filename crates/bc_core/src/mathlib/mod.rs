@@ -100,7 +100,7 @@ pub(crate) fn abs_int_part(x: &BCNum) -> (r: BigInt)
 }
 
 /// The number of decimal digits of the integer part of |x| (0 when |x| < 1).
-pub(crate) fn int_digits(x: &BCNum) -> usize
+pub(crate) fn int_digits(x: &BCNum) -> u64
     requires
         x.scale <= u32::MAX,
 {

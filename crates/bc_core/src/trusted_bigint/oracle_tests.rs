@@ -11,7 +11,7 @@
 //! hundred digits; larger operands are checked against identities instead.
 
 use super::*;
-use crate::bigint::{big_abs, big_is_negative, big_is_zero};
+use crate::bigint::{big_abs, big_decimal_digits, big_is_negative, big_is_zero, big_isqrt};
 use alloc::vec;
 use alloc::vec::Vec;
 use bc_spec::num::{exec_add_mag, exec_cmp_mag, exec_divmod_mag, exec_mul_mag, exec_sub_mag};
@@ -144,7 +144,7 @@ proptest! {
         prop_assert_eq!(big_bits(&a), bits);
         let digits = limbs_to_mag(&limbs).len();
         if digits > 0 {
-            prop_assert_eq!(big_decimal_digits(&big_abs(&a)), digits);
+            prop_assert_eq!(big_decimal_digits(&big_abs(&a)), digits as u64);
         }
     }
 

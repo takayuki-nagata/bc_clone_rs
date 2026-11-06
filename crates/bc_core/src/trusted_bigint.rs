@@ -15,7 +15,6 @@
 
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::*;
-use alloc::string::ToString;
 #[cfg(verus_keep_ghost)]
 use bc_spec::convert::value_bits;
 use core::cmp::Ordering;
@@ -90,28 +89,6 @@ pub fn big_cmp(a: &BigInt, b: &BigInt) -> (r: Ordering)
     a.cmp(b)
 }
 
-/// The integer square root (`BigInt::sqrt`, which panics on a negative argument).
-#[verifier::external_body]
-pub fn big_isqrt(a: &BigInt) -> (r: BigInt)
-    requires
-        big_view(a) >= 0,
-    ensures
-        is_isqrt(big_view(a), big_view(&r)),
-{
-    a.sqrt()
-}
-
-/// The number of decimal digits of a positive integer (the length of its decimal text).
-#[verifier::external_body]
-pub fn big_decimal_digits(a: &BigInt) -> (r: usize)
-    requires
-        big_view(a) > 0,
-    ensures
-        is_digit_count(big_view(a), r as nat),
-{
-    a.to_string().len()
-}
-
 #[verifier::external_body]
 pub fn big_clone(a: &BigInt) -> (r: BigInt)
     ensures
@@ -140,10 +117,18 @@ pub fn big_from_u64(n: u64) -> (r: BigInt)
     BigInt::from(n)
 }
 
-/// The number of bits of |a| (`BigInt::bits`). Only a heuristic of `mathlib::ln_ball` uses it,
-/// so nothing is assumed about its value.
+/// The number of bits of |a| (`BigInt::bits`): 0 for 0, otherwise the `r` with
+/// `2^(r-1) <= |a| < 2^r`.
 #[verifier::external_body]
-pub fn big_bits(a: &BigInt) -> u64 {
+pub fn big_bits(a: &BigInt) -> (r: u64)
+    ensures
+        big_view(a) == 0 ==> r == 0,
+        big_view(a) != 0 ==> r >= 1 && spec_pow_int(2, (r - 1) as nat) <= (if big_view(a) >= 0 {
+            big_view(a)
+        } else {
+            -big_view(a)
+        }) < spec_pow_int(2, r as nat),
+{
     a.bits()
 }
 
@@ -179,16 +164,6 @@ mod tests {
                 prop_assert_eq!(big_tdiv_rem(&big(a), &big(b)), (big(tdiv(a, b)), big(a - tdiv(a, b) * b)));
             }
             prop_assert_eq!(big_cmp(&big(a), &big(b)), a.cmp(&b));
-        }
-
-        #[test]
-        fn isqrt_and_digit_count(a in 0i128..(1i128 << 100)) {
-            let r = big_isqrt(&big(a));
-            prop_assert!(&r * &r <= big(a) && big(a) < (&r + 1) * (&r + 1));
-            if a > 0 {
-                let k = big_decimal_digits(&big(a));
-                prop_assert!(k >= 1 && 10i128.pow(k as u32 - 1) <= a && (k >= 39 || a < 10i128.pow(k as u32)));
-            }
         }
 
         #[test]

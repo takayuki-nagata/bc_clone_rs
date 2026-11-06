@@ -9,9 +9,9 @@
 #[cfg(verus_keep_ghost)]
 use crate::bigint::big_view;
 use crate::bigint::{
-    big_abs, big_add, big_clone, big_cmp, big_decimal_digits, big_from_usize, big_is_negative,
-    big_is_zero, big_isqrt, big_mul, big_mul_add_small, big_pow_usize, big_pow10, big_sub,
-    big_tdiv, big_to_i64, big_zero,
+    big_abs, big_add, big_clone, big_cmp, big_decimal_digits, big_from_u64, big_from_usize,
+    big_is_negative, big_is_zero, big_isqrt, big_mul, big_mul_add_small, big_pow_usize, big_pow10,
+    big_sub, big_tdiv, big_to_i64, big_zero,
 };
 use crate::error::RuntimeError;
 #[cfg(verus_keep_ghost)]
@@ -423,6 +423,10 @@ impl BCNum {
     }
 
     /// Computes the total number of significant decimal digits.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the digit count is cast to usize only below MAX_VERIFIED_SCALE"
+    )]
     pub(crate) fn length(&self) -> (r: Self)
         requires
             self.scale <= BC_SCALE_MAX,
@@ -445,12 +449,12 @@ impl BCNum {
             Self::new(big_from_usize(val), 0)
         } else {
             let digits = big_decimal_digits(&int_part);
-            if digits <= MAX_VERIFIED_SCALE {
-                let val = verified_bcnum_length(false, digits, self.scale);
+            if digits <= MAX_VERIFIED_SCALE as u64 {
+                let val = verified_bcnum_length(false, digits as usize, self.scale);
                 Self::new(big_from_usize(val), 0)
             } else {
                 // More integer digits than the kernel's bound: add them as integers.
-                Self::new(big_add(&big_from_usize(digits), &big_from_usize(self.scale)), 0)
+                Self::new(big_add(&big_from_u64(digits), &big_from_usize(self.scale)), 0)
             }
         }
     }

@@ -28,6 +28,10 @@ pub(crate) proof fn lemma_reduced(b: Ball, x: real, k: int)
 /// x − k·2π for the integer k nearest x / 2π (any integer k leaves sin and cos unchanged), at
 /// precision `prec`. π carries as many extra digits as x has integer digits, so k·rad(2π) stays
 /// within a few ulps at `prec`. `None` if that working precision would exceed `u32::MAX`.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the digit count is cast to usize only below u32::MAX - prec"
+)]
 pub(crate) fn reduce_angle(x: &BCNum, prec: usize) -> (r: Option<Ball>)
     requires
         prec <= u32::MAX,
@@ -51,10 +55,10 @@ pub(crate) fn reduce_angle(x: &BCNum, prec: usize) -> (r: Option<Ball>)
         }
         return Some(b);
     }
-    if digits >= u32::MAX as usize - prec {
+    if digits >= (u32::MAX as usize - prec) as u64 {
         return None;
     }
-    let work = prec + digits + 1;
+    let work = prec + digits as usize + 1;
     let xb = Ball::from_bcnum(x, work);
     let two_pi = pi(work).mul_int(&big_from_i64(2));
     proof {
