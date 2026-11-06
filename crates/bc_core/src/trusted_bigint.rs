@@ -20,7 +20,7 @@ use alloc::string::ToString;
 use bc_spec::convert::value_bits;
 use core::cmp::Ordering;
 use num_bigint::BigInt;
-use num_traits::{Signed, ToPrimitive, Zero};
+use num_traits::ToPrimitive;
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
@@ -44,14 +44,6 @@ pub axiom fn axiom_bigint_size(b: &BigInt)
 ;
 
 #[verifier::external_body]
-pub fn big_zero() -> (r: BigInt)
-    ensures
-        big_view(&r) == 0,
-{
-    BigInt::zero()
-}
-
-#[verifier::external_body]
 pub fn big_add(a: &BigInt, b: &BigInt) -> (r: BigInt)
     ensures
         big_view(&r) == big_view(a) + big_view(b),
@@ -68,14 +60,6 @@ pub fn big_sub(a: &BigInt, b: &BigInt) -> (r: BigInt)
 }
 
 #[verifier::external_body]
-pub fn big_neg(a: &BigInt) -> (r: BigInt)
-    ensures
-        big_view(&r) == -big_view(a),
-{
-    -a
-}
-
-#[verifier::external_body]
 pub fn big_mul(a: &BigInt, b: &BigInt) -> (r: BigInt)
     ensures
         big_view(&r) == big_view(a) * big_view(b),
@@ -83,15 +67,17 @@ pub fn big_mul(a: &BigInt, b: &BigInt) -> (r: BigInt)
     a * b
 }
 
-/// `a / b`, truncated toward zero (`BigInt`'s `/`).
+/// The truncating quotient and its remainder (`Integer::div_rem`, which is `BigInt`'s `/` and
+/// `%` computed at once).
 #[verifier::external_body]
-pub fn big_tdiv(a: &BigInt, b: &BigInt) -> (r: BigInt)
+pub fn big_tdiv_rem(a: &BigInt, b: &BigInt) -> (r: (BigInt, BigInt))
     requires
         big_view(b) != 0,
     ensures
-        big_view(&r) == spec_tdiv(big_view(a), big_view(b)),
+        big_view(&r.0) == spec_tdiv(big_view(a), big_view(b)),
+        big_view(&r.1) == big_view(a) - spec_tdiv(big_view(a), big_view(b)) * big_view(b),
 {
-    a / b
+    num_integer::Integer::div_rem(a, b)
 }
 
 #[verifier::external_body]
@@ -102,60 +88,6 @@ pub fn big_cmp(a: &BigInt, b: &BigInt) -> (r: Ordering)
         (r == Ordering::Greater) == (big_view(a) > big_view(b)),
 {
     a.cmp(b)
-}
-
-/// `a % b`, the remainder of truncating division (`BigInt`'s `%`).
-#[verifier::external_body]
-pub fn big_trem(a: &BigInt, b: &BigInt) -> (r: BigInt)
-    requires
-        big_view(b) != 0,
-    ensures
-        big_view(&r) == big_view(a) - spec_tdiv(big_view(a), big_view(b)) * big_view(b),
-{
-    a % b
-}
-
-/// The value of a non-negative `BigInt` below `2^32` (its only 32-bit limb, or none for 0).
-#[verifier::external_body]
-pub fn big_to_u64_small(a: &BigInt) -> (r: u64)
-    requires
-        0 <= big_view(a) < 0x1_0000_0000,
-    ensures
-        r == big_view(a),
-{
-    a.iter_u32_digits().next().map_or(0, u64::from)
-}
-
-#[verifier::external_body]
-pub fn big_is_zero(a: &BigInt) -> (r: bool)
-    ensures
-        r == (big_view(a) == 0),
-{
-    a.is_zero()
-}
-
-#[verifier::external_body]
-pub fn big_from_usize(n: usize) -> (r: BigInt)
-    ensures
-        big_view(&r) == n,
-{
-    BigInt::from(n)
-}
-
-#[verifier::external_body]
-pub fn big_is_negative(a: &BigInt) -> (r: bool)
-    ensures
-        r == (big_view(a) < 0),
-{
-    a.is_negative()
-}
-
-#[verifier::external_body]
-pub fn big_abs(a: &BigInt) -> (r: BigInt)
-    ensures
-        big_view(&r) == (if big_view(a) >= 0 { big_view(a) } else { -big_view(a) }),
-{
-    a.abs()
 }
 
 /// The integer square root (`BigInt::sqrt`, which panics on a negative argument).
@@ -200,15 +132,6 @@ pub fn big_to_i64(a: &BigInt) -> (r: Option<i64>)
     a.to_i64()
 }
 
-/// `a·m + d`, for one step of a base conversion.
-#[verifier::external_body]
-pub fn big_mul_add_small(a: BigInt, m: usize, d: usize) -> (r: BigInt)
-    ensures
-        big_view(&r) == big_view(&a) * m + d,
-{
-    a * m + d
-}
-
 /// `b^e`.
 #[verifier::external_body]
 pub fn big_pow_usize(b: usize, e: usize) -> (r: BigInt)
@@ -228,14 +151,6 @@ pub fn big_pow10(n: u32) -> (r: BigInt)
 }
 
 #[verifier::external_body]
-pub fn big_from_i64(n: i64) -> (r: BigInt)
-    ensures
-        big_view(&r) == n,
-{
-    BigInt::from(n)
-}
-
-#[verifier::external_body]
 pub fn big_from_u64(n: u64) -> (r: BigInt)
     ensures
         big_view(&r) == n,
@@ -243,46 +158,11 @@ pub fn big_from_u64(n: u64) -> (r: BigInt)
     BigInt::from(n)
 }
 
-/// `a / d`, truncated toward zero, for a machine-word divisor.
-#[verifier::external_body]
-pub fn big_tdiv_u64(a: &BigInt, d: u64) -> (r: BigInt)
-    requires
-        d > 0,
-    ensures
-        big_view(&r) == spec_tdiv(big_view(a), d as int),
-{
-    a / d
-}
-
 /// The number of bits of |a| (`BigInt::bits`). Only a heuristic of `mathlib::ln_ball` uses it,
 /// so nothing is assumed about its value.
 #[verifier::external_body]
 pub fn big_bits(a: &BigInt) -> u64 {
     a.bits()
-}
-
-/// The sign of `a`: 1, 0 or −1.
-#[verifier::external_body]
-pub fn big_signum(a: &BigInt) -> (r: BigInt)
-    ensures
-        big_view(&r) == (if big_view(a) > 0 {
-            1int
-        } else if big_view(a) < 0 {
-            -1int
-        } else {
-            0int
-        }),
-{
-    a.signum()
-}
-
-/// `a + d` for a small `d`, reusing `a`'s storage.
-#[verifier::external_body]
-pub fn big_add_i64(a: BigInt, d: i64) -> (r: BigInt)
-    ensures
-        big_view(&r) == big_view(&a) + d,
-{
-    a + d
 }
 
 /// `a·2^n` (`<<`).
@@ -301,19 +181,6 @@ pub fn big_shr(a: &BigInt, n: u64) -> (r: BigInt)
         big_view(&r) == big_view(a) / spec_pow_int(2, n as nat),
 {
     a >> n
-}
-
-/// The floor quotient and remainder (`Integer::div_mod_floor`) for a positive divisor; Verus's
-/// `/` and `%` are the floor quotient and the nonnegative remainder for a positive divisor.
-#[verifier::external_body]
-pub fn big_div_mod_floor(a: &BigInt, b: &BigInt) -> (r: (BigInt, BigInt))
-    requires
-        big_view(b) > 0,
-    ensures
-        big_view(&r.0) == big_view(a) / big_view(b),
-        big_view(&r.1) == big_view(a) % big_view(b),
-{
-    num_integer::Integer::div_mod_floor(a, b)
 }
 
 } // verus!
@@ -344,17 +211,10 @@ mod tests {
             prop_assert_eq!(big_add(&big(a), &big(b)), big(a + b));
             prop_assert_eq!(big_sub(&big(a), &big(b)), big(a - b));
             prop_assert_eq!(big_mul(&big(a), &big(b)), big(a * b));
-            prop_assert_eq!(big_neg(&big(a)), big(-a));
-            prop_assert_eq!(big_is_zero(&big(a)), a == 0);
             if b != 0 {
-                prop_assert_eq!(big_tdiv(&big(a), &big(b)), big(tdiv(a, b)));
+                prop_assert_eq!(big_tdiv_rem(&big(a), &big(b)), (big(tdiv(a, b)), big(a - tdiv(a, b) * b)));
             }
-            prop_assert_eq!(big_is_negative(&big(a)), a < 0);
             prop_assert_eq!(big_cmp(&big(a), &big(b)), a.cmp(&b));
-            if b != 0 {
-                prop_assert_eq!(big_trem(&big(a), &big(b)), big(a - tdiv(a, b) * b));
-            }
-            prop_assert_eq!(big_abs(&big(a)), big(a.abs()));
         }
 
         #[test]
@@ -376,47 +236,21 @@ mod tests {
         }
 
         #[test]
-        fn small_steps(a in -(1i128 << 60)..(1i128 << 60), m in 0usize..=36, d in 0usize..=35, e in 0usize..=20) {
-            prop_assert_eq!(big_mul_add_small(big(a), m, d), big(a * m as i128 + d as i128));
+        fn powers(m in 0usize..=36, e in 0usize..=20) {
             prop_assert_eq!(big_pow_usize(m, e), BigInt::from(m).pow(e as u32));
         }
 
         #[test]
-        fn small_values(x in any::<u32>()) {
-            prop_assert_eq!(big_to_u64_small(&big(i128::from(x))), u64::from(x));
-        }
-
-        #[test]
-        fn from_usize(n in any::<usize>()) {
-            prop_assert_eq!(big_from_usize(n), BigInt::from(n));
-        }
-    }
-
-    /// Floor division and remainder over `i128`, for a positive divisor.
-    fn floor_div_mod(a: i128, b: i128) -> (i128, i128) {
-        (a.div_euclid(b), a.rem_euclid(b))
-    }
-
-    proptest! {
-        #[test]
-        fn shifts_and_floor_division(a in -(1i128 << 60)..(1i128 << 60), b in 1i128..(1i128 << 60), n in 0u64..60, v in any::<i64>()) {
-            prop_assert_eq!(big_from_i64(v), big(i128::from(v)));
-            prop_assert_eq!(big_add_i64(big(a), v), big(a + i128::from(v)));
-            prop_assert_eq!(big_from_u64(v.unsigned_abs()), big(i128::from(v.unsigned_abs())));
-            prop_assert_eq!(big_signum(&big(a)), big(a.signum()));
+        fn shifts_bits_and_from_u64(a in -(1i128 << 60)..(1i128 << 60), n in 0u64..60, v in any::<u64>()) {
+            prop_assert_eq!(big_from_u64(v), big(i128::from(v)));
             prop_assert_eq!(big_bits(&big(a)), u64::from(128 - a.unsigned_abs().leading_zeros()));
-            let d = b.unsigned_abs() as u64;
-            prop_assert_eq!(big_tdiv_u64(&big(a), d), big(tdiv(a, i128::from(d))));
             prop_assert_eq!(big_shl(&big(a), n), big(a * (1i128 << n)));
-            prop_assert_eq!(big_shr(&big(a), n), big(floor_div_mod(a, 1i128 << n).0));
-            let (q, r) = floor_div_mod(a, b);
-            prop_assert_eq!(big_div_mod_floor(&big(a), &big(b)), (big(q), big(r)));
+            prop_assert_eq!(big_shr(&big(a), n), big(a.div_euclid(1i128 << n)));
         }
     }
 
     #[test]
-    fn zero_and_powers_of_ten() {
-        assert_eq!(big_zero(), big(0));
+    fn powers_of_ten() {
         let mut p = 1i128;
         for n in 0..=38u32 {
             assert_eq!(big_pow10(n), big(p));

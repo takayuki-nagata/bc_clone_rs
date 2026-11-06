@@ -48,6 +48,7 @@ pub mod parser;
 mod real_arith;
 #[cfg(verus_keep_ghost)]
 pub use bc_spec::spec_num;
+mod bigint;
 #[cfg(verus_keep_ghost)]
 mod refine;
 mod trusted_bigint;

@@ -13,6 +13,14 @@
 //! Siegel for the Bessel functions), so it is never exactly a truncation boundary and the loop
 //! ends. `docs/MATH_ERROR_BOUNDS.md` derives every radius used here.
 
+#[cfg(verus_keep_ghost)]
+use crate::bigint::big_view;
+use crate::bigint::{
+    big_abs, big_add, big_add_i64, big_bits, big_clone, big_cmp, big_decimal_digits,
+    big_div_mod_floor, big_from_i64, big_from_u64, big_from_usize, big_is_negative, big_is_zero,
+    big_isqrt, big_mul, big_neg, big_shl, big_shr, big_signum, big_sub, big_tdiv, big_tdiv_u64,
+    big_to_i64,
+};
 use crate::error::RuntimeError;
 use crate::math::{BCNum, pow10_within};
 #[cfg(verus_keep_ghost)]
@@ -21,14 +29,6 @@ use crate::real_arith::*;
 use crate::spec_num;
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::{lemma_pow10_add, lemma_pow10_pos, spec_pow_int, spec_tdiv, trunc_div};
-#[cfg(verus_keep_ghost)]
-use crate::trusted_bigint::big_view;
-use crate::trusted_bigint::{
-    big_abs, big_add, big_add_i64, big_bits, big_clone, big_cmp, big_decimal_digits,
-    big_div_mod_floor, big_from_i64, big_from_u64, big_from_usize, big_is_negative, big_is_zero,
-    big_isqrt, big_mul, big_neg, big_shl, big_shr, big_signum, big_sub, big_tdiv, big_tdiv_u64,
-    big_to_i64,
-};
 #[cfg(verus_keep_ghost)]
 use crate::trusted_math::*;
 use crate::verified_kernels::{

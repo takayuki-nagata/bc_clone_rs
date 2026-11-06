@@ -6,18 +6,18 @@
 //! coefficients paired with a scale factor, and its arithmetic. The `-l` functions are in
 //! `mathlib/`.
 
+#[cfg(verus_keep_ghost)]
+use crate::bigint::big_view;
+use crate::bigint::{
+    big_abs, big_add, big_clone, big_cmp, big_decimal_digits, big_from_usize, big_is_negative,
+    big_is_zero, big_isqrt, big_mul, big_mul_add_small, big_pow_usize, big_pow10, big_sub,
+    big_tdiv, big_to_i64, big_zero,
+};
 use crate::error::RuntimeError;
 #[cfg(verus_keep_ghost)]
 use crate::spec_num;
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::*;
-#[cfg(verus_keep_ghost)]
-use crate::trusted_bigint::big_view;
-use crate::trusted_bigint::{
-    big_abs, big_add, big_clone, big_cmp, big_decimal_digits, big_from_usize, big_is_negative,
-    big_is_zero, big_isqrt, big_mul, big_mul_add_small, big_pow_usize, big_pow10, big_sub,
-    big_tdiv, big_to_i64, big_zero,
-};
 use crate::verified_kernels::{BC_SCALE_MAX, MAX_VERIFIED_SCALE};
 use crate::verified_kernels::{
     verified_add_sub_scales, verified_bcnum_length, verified_div_scale_and_shift,

@@ -11,6 +11,7 @@
 //! hundred digits; larger operands are checked against identities instead.
 
 use super::*;
+use crate::bigint::{big_abs, big_is_negative, big_is_zero};
 use alloc::vec;
 use alloc::vec::Vec;
 use bc_spec::num::{exec_add_mag, exec_cmp_mag, exec_divmod_mag, exec_mul_mag, exec_sub_mag};
@@ -130,8 +131,9 @@ proptest! {
         let (va, vb) = (view(&a), view(&b));
         prop_assume!(!vb.1.is_empty());
         let (sq, sr) = exec_divmod_mag(&va.1, &vb.1);
-        prop_assert_eq!(view(&big_tdiv(&a, &b)), signed(va.0 != vb.0, sq));
-        prop_assert_eq!(view(&big_trem(&a, &b)), signed(va.0, sr));
+        let (q, r) = big_tdiv_rem(&a, &b);
+        prop_assert_eq!(view(&q), signed(va.0 != vb.0, sq));
+        prop_assert_eq!(view(&r), signed(va.0, sr));
     }
 
     #[test]
@@ -162,7 +164,7 @@ proptest! {
     #[test]
     fn long_division_and_isqrt_identities(a in value(64), b in value(40)) {
         prop_assume!(!big_is_zero(&b));
-        let (q, r) = (big_tdiv(&a, &b), big_trem(&a, &b));
+        let (q, r) = big_tdiv_rem(&a, &b);
         prop_assert_eq!(big_add(&big_mul(&q, &b), &r), a.clone());
         prop_assert_eq!(big_cmp(&big_abs(&r), &big_abs(&b)), Ordering::Less);
         prop_assert!(big_is_zero(&r) || big_is_negative(&r) == big_is_negative(&a));

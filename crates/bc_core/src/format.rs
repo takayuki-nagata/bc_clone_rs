@@ -9,18 +9,18 @@
 //! `out_digit`: a character for `obase <= 16`, otherwise a separator and the zero-padded decimal
 //! value.
 
+#[cfg(verus_keep_ghost)]
+use crate::bigint::big_view;
+use crate::bigint::{
+    big_abs, big_cmp, big_from_usize, big_is_negative, big_is_zero, big_mul, big_mul_add_small,
+    big_tdiv_rem, big_to_u64_small,
+};
 use crate::error::RuntimeError;
 use crate::math::{BCNum, pow10_within};
 #[cfg(verus_keep_ghost)]
 use crate::real_arith::lemma_pow_ge_pow2;
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::*;
-#[cfg(verus_keep_ghost)]
-use crate::trusted_bigint::big_view;
-use crate::trusted_bigint::{
-    big_abs, big_cmp, big_from_usize, big_is_negative, big_is_zero, big_mul, big_mul_add_small,
-    big_tdiv, big_to_u64_small, big_trem,
-};
 #[cfg(verus_keep_ghost)]
 use crate::verified_kernels::POSIX_WRAP_COL_LIMIT;
 use crate::verified_kernels::{BC_BASE_MAX, BC_SCALE_MAX};
@@ -268,8 +268,7 @@ fn push_int_digits(out: &mut Vec<u8>, n: BigInt, obase: usize)
         decreases big_view(&temp),
     {
         let ghost t = big_view(&temp);
-        let r = big_trem(&temp, &ob_big);
-        let q = big_tdiv(&temp, &ob_big);
+        let (q, r) = big_tdiv_rem(&temp, &ob_big);
         proof {
             lemma_fundamental_div_mod(t, ob);
             assert(0 <= t % ob < ob);
@@ -378,8 +377,7 @@ fn push_frac_digits(out: &mut Vec<u8>, num: BigInt, den: &BigInt, obase: usize, 
     {
         let ghost xv = big_view(&x);
         let m = big_mul_add_small(x, obase, 0);
-        let q = big_tdiv(&m, den);
-        let r = big_trem(&m, den);
+        let (q, r) = big_tdiv_rem(&m, den);
         let ghost mv = xv * ob;
         proof {
             lemma_fundamental_div_mod(mv, p);
@@ -515,8 +513,7 @@ impl BCNum {
         proof {
             lemma_pow10_pos(self.scale as nat);
         }
-        let int_part = big_tdiv(&coeff_abs, &divisor);
-        let frac_coeff = big_trem(&coeff_abs, &divisor);
+        let (int_part, frac_coeff) = big_tdiv_rem(&coeff_abs, &divisor);
         let ghost (a, p) = (big_view(&coeff_abs), pow10(self.scale as nat));
         proof {
             lemma_fundamental_div_mod(a, p);

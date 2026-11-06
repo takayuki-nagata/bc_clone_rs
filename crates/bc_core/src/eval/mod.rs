@@ -14,6 +14,11 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt::Write as FmtWrite;
 
+#[cfg(verus_keep_ghost)]
+use crate::bigint::{axiom_bigint_size, big_view};
+use crate::bigint::{
+    big_abs, big_cmp, big_from_usize, big_is_negative, big_neg, big_tdiv, big_to_u64_small,
+};
 use crate::error::{BcError, RuntimeError};
 use crate::format::{push_dec, wrap_output};
 use crate::math::pow10_within;
@@ -35,11 +40,6 @@ use crate::spec_num::SpecBCNum;
 use crate::spec_num::lemma_pow10_pos;
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::spec_tdiv;
-#[cfg(verus_keep_ghost)]
-use crate::trusted_bigint::{axiom_bigint_size, big_view};
-use crate::trusted_bigint::{
-    big_abs, big_cmp, big_from_usize, big_is_negative, big_neg, big_tdiv, big_to_u64_small,
-};
 #[cfg(verus_keep_ghost)]
 use crate::trusted_std::axiom_string_obeys_cmp;
 use crate::verified_kernels::{
