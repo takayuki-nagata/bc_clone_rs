@@ -86,7 +86,8 @@ graph TD
   operation in verified code from nine primitives in `trusted_bigint.rs` (`+`, `-`, `*`, the
   truncating quotient and remainder, comparison, clone, the conversions from `u64` and to `i64`,
   and the bit length). Verus assumes those one-line wrappers correct; each is checked by a test,
-  on multi-limb values against the specification's decimal arithmetic. The output `format_bytes` (`src/format.rs`) is
+  the arithmetic ones on multi-limb values against the specification's decimal arithmetic and,
+  for long products, against schoolbook multiplication. The output `format_bytes` (`src/format.rs`) is
   proved to write the specification's `l0_format` of the value for every `obase` from 2 to
   `BC_BASE_MAX`. Constants are read with the verified `math::literal_digit_values`, by the
   evaluator and by the public `BCNum::try_from_string` alike.

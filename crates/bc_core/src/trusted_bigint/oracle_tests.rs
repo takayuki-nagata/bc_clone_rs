@@ -8,7 +8,9 @@
 //! `to_u32_digits`, and the conversion between limbs and decimal digits is done here, so the
 //! check does not go through `num-bigint`'s own radix conversion. The specification's
 //! arithmetic is quadratic in the number of digits per addition, so the operands stay at a few
-//! hundred digits; larger operands are checked against identities instead.
+//! hundred digits; longer operands are checked against schoolbook multiplication written here
+//! and against identities. `from_u64` and `to_i64` are checked on single values (the tests of
+//! `trusted_bigint.rs` and `to_i64_at_the_edges`).
 
 use super::*;
 use crate::bigint::{big_abs, big_decimal_digits, big_is_negative, big_is_zero, big_isqrt};
@@ -173,6 +175,65 @@ proptest! {
         let s1 = big_add(&s, &BigInt::from(1));
         prop_assert!(big_cmp(&big_mul(&s, &s), &m) != Ordering::Greater);
         prop_assert_eq!(big_cmp(&big_mul(&s1, &s1), &m), Ordering::Greater);
+    }
+}
+
+/// Schoolbook multiplication of little-endian 32-bit limbs, written out here: the reference for
+/// operands too long for the specification's arithmetic.
+fn limbs_mul(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let mut r = vec![0u32; a.len() + b.len()];
+    for (i, &x) in a.iter().enumerate() {
+        let mut carry = 0u64;
+        for (j, &y) in b.iter().enumerate() {
+            let t = u64::from(x) * u64::from(y) + u64::from(r[i + j]) + carry;
+            r[i + j] = t as u32;
+            carry = t >> 32;
+        }
+        let mut k = i + b.len();
+        while carry > 0 {
+            let t = u64::from(r[k]) + carry;
+            r[k] = t as u32;
+            carry = t >> 32;
+            k += 1;
+        }
+    }
+    while r.last() == Some(&0) {
+        r.pop();
+    }
+    r
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+
+    /// `num-bigint` multiplies long operands with Karatsuba (above 32 64-bit digits) and Toom-3
+    /// (above 256); check those against schoolbook multiplication. The division of the product
+    /// by one factor is checked too, which exercises long division at these sizes.
+    #[test]
+    fn long_products_match_schoolbook(
+        a in prop::collection::vec(limb(), 60..=1200),
+        b in prop::collection::vec(limb(), 60..=1200),
+        na in any::<bool>(),
+        nb in any::<bool>(),
+    ) {
+        let (x, y) = (make(na, &a), make(nb, &b));
+        let p = big_mul(&x, &y);
+        let (sign, limbs) = p.to_u32_digits();
+        let expected = limbs_mul(&a, &b);
+        let expected_sign = if expected.is_empty() {
+            Sign::NoSign
+        } else if na == nb {
+            Sign::Plus
+        } else {
+            Sign::Minus
+        };
+        prop_assert_eq!(limbs, expected);
+        prop_assert_eq!(sign, expected_sign);
+        if !big_is_zero(&y) {
+            let (q, r) = big_tdiv_rem(&p, &y);
+            prop_assert_eq!(q, x);
+            prop_assert!(big_is_zero(&r));
+        }
     }
 }
 

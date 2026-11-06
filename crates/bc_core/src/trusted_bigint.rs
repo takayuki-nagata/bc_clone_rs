@@ -12,9 +12,10 @@
 //! decimal digit count, ...) are derived from these in verified code in `bigint.rs`, which is
 //! also where callers import them from.
 //!
-//! The tests below check each wrapper against `i128` arithmetic, and `oracle_tests` checks them
-//! on multi-limb values against the executable decimal arithmetic of the specification, which
-//! is proved and does not use `num-bigint`.
+//! The tests below check each wrapper against `i128` arithmetic, and `oracle_tests` checks the
+//! arithmetic ones on multi-limb values against the executable decimal arithmetic of the
+//! specification, which is proved and does not use `num-bigint`, and long products against
+//! schoolbook multiplication.
 //!
 //! Keep every wrapper this small, so that its clause is evidently what the `num-bigint`
 //! operation computes, and add a test for each new one. Add a wrapper only for an operation that

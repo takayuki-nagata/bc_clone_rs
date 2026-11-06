@@ -73,8 +73,9 @@ lists what the proofs assume.
 - **Integers.** Only nine primitive `num-bigint` operations are trusted (`+`, `-`, `*`, the
   truncating quotient and remainder, comparison, clone, two conversions and the bit length);
   the others, including the integer square root and the decimal digit count, are derived from
-  them in verified code. The primitives are tested on multi-limb values against the
-  specification's decimal arithmetic.
+  them in verified code. The arithmetic primitives are tested on multi-limb values against the
+  specification's decimal arithmetic, and long products (where `num-bigint` uses Karatsuba and
+  Toom-3) against schoolbook multiplication.
 - **Build.** `bc_core` is verified with `cargo verus verify -p bc_core --features verify`; the
   `verify` feature links `vstd` and the specification, which production builds never link.
 
