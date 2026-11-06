@@ -31,6 +31,9 @@ lists what the proofs assume.
   self-tests run inputs at the limit and report the stack high-water mark, which adds to the time
   from reset to the prompt (about 5 seconds). The stack use is confirmed on the board; Wasm was
   measured in V8 and Firefox, not in Safari (`AGENTS.md`).
+- **Faster output and `length` of large numbers.** Printing a number takes one division per digit
+  instead of two (about twice as fast for large numbers), and `length` no longer converts the
+  number to decimal text (`length(2^3000000)`: five times as fast).
 
 ### Verification
 - The parsing of an input is proved against the specification, so that without `-l` the theorem now
@@ -67,6 +70,11 @@ lists what the proofs assume.
   specification's, and checks the specification against GNU `bc`. The POSIX conformance script
   also runs against the specification (`BC_BIN=target/bc_spec_oracle`). A second differential
   fuzzer generates deeply nested programs.
+- **Integers.** Only nine primitive `num-bigint` operations are trusted (`+`, `-`, `*`, the
+  truncating quotient and remainder, comparison, clone, two conversions and the bit length);
+  the others, including the integer square root and the decimal digit count, are derived from
+  them in verified code. The primitives are tested on multi-limb values against the
+  specification's decimal arithmetic.
 - **Build.** `bc_core` is verified with `cargo verus verify -p bc_core --features verify`; the
   `verify` feature links `vstd` and the specification, which production builds never link.
 

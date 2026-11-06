@@ -1,17 +1,24 @@
 // SPDX-License-Identifier: MIT
 
-//! The trusted interface to `num-bigint`: every `BigInt` operation that verified code uses.
+//! The trusted interface to `num-bigint`: the primitive `BigInt` operations that the other
+//! operations are built on.
 //!
 //! Verus does not verify `num-bigint`. Each function here is a one-line wrapper around a
 //! `BigInt` operation, marked `#[verifier::external_body]`: Verus assumes its `ensures` clause
 //! and does not check the body. The clauses state the operation over the mathematical integers
 //! (`big_view`), using the L0 definitions of `spec_num` (e.g. truncating division is
-//! `spec_tdiv`). These assumptions are part of the trusted computing base of the refinement
-//! proofs (proved versions would replace them); the tests below check each one against
-//! independent `i128` arithmetic.
+//! `spec_tdiv`). These assumptions are part of the trusted computing base of the proofs. The
+//! other operations (sign tests, floor division, powers, shifts, the integer square root, the
+//! decimal digit count, ...) are derived from these in verified code in `bigint.rs`, which is
+//! also where callers import them from.
+//!
+//! The tests below check each wrapper against `i128` arithmetic, and `oracle_tests` checks them
+//! on multi-limb values against the executable decimal arithmetic of the specification, which
+//! is proved and does not use `num-bigint`.
 //!
 //! Keep every wrapper this small, so that its clause is evidently what the `num-bigint`
-//! operation computes, and add a test for each new one.
+//! operation computes, and add a test for each new one. Add a wrapper only for an operation that
+//! cannot be derived from these at a reasonable cost.
 
 #[cfg(verus_keep_ghost)]
 use crate::spec_num::*;
