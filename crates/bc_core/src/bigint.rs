@@ -13,8 +13,10 @@ use crate::spec_num::*;
 pub use crate::trusted_bigint::{axiom_bigint_size, big_view};
 pub use crate::trusted_bigint::{
     big_add, big_bits, big_clone, big_cmp, big_decimal_digits, big_from_u64, big_isqrt, big_mul,
-    big_pow_usize, big_pow10, big_shl, big_shr, big_sub, big_tdiv_rem, big_to_i64,
+    big_sub, big_tdiv_rem, big_to_i64,
 };
+#[cfg(verus_keep_ghost)]
+use bc_spec::power::{lemma_pow_add, lemma_pow_mul, lemma_pow_positive};
 use core::cmp::Ordering;
 use num_bigint::BigInt;
 #[cfg(not(verus_keep_ghost))]
@@ -224,6 +226,122 @@ pub fn big_mul_add_small(a: BigInt, m: usize, d: usize) -> (r: BigInt)
     big_add(&big_mul(&a, &big_from_usize(m)), &big_from_usize(d))
 }
 
+/// `b^e`, by binary exponentiation (the last squaring is skipped: it would be discarded).
+#[allow(clippy::assign_op_pattern, reason = "the code keeps the form that the proof reasons about")]
+pub fn big_pow(b: &BigInt, e: u64) -> (r: BigInt)
+    ensures
+        big_view(&r) == spec_pow_int(big_view(b), e as nat),
+{
+    let ghost b0 = big_view(b);
+    let mut acc = big_from_u64(1);
+    let mut base = big_clone(b);
+    let mut k = e;
+    proof {
+        assert(spec_pow_int(b0, e as nat) == 1 * spec_pow_int(big_view(&base), k as nat));
+    }
+    while k > 0
+        invariant
+            spec_pow_int(b0, e as nat) == big_view(&acc) * spec_pow_int(big_view(&base), k as nat),
+        decreases k,
+    {
+        let ghost (a0, x, k0) = (big_view(&acc), big_view(&base), k);
+        proof {
+            lemma_pow_halve(x, k0 as nat);
+        }
+        if k % 2 == 1 {
+            acc = big_mul(&acc, &base);
+        }
+        k = k / 2;
+        if k > 0 {
+            base = big_mul(&base, &base);
+        }
+        proof {
+            let h = (k0 / 2) as nat;
+            if k0 % 2 == 1 {
+                assert(spec_pow_int(x, k0 as nat) == x * spec_pow_int(x * x, h));
+                assert(a0 * (x * spec_pow_int(x * x, h)) == (a0 * x) * spec_pow_int(x * x, h))
+                    by (nonlinear_arith);
+            }
+            if k == 0 {
+                assert(spec_pow_int(x * x, 0) == 1);
+                assert(spec_pow_int(big_view(&base), 0) == 1);
+            }
+        }
+    }
+    acc
+}
+
+/// `x^k = x^(k mod 2) · (x²)^(k div 2)`.
+proof fn lemma_pow_halve(x: int, k: nat)
+    ensures
+        k % 2 == 0 ==> spec_pow_int(x, k) == spec_pow_int(x * x, k / 2),
+        k % 2 == 1 ==> spec_pow_int(x, k) == x * spec_pow_int(x * x, k / 2),
+{
+    let h = k / 2;
+    lemma_pow_mul(x, 2, h);
+    assert(spec_pow_int(x, 2) == x * x) by {
+        assert(spec_pow_int(x, 1) == x * spec_pow_int(x, 0));
+    }
+    if k % 2 == 1 {
+        assert(k == 1 + 2 * h);
+        lemma_pow_add(x, 1, 2 * h);
+        assert(spec_pow_int(x, 1) == x * spec_pow_int(x, 0));
+    } else {
+        assert(k == 2 * h);
+    }
+}
+
+/// `b^e`.
+pub fn big_pow_usize(b: usize, e: usize) -> (r: BigInt)
+    ensures
+        big_view(&r) == spec_pow_int(b as int, e as nat),
+{
+    big_pow(&big_from_usize(b), e as u64)
+}
+
+/// `10^n`.
+pub fn big_pow10(n: u32) -> (r: BigInt)
+    ensures
+        big_view(&r) == pow10(n as nat),
+{
+    let r = big_pow(&big_from_u64(10), n as u64);
+    proof {
+        lemma_pow10_is_pow(n as nat);
+    }
+    r
+}
+
+proof fn lemma_pow10_is_pow(n: nat)
+    ensures
+        pow10(n) == spec_pow_int(10, n),
+    decreases n,
+{
+    if n > 0 {
+        lemma_pow10_is_pow((n - 1) as nat);
+    }
+}
+
+/// `a·2^n`.
+pub fn big_shl(a: &BigInt, n: u64) -> (r: BigInt)
+    ensures
+        big_view(&r) == big_view(a) * spec_pow_int(2, n as nat),
+{
+    big_mul(a, &big_pow(&big_from_u64(2), n))
+}
+
+/// `⌊a / 2^n⌋`.
+pub fn big_shr(a: &BigInt, n: u64) -> (r: BigInt)
+    ensures
+        big_view(&r) == big_view(a) / spec_pow_int(2, n as nat),
+{
+    let p = big_pow(&big_from_u64(2), n);
+    proof {
+        lemma_pow_positive(2, n as nat);
+    }
+    let (q, _) = big_div_mod_floor(a, &p);
+    q
+}
+
 } // verus!
 
 #[cfg(test)]
@@ -264,6 +382,13 @@ mod tests {
             prop_assert_eq!(big_from_usize(n), BigInt::from(n));
             prop_assert_eq!(big_mul_add_small(big(a), m, d), big(a * m as i128 + d as i128));
         }
+
+        #[test]
+        fn powers_and_shifts(a in -(1i128 << 60)..(1i128 << 60), n in 0u64..60, m in 0usize..=36, e in 0usize..=20) {
+            prop_assert_eq!(big_pow_usize(m, e), BigInt::from(m).pow(e as u32));
+            prop_assert_eq!(big_shl(&big(a), n), big(a * (1i128 << n)));
+            prop_assert_eq!(big_shr(&big(a), n), big(a.div_euclid(1i128 << n)));
+        }
     }
 
     #[test]
@@ -271,5 +396,12 @@ mod tests {
         assert_eq!(big_zero(), big(0));
         assert_eq!(big_from_i64(i64::MIN), big(i128::from(i64::MIN)));
         assert!(!big_is_negative(&big_neg(&big(0))));
+        let mut p = 1i128;
+        for n in 0..=38u32 {
+            assert_eq!(big_pow10(n), big(p));
+            p = p.saturating_mul(10);
+        }
+        assert_eq!(big_pow(&big(-3), 0), big(1));
+        assert_eq!(big_pow(&big(-3), 5), big(-243));
     }
 }

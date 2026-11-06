@@ -132,24 +132,6 @@ pub fn big_to_i64(a: &BigInt) -> (r: Option<i64>)
     a.to_i64()
 }
 
-/// `b^e`.
-#[verifier::external_body]
-pub fn big_pow_usize(b: usize, e: usize) -> (r: BigInt)
-    ensures
-        big_view(&r) == spec_pow_int(b as int, e as nat),
-{
-    num_traits::pow(BigInt::from(b), e)
-}
-
-/// `10^n`.
-#[verifier::external_body]
-pub fn big_pow10(n: u32) -> (r: BigInt)
-    ensures
-        big_view(&r) == pow10(n as nat),
-{
-    BigInt::from(10).pow(n)
-}
-
 #[verifier::external_body]
 pub fn big_from_u64(n: u64) -> (r: BigInt)
     ensures
@@ -163,24 +145,6 @@ pub fn big_from_u64(n: u64) -> (r: BigInt)
 #[verifier::external_body]
 pub fn big_bits(a: &BigInt) -> u64 {
     a.bits()
-}
-
-/// `a·2^n` (`<<`).
-#[verifier::external_body]
-pub fn big_shl(a: &BigInt, n: u64) -> (r: BigInt)
-    ensures
-        big_view(&r) == big_view(a) * spec_pow_int(2, n as nat),
-{
-    a << n
-}
-
-/// `⌊a / 2^n⌋` (`>>`, which rounds toward negative infinity on a `BigInt`).
-#[verifier::external_body]
-pub fn big_shr(a: &BigInt, n: u64) -> (r: BigInt)
-    ensures
-        big_view(&r) == big_view(a) / spec_pow_int(2, n as nat),
-{
-    a >> n
 }
 
 } // verus!
@@ -236,25 +200,9 @@ mod tests {
         }
 
         #[test]
-        fn powers(m in 0usize..=36, e in 0usize..=20) {
-            prop_assert_eq!(big_pow_usize(m, e), BigInt::from(m).pow(e as u32));
-        }
-
-        #[test]
-        fn shifts_bits_and_from_u64(a in -(1i128 << 60)..(1i128 << 60), n in 0u64..60, v in any::<u64>()) {
+        fn bits_and_from_u64(a in -(1i128 << 60)..(1i128 << 60), v in any::<u64>()) {
             prop_assert_eq!(big_from_u64(v), big(i128::from(v)));
             prop_assert_eq!(big_bits(&big(a)), u64::from(128 - a.unsigned_abs().leading_zeros()));
-            prop_assert_eq!(big_shl(&big(a), n), big(a * (1i128 << n)));
-            prop_assert_eq!(big_shr(&big(a), n), big(a.div_euclid(1i128 << n)));
-        }
-    }
-
-    #[test]
-    fn powers_of_ten() {
-        let mut p = 1i128;
-        for n in 0..=38u32 {
-            assert_eq!(big_pow10(n), big(p));
-            p = p.saturating_mul(10);
         }
     }
 }
