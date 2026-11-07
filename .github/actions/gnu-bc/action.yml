@@ -1,0 +1,26 @@
+name: Install GNU bc
+description: Builds GNU bc 1.08.2 (cached) and puts it first on PATH, for the differential tests.
+runs:
+  using: composite
+  steps:
+    - name: Report the runner's own bc
+      shell: bash
+      run: (command -v bc && bc --version | head -n 1) || echo "no bc on the runner"
+
+    - name: Cache GNU bc
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/gnu-bc
+        key: gnu-bc-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install_gnu_bc.sh') }}
+
+    - name: Build GNU bc
+      shell: bash
+      run: |
+        bash scripts/install_gnu_bc.sh "$HOME/.local/gnu-bc"
+        echo "$HOME/.local/gnu-bc/bin" >> "$GITHUB_PATH"
+
+    - name: Check the bc on PATH
+      shell: bash
+      run: |
+        command -v bc
+        bc --version | head -n 1 | grep '^bc 1\.08'

@@ -2,29 +2,38 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    # `ci/**` branches run the checks without touching main (the release workflow runs on tags).
+    branches: [ main, 'ci/**' ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  ci:
-    name: Build, Lint, Test, and Coverage
+  lint:
+    name: Format, Clippy, no_std, audit
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v7
 
-      - name: Setup Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy, llvm-tools-preview
+          components: rustfmt, clippy
           targets: riscv32imac-unknown-none-elf, riscv32imc-unknown-none-elf, wasm32-unknown-unknown
 
-      - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
 
       - name: Check Code Formatting
         run: cargo fmt --check
@@ -50,8 +59,29 @@ jobs:
           cargo check --package bc_zephyr --target riscv32imac-unknown-none-elf --no-default-features
           cargo check --package bc_zephyr --target riscv32imc-unknown-none-elf --no-default-features
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@cargo-audit
+
+      - name: Run cargo-audit
+        run: cargo audit
+
+  test:
+    name: Tests, coverage, GNU and POSIX suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+
+      - uses: ./.github/actions/gnu-bc
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Run Tests with Coverage
         run: cargo llvm-cov --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --all-targets --fail-under-lines 98 --lcov --output-path lcov.info
@@ -61,6 +91,50 @@ jobs:
 
       - name: Run POSIX IEEE Std 1003.1 Compliance Test Suite
         run: bash scripts/run_posix_compliance_tests.sh
+
+  spec:
+    name: Executable specification (differential tests, POSIX suite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: spec
+
+      - name: Cache Verus
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/verus
+          key: verus-${{ runner.os }}-${{ hashFiles('scripts/verus_env.sh') }}
+
+      - uses: ./.github/actions/gnu-bc
+
+      - name: Differential Tests and POSIX Suite against the Executable Specification
+        run: |
+          bash scripts/build_spec_oracle.sh --no-verify target/bc_spec_oracle
+          BC_SPEC_ORACLE="$PWD/target/bc_spec_oracle" BC_SPEC_ORACLE_REQUIRED=1 \
+            cargo test --package bc_clone --test spec_differential
+          BC_BIN="$PWD/target/bc_spec_oracle" bash scripts/run_posix_compliance_tests.sh
+
+  embedded:
+    name: M5Stamp C3, Wasm, QEMU RISC-V 32
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: riscv32imac-unknown-none-elf, riscv32imc-unknown-none-elf, wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: embedded
 
       - name: Verify M5Stamp C3 (ESP32-C3) Baremetal Application
         run: bash scripts/build_m5stamp_c3.sh
@@ -78,86 +152,135 @@ jobs:
       - name: Run QEMU RISC-V 32 Baremetal Automated Test Suite
         run: bash scripts/run_qemu_riscv32_tests.sh
 
-      - name: Install Verus Formal Verifier
-        run: |
-          VERUS_VERSION="0.2026.10.18.7d82994"
-          VERUS_URL="https://github.com/verus-lang/verus/releases/download/release%2F${VERUS_VERSION}/verus-${VERUS_VERSION}-x86-linux.zip"
-          if [ ! -x "$HOME/.local/verus/verus" ]; then
-            TMP_DIR="$(mktemp -d)"
-            curl -fL "$VERUS_URL" -o "$TMP_DIR/verus.zip"
-            unzip -q "$TMP_DIR/verus.zip" -d "$TMP_DIR/extracted"
-            mkdir -p "$HOME/.local/verus"
-            if [ -d "$TMP_DIR/extracted/verus-x86-linux" ]; then
-              cp -a "$TMP_DIR/extracted/verus-x86-linux/." "$HOME/.local/verus/"
-            else
-              cp -a "$TMP_DIR/extracted/." "$HOME/.local/verus/"
-            fi
-            chmod +x "$HOME/.local/verus/verus" "$HOME/.local/verus/rust_verify" "$HOME/.local/verus/z3" "$HOME/.local/verus/cargo-verus" 2>/dev/null || true
-            rm -rf "$TMP_DIR"
-          fi
-          REQUIRED_TOOLCHAIN="$(sed -n 's/.*"toolchain": "\([^" ]*\).*/\1/p' "$HOME/.local/verus/version.json" | head -n 1)"
-          if [ -n "$REQUIRED_TOOLCHAIN" ] && ! rustup toolchain list | grep -q "^${REQUIRED_TOOLCHAIN}"; then
-            rustup toolchain install "$REQUIRED_TOOLCHAIN" --profile minimal --no-self-update
-          fi
+  verus:
+    name: Verus (bc_core, bc_spec)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: verus
+
+      - name: Cache Verus
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/verus
+          key: verus-${{ runner.os }}-${{ hashFiles('scripts/verus_env.sh') }}
 
       - name: Run Verus Formal Verification (bc_core, bc_spec)
         run: bash scripts/run_verus_verification.sh
 
-      - name: Differential Tests and POSIX Suite against the Executable Specification
-        run: |
-          bash scripts/build_spec_oracle.sh --no-verify target/bc_spec_oracle
-          BC_SPEC_ORACLE="$PWD/target/bc_spec_oracle" BC_SPEC_ORACLE_REQUIRED=1 \
-            cargo test --package bc_clone --test spec_differential
-          BC_BIN="$PWD/target/bc_spec_oracle" bash scripts/run_posix_compliance_tests.sh
+  kani:
+    name: Kani
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: kani
 
       - name: Run Kani Bounded Model Checking Verification
         run: bash scripts/run_kani_verification.sh
 
+  miri:
+    name: Miri (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: bc_c_api, stage: c_api, args: '' }
+          - { name: bc_c_api tree borrows, stage: c_api_tree, args: '' }
+          - { name: bc_zephyr, stage: zephyr, args: '' }
+          - { name: bc_clone, stage: cli, args: '' }
+          # bc_core is split by test name, by the times measured under Miri: the wide-block test
+          # alone takes about as long as the integer and math-library tests together. The last
+          # shard skips what the others run, so a new test always runs somewhere.
+          - { name: bc_core wide blocks, stage: core, args: 'eval::tests::test_blocks_wider_than_the_fast_path_budget --exact' }
+          - { name: bc_core integers and mathlib, stage: core, args: 'bigint:: mathlib::' }
+          - { name: bc_core rest, stage: core, args: '--skip eval::tests::test_blocks_wider_than_the_fast_path_budget --skip bigint:: --skip mathlib::' }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: miri
+
       - name: Run Miri Undefined Behavior & Memory-Safety Verification
-        run: bash scripts/run_miri_tests.sh
+        run: bash scripts/run_miri_tests.sh ${{ matrix.stage }} -- ${{ matrix.args }}
 
+  mutants:
+    name: Diff-based mutation testing (shard ${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [ 0, 1, 2 ]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Install cargo-audit
+      - uses: dtolnay/rust-toolchain@stable
 
-        uses: taiki-e/install-action@cargo-audit
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mutants
 
-      - name: Run cargo-audit
-        run: cargo audit
+      - uses: ./.github/actions/gnu-bc
 
-      - name: Install cargo-mutants
-        uses: taiki-e/install-action@cargo-mutants
+      - uses: taiki-e/install-action@cargo-mutants
 
-      - name: Fetch base branch for diff (Pull Request)
-        if: github.event_name == 'pull_request'
-        run: git fetch origin ${{ github.base_ref }} --depth=1
-
-      - name: Run Diff-based Mutation Testing (Pull Request)
-        if: github.event_name == 'pull_request'
+      - name: Compute the diff to mutate
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          REF: ${{ github.ref }}
+          BEFORE: ${{ github.event.before }}
         run: |
-          git diff origin/${{ github.base_ref }}...HEAD > pr.diff
+          if [ "$EVENT" = pull_request ]; then
+            git diff "origin/${BASE_REF}...HEAD" > mutants.diff
+          elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then
+              git diff HEAD~1..HEAD > mutants.diff
+            else
+              git diff "${BEFORE}..HEAD" > mutants.diff
+            fi
+          else
+            # ci/** branches and manual runs: everything not yet on main.
+            git diff origin/main...HEAD > mutants.diff
+          fi
+          wc -l mutants.diff
+
+      - name: Run Diff-based Mutation Testing
+        run: |
+          mkdir -p target/mutants-tmp
           # Exit status 3 means only timeouts: a mutant made a loop never end, which the tests
           # detected by hanging.
-          cargo mutants --in-diff pr.diff || [ $? -eq 3 ]
+          TMPDIR="$PWD/target/mutants-tmp" cargo mutants --in-diff mutants.diff --gitignore true \
+            --timeout 300 -j 2 --shard ${{ matrix.shard }}/3 || [ $? -eq 3 ]
 
-      - name: Run Diff-based Mutation Testing (Push)
-        if: github.event_name == 'push'
-        run: |
-          BEFORE="${{ github.event.before }}"
-          IF_NULL="0000000000000000000000000000000000000000"
-          if [ "$BEFORE" = "$IF_NULL" ] || [ -z "$BEFORE" ]; then
-            git diff HEAD~1..HEAD > push.diff
-          else
-            git diff $BEFORE..HEAD > push.diff
-          fi
-          cargo mutants --in-diff push.diff || [ $? -eq 3 ]
-
-
-
-
+      - name: Upload the mutants report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants.out
 
   zephyr:
     name: Zephyr RTOS (QEMU RISC-V 32 tests, M5Stamp C3 build)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout Source Code

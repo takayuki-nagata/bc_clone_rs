@@ -78,6 +78,11 @@ lists what the proofs assume.
   Toom-3) against schoolbook multiplication.
 - **Build.** `bc_core` is verified with `cargo verus verify -p bc_core --features verify`; the
   `verify` feature links `vstd` and the specification, which production builds never link.
+- **CI.** The checks run as parallel jobs, each with a time limit: lint, tests with coverage,
+  the specification, the embedded targets, Zephyr, Verus, Kani, Miri (one job per crate, and
+  `bc_core` split by test name) and mutation testing (split with `cargo mutants --shard`). The
+  differential tests run against GNU `bc` 1.08.2 built from source (`scripts/install_gnu_bc.sh`)
+  rather than the runner's `bc`. `scripts/run_miri_tests.sh STAGE [-- ARGS]` runs one stage.
 
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` compute with rigorous error bounds (midpoint-radius interval
