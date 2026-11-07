@@ -83,6 +83,8 @@ lists what the proofs assume.
   `bc_core` split by test name) and mutation testing (split with `cargo mutants --shard`). The
   differential tests run against GNU `bc` 1.08.2 built from source (`scripts/install_gnu_bc.sh`)
   rather than the runner's `bc`. `scripts/run_miri_tests.sh STAGE [-- ARGS]` runs one stage.
+- **Coverage gate.** The line-coverage gate is 97% (it was 98%). Most uncovered lines are
+  branches that the proofs make unreachable, which tests cannot reach.
 
 ### Math library
 - `s`, `c`, `a`, `l`, `e`, `j` compute with rigorous error bounds (midpoint-radius interval

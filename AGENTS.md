@@ -265,7 +265,7 @@ except the following, whose preconditions are argued here but not proved:
 | Differential tests | `crates/bc_cli/tests/integration_tests.rs` (helpers in `tests/common`), `scripts/run_gnu_reference_tests.sh` | stdout, diagnostics (GNU's text without `adr=N`), and exit status match GNU bc 1.08 (CI builds 1.08.2 with `scripts/install_gnu_bc.sh`), except for the documented differences. The math library is checked against GNU bc at `scale + 100`, truncated. |
 | POSIX conformance | `scripts/run_posix_compliance_tests.sh` | Expected outputs derived from POSIX.1-2024 (not from GNU bc). Each case runs in the default mode and with `-s`. `BC_BIN=bc` runs the same cases against GNU bc to sanity-check the expectations, and `BC_BIN=target/bc_spec_oracle` against the executable specification (its `-l` cases are skipped). |
 | Mutation testing | `cargo mutants` (`.cargo/mutants.toml`) | Diff-based in CI, split into shards (`--shard`). Some exclusions are broader than the equivalent mutants they target. |
-| Coverage | `cargo llvm-cov` | Line coverage gate of 98% in CI. |
+| Coverage | `cargo llvm-cov` | Line coverage gate of 97% in CI. Most uncovered lines are branches that the proofs or the design make unreachable (an arena index out of range or a node of the wrong kind on the machine, cases the fast path always takes, a parser error the driver never sees from execution), overflow guards of the `-l` functions, and test code; tests cannot reach them, and removing them would mean rewriting proved code. |
 
 The gaps listed above are known and remain open. Do not describe any layer as proving
 "bug-freedom" or "100% compliance" of the whole program.

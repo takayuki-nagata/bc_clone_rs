@@ -288,7 +288,7 @@ cargo mutants
 ## CI/CD Pipeline
 
 The project includes two GitHub Actions workflows:
-- **CI Workflow (`.github/workflows/ci.yml`)**: On every push to `main` (and to `ci/**` branches) and every pull request, runs these checks as parallel jobs, each with a time limit: it checks formatting and Clippy (host, RISC-V and Wasm targets), runs all tests with a 98% line-coverage gate, the GNU reference and POSIX conformance suites, the bare-metal QEMU RISC-V 32 tests, the ESP32-C3 and Wasm builds, Verus, Kani, Miri (split by crate and test name), `cargo audit`, and diff-based mutation testing (`cargo mutants --in-diff`, split into shards). The differential tests use GNU `bc` 1.08.2, built from source.
+- **CI Workflow (`.github/workflows/ci.yml`)**: On every push to `main` (and to `ci/**` branches) and every pull request, runs these checks as parallel jobs, each with a time limit: it checks formatting and Clippy (host, RISC-V and Wasm targets), runs all tests with a 97% line-coverage gate, the GNU reference and POSIX conformance suites, the bare-metal QEMU RISC-V 32 tests, the ESP32-C3 and Wasm builds, Verus, Kani, Miri (split by crate and test name), `cargo audit`, and diff-based mutation testing (`cargo mutants --in-diff`, split into shards). The differential tests use GNU `bc` 1.08.2, built from source.
 - **Release Workflow (`.github/workflows/release.yml`)**: Cross-compiles optimized binaries for Linux, macOS, and Windows and attaches them to a new GitHub Release automatically whenever a version tag (e.g. `v1.0.0`) is pushed.
 
 ## License
