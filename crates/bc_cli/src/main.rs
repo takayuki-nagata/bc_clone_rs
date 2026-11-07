@@ -17,7 +17,7 @@ use bc_core::verified_kernels::{
     verified_cli_initial_scale,
 };
 use bc_core::{
-    BcWriter, DEFAULT_MAX_DEPTH, Evaluator, ExtensionPolicy, RunSummary, STDIN_SOURCE,
+    BcWriter, DEFAULT_MAX_DEPTH, Evaluator, ExtensionPolicy, RunSummary, STDIN_SOURCE, SourceUnits,
     UnitAccumulator, UnitOutcome,
 };
 
@@ -114,18 +114,16 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("unknown panic")
 }
 
-/// Runs one input unit. `bc_core` reports every bc error through `Result`, so a panic here is
-/// an internal bug; it is reported as such and counted as a failed unit instead of aborting.
-fn run_unit_guarded(
+/// Runs one input unit with `run`. `bc_core` reports every bc error through `Result`, so a
+/// panic here is an internal bug; it is reported as such and counted as a failed unit instead of
+/// aborting.
+fn run_unit_guarded<T>(
     evaluator: &mut Evaluator,
-    unit: &[u8],
-    source: &str,
-    first_line: usize,
-) -> UnitOutcome {
+    run: impl FnOnce(&mut Evaluator) -> T,
+    failed: T,
+) -> T {
     IN_UNIT_GUARD.with(|g| g.set(true));
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        evaluator.run_unit(unit, source, first_line)
-    }));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(evaluator)));
     IN_UNIT_GUARD.with(|g| g.set(false));
     match result {
         Ok(outcome) => outcome,
@@ -136,7 +134,7 @@ fn run_unit_guarded(
                 "bc_clone: internal error: {}",
                 panic_message(payload.as_ref())
             );
-            UnitOutcome::Failed
+            failed
         }
     }
 }
@@ -157,29 +155,23 @@ fn record(summary: &mut RunSummary, outcome: UnitOutcome) -> bool {
 }
 
 /// Processes a complete file or standard-input text, continuing after errors until its end
-/// or `quit` (`docs/COMPATIBILITY.md` §3.1).
+/// or `quit` (`docs/COMPATIBILITY.md` §3.1). Each unit is run by the proved
+/// `Evaluator::run_next_unit`, the step of `Evaluator::run_source`, guarded on its own.
 pub fn run_non_interactive_block(
-    content: &[u8],
+    content: Vec<u8>,
     source: &str,
     evaluator: &mut Evaluator,
 ) -> RunSummary {
     let mut summary = RunSummary::default();
-    let mut acc = UnitAccumulator::new();
-    for line in content.split_inclusive(|&b| b == b'\n') {
-        if let Some((unit, first_line)) = acc.push_line(line)
-            && record(
-                &mut summary,
-                run_unit_guarded(evaluator, &unit, source, first_line),
-            )
-        {
-            return summary;
+    let mut units = SourceUnits::new(content);
+    while let Some(outcome) = run_unit_guarded(
+        evaluator,
+        |ev| ev.run_next_unit(&mut units, source),
+        Some(UnitOutcome::Failed),
+    ) {
+        if record(&mut summary, outcome) {
+            break;
         }
-    }
-    if let Some((unit, first_line)) = acc.finish() {
-        record(
-            &mut summary,
-            run_unit_guarded(evaluator, &unit, source, first_line),
-        );
     }
     summary
 }
@@ -209,7 +201,11 @@ pub fn run_interactive_loop<R: BufRead>(mut reader: R, evaluator: &mut Evaluator
         if let Some((unit, first_line)) = acc.push_line(&bytes)
             && record(
                 &mut summary,
-                run_unit_guarded(evaluator, &unit, STDIN_SOURCE, first_line),
+                run_unit_guarded(
+                    evaluator,
+                    |ev| ev.run_unit(&unit, STDIN_SOURCE, first_line),
+                    UnitOutcome::Failed,
+                ),
             )
         {
             return summary;
@@ -218,7 +214,11 @@ pub fn run_interactive_loop<R: BufRead>(mut reader: R, evaluator: &mut Evaluator
     if let Some((unit, first_line)) = acc.finish() {
         record(
             &mut summary,
-            run_unit_guarded(evaluator, &unit, STDIN_SOURCE, first_line),
+            run_unit_guarded(
+                evaluator,
+                |ev| ev.run_unit(&unit, STDIN_SOURCE, first_line),
+                UnitOutcome::Failed,
+            ),
         );
     }
     summary
@@ -284,7 +284,7 @@ where
     for filename in &files {
         match std::fs::read(filename) {
             Ok(bytes) => {
-                let summary = run_non_interactive_block(&bytes, filename, &mut evaluator);
+                let summary = run_non_interactive_block(bytes, filename, &mut evaluator);
                 errors += summary.errors;
                 if summary.quit {
                     return i32::from(errors > 0);
@@ -313,7 +313,7 @@ where
             );
             return 1;
         }
-        run_non_interactive_block(&bytes, STDIN_SOURCE, &mut evaluator)
+        run_non_interactive_block(bytes, STDIN_SOURCE, &mut evaluator)
     };
     i32::from(errors + summary.errors > 0)
 }
@@ -505,7 +505,8 @@ mod tests {
 
         let mut evaluator = create_evaluator(false, stdout, stderr);
 
-        let summary = run_non_interactive_block(content.as_bytes(), "test.bc", &mut evaluator);
+        let summary =
+            run_non_interactive_block(content.as_bytes().to_vec(), "test.bc", &mut evaluator);
         assert_eq!(summary.errors, 1);
 
         let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
@@ -524,7 +525,8 @@ mod tests {
             buf: stderr_buf.clone(),
         };
         let mut evaluator = create_evaluator(false, stdout, stderr);
-        let summary = run_non_interactive_block(b"1 + 2\nquit\n3\n", "test.bc", &mut evaluator);
+        let summary =
+            run_non_interactive_block(b"1 + 2\nquit\n3\n".to_vec(), "test.bc", &mut evaluator);
         assert_eq!(
             summary,
             RunSummary {
@@ -544,6 +546,35 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    /// Panics on the write of `2`.
+    struct PanicOnTwo(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl Write for PanicOnTwo {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            assert!(!buf.starts_with(b"2"), "writer exploded");
+            self.0.lock().unwrap().write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_internal_panic_skips_only_its_own_unit() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        let stdout_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stderr = TestWriter {
+            buf: stderr_buf.clone(),
+        };
+        let mut evaluator = create_evaluator(false, PanicOnTwo(stdout_buf.clone()), stderr);
+        let summary = run_non_interactive_block(b"1\n2\n3\n".to_vec(), "test.bc", &mut evaluator);
+        assert_eq!(summary.errors, 1);
+        assert!(!summary.quit);
+        assert_eq!(stdout_buf.lock().unwrap().as_slice(), b"1\n3\n");
+        let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
+        assert_eq!(err, "bc_clone: internal error: writer exploded\n");
     }
 
     #[test]
@@ -575,7 +606,7 @@ mod tests {
             let summary = if interactive {
                 run_interactive_loop(input.as_bytes(), &mut evaluator)
             } else {
-                run_non_interactive_block(input.as_bytes(), STDIN_SOURCE, &mut evaluator)
+                run_non_interactive_block(input.as_bytes().to_vec(), STDIN_SOURCE, &mut evaluator)
             };
             assert_eq!(summary.errors, 1);
             let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
@@ -591,7 +622,7 @@ mod tests {
             buf: stderr_buf.clone(),
         };
         let mut evaluator = create_evaluator(false, PanickingWriter, stderr);
-        let summary = run_non_interactive_block(b"1\n", "test.bc", &mut evaluator);
+        let summary = run_non_interactive_block(b"1\n".to_vec(), "test.bc", &mut evaluator);
         assert_eq!(summary.errors, 1);
         let err = String::from_utf8(stderr_buf.lock().unwrap().clone()).unwrap();
         assert_eq!(err, "bc_clone: internal error: writer exploded\n");
@@ -733,7 +764,7 @@ mod tests {
             RunSummary::default()
         );
         assert_eq!(
-            run_non_interactive_block(b"1", "test.bc", &mut evaluator),
+            run_non_interactive_block(b"1".to_vec(), "test.bc", &mut evaluator),
             RunSummary::default()
         );
     }
@@ -1004,7 +1035,7 @@ mod tests {
         };
         let mut evaluator = create_evaluator(false, stdout, stderr);
         evaluator.request_quit();
-        let summary = run_non_interactive_block(b"1\n", "test.bc", &mut evaluator);
+        let summary = run_non_interactive_block(b"1\n".to_vec(), "test.bc", &mut evaluator);
         assert!(summary.quit);
     }
 

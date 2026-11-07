@@ -5,8 +5,8 @@
 Without `-l`, the execution of every input unit after parsing is now proved with Verus to refine
 an executable formal specification of `bc`, and each `-l` function is proved to return the exact
 value truncated toward zero at `scale`. The lexer, the parser and the unit splitting are proved too.
-The loops of the front ends are not; `bc_clone` has its own loop over the proved parts. AGENTS.md
-lists what the proofs assume.
+`bc_clone` runs files and piped input one proved step at a time; the loops of the front ends
+themselves are not proved. AGENTS.md lists what the proofs assume.
 
 ### Changed
 - **Evaluation runs on an explicit stack, with its own nesting limit.** Expressions, statements
@@ -40,6 +40,11 @@ lists what the proofs assume.
   covers `Evaluator::run_source`, and by composition (`lemma_outcome`) a run from the initial state:
   the lexer (`tokenize`), the parser (`parse_unit`), the unit splitting (`split_units`) and each unit
   (`run_unit`). The front ends' loops over lines and files remain unproved (`AGENTS.md`).
+- `run_source` is a loop over a proved step, `Evaluator::run_next_unit` on `SourceUnits`, that
+  splits off the next unit and runs it. `bc_clone` runs files and piped standard input through
+  this step, guarding each unit against an internal panic as before, instead of its own unproved
+  loop over `UnitAccumulator::push_line` and `run_unit`. `run_source` no longer splits the whole
+  text into units before running the first one, so it no longer holds a second copy of the text.
 - **Executable specification.** `crates/bc_spec` defines `bc_clone`'s stdout, stderr and exit
   status for any input without `-l`: input units, tokens, parsing, evaluation, output
   and diagnostics. `exec_spec_verified!` compiles it into the reference interpreter
@@ -181,8 +186,11 @@ lists what the proofs assume.
   `UnitAccumulator::push_line` take `&[u8]`, `UnitAccumulator` returns units as `Vec<u8>`,
   `Token::value` is a `Vec<u8>`, and a string in the syntax tree is
   `Stmt::StringLiteral(Vec<u8>)`. Pass `text.as_bytes()` where a `&str` was passed.
-  `bc_cli`'s `count_open_braces`, `is_block_incomplete` and `run_non_interactive_block` take
-  `&[u8]` too.
+  `bc_cli`'s `count_open_braces` and `is_block_incomplete` take `&[u8]` too, and
+  `run_non_interactive_block` takes the text as a `Vec<u8>`.
+- New: `SourceUnits` (the units of a text, split off one at a time) and
+  `Evaluator::run_next_unit`, which runs the next of them, for a front end that runs the units
+  of a text itself.
 - `BcWriter` has a new method `write_bytes`, through which the evaluator writes all output.
   Its default implementation passes the bytes to `write_str`, replacing invalid UTF-8 with
   U+FFFD; a writer to a byte stream overrides it to write them unchanged (`bc_cli`'s

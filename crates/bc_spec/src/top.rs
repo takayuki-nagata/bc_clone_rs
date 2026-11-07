@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 //! Top level of the specification: options, inputs, units and the observable outcome
-//! (`bc_cli::run_app` with `run_non_interactive_block`, and `Evaluator::run_unit`).
+//! (`bc_cli::run_app` with `run_non_interactive_block`, and `Evaluator::run_next_unit` and
+//! `Evaluator::run_unit`).
 
 use crate::eval::*;
 use crate::lexer::*;
