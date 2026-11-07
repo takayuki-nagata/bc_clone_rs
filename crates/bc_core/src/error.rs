@@ -157,4 +157,42 @@ mod tests {
         );
         assert_eq!(BcError::Quit.in_function(&"f".to_string()), BcError::Quit);
     }
+
+    #[test]
+    fn every_runtime_error_has_its_message() {
+        let a = || "a".to_string();
+        let cases = [
+            (RuntimeError::DivideByZero, "Divide by zero"),
+            (RuntimeError::NegativePowerOfZero, "divide by zero"),
+            (RuntimeError::ModuloByZero, "Modulo by zero"),
+            (
+                RuntimeError::NegativeSqrt,
+                "Square root of a negative number",
+            ),
+            (
+                RuntimeError::UndefinedFunction(a()),
+                "Function a not defined.",
+            ),
+            (RuntimeError::ParameterMismatch, "Parameter number mismatch"),
+            (
+                RuntimeError::ParameterTypeMismatch(a()),
+                "Parameter type mismatch parameter a.",
+            ),
+            (
+                RuntimeError::ArraySubscriptOutOfBounds(a()),
+                "Array a subscript out of bounds.",
+            ),
+            (
+                RuntimeError::ExponentTooLarge,
+                "exponent too large in raise",
+            ),
+            (RuntimeError::ScaleTooLarge, "scale too large"),
+            (RuntimeError::MathArgumentTooLarge, "argument too large"),
+            (RuntimeError::NestingTooDeep, "nesting too deep"),
+            (RuntimeError::BaseOutOfRange, "base out of range"),
+        ];
+        for (kind, message) in cases {
+            assert_eq!(kind.to_string(), message);
+        }
+    }
 }

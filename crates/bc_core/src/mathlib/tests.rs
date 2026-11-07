@@ -77,6 +77,23 @@ fn constants_contain_their_true_values() {
     }
 }
 
+/// A value with more digits than the working precision is cut to a ball of radius 1 ulp that
+/// contains it, and an exact ball on a multiple of the unit truncates to its quotient.
+#[test]
+fn long_arguments_and_exact_balls() {
+    let b = Ball::from_bcnum(&num("-123.4567"), 2);
+    assert_eq!(
+        (b.mid, b.rad, b.prec),
+        (BigInt::from(-12345), BigInt::from(1), 2)
+    );
+    let exact = Ball::exact(BigInt::from(-4500), 2);
+    assert_eq!(certified_trunc(&exact, 0), Some(BigInt::from(-45)));
+    assert_eq!(certified_trunc(&exact, 1), Some(BigInt::from(-450)));
+    // The sine of an argument longer than the working precision.
+    let x = alloc::format!("0.{}", "1234567890".repeat(8));
+    assert_eq!(bc_sin(&num(&x), 0).unwrap(), exact_result(0, 0));
+}
+
 #[test]
 fn exact_results_are_returned_without_series() {
     assert_eq!(bc_sin(&num("0"), 5).unwrap(), exact_result(0, 5));

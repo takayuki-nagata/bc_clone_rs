@@ -1401,4 +1401,175 @@ mod tests {
         assert_eq!(out, "1\n");
         assert_eq!(err, "");
     }
+
+    /// Runs `text` on an evaluator prepared by `setup`, with the math library if `math`.
+    fn run_on(
+        text: &str,
+        math: bool,
+        setup: impl FnOnce(&mut Evaluator),
+    ) -> (RunSummary, String, String) {
+        let out = Shared::default();
+        let err = Shared::default();
+        let mut ev = Evaluator::new(math, Box::new(out.clone()), Box::new(err.clone()));
+        setup(&mut ev);
+        let summary = ev.run_source(text.as_bytes(), STDIN_SOURCE);
+        let out = out.0.borrow().clone();
+        let err = err.0.borrow().clone();
+        (summary, out, err)
+    }
+
+    /// Cutting a valid program after any of its tokens and adding an illegal character gives
+    /// exactly that lexical error: the parser passes it on from wherever it reads the next
+    /// token, and nothing of the prefix is an error.
+    #[test]
+    fn lexical_error_after_any_token_is_reported_as_itself() {
+        let program: &[&str] = &[
+            "define", "f", "(", "a", ",", "b", "[", "]", ",", "c", ")", "{", "\n", //
+            "auto", "x", ",", "y", "[", "]", "\n", //
+            "x", "=", "a", ";", "y", "[", "0", "]", "=", "c", ";", "++", "x", ";", "--", "y", "[",
+            "0", "]", ";", "x", "++", ";", "y", "[", "0", "]", "--", "\n", //
+            "x", "+=", "b", "[", "1", "]", "*", "-", "2", "^", "2", "%", "3", "/", "1", "-", "(",
+            "1", ")", "\n", //
+            "if", "(", "x", "<=", "1", ")", "x", "=", "1", "\n", //
+            "while", "(", "x", ">", "9", ")", "break", "\n", //
+            "for", "(", "x", "=", "0", ";", "x", "!=", "1", ";", "x", "++", ")", "{", "}", "\n",
+            "return", "(", "sqrt", "(", "x", ")", "+", "length", "(", "x", ")", "+", "scale", "(",
+            "x", ")", "+", "g", "(", ")", ")", "\n", //
+            "}", "\n", //
+            "define", "g", "(", ")", "{", "\n", "return", "\n", "return", "(", ")", "\n", "}",
+            "\n", //
+            "b", "[", "1", "]", "=", "1", ";", "z", "=", "f", "(", "1", ",", "b", "[", "]", ",",
+            "2", ")", ";", "ibase", "=", "A", ";", "obase", ";", "scale", ";", "\"s\"", "\n",
+        ];
+        let (summary, _, err) = run(&alloc::format!("{}\n", program.join(" ")));
+        assert_eq!((summary.errors, err.as_str()), (0, ""));
+        for k in 0..=program.len() {
+            let prefix = program[..k].join(" ");
+            let line = 1 + program[..k].iter().filter(|t| **t == "\n").count();
+            let (_, _, err) = run(&alloc::format!("{prefix} @\n"));
+            assert_eq!(
+                err,
+                alloc::format!("(standard_in) {line}: illegal character: @\n"),
+                "after {prefix:?}"
+            );
+        }
+    }
+
+    /// For every limit on the levels evaluated at once, a program with statements and calls
+    /// nested in each other either runs to the end or stops at the limit, and a larger limit
+    /// never stops it earlier.
+    #[test]
+    fn every_evaluation_limit_stops_cleanly_or_completes() {
+        let program = "define f(n) {\nauto i\nif (n > 0) {\nfor (i = 0; i < 1; i++) {\n\
+                       while (0) { }\nif (f(n - 1) == 0) { x = x + 1 }\n}\n}\nreturn (0)\n}\n\
+                       f(3)\nx\n";
+        let mut completed = false;
+        for k in 1..=48 {
+            let (summary, out, err) = run_on(program, false, |ev| ev.max_eval_depth = k);
+            if summary.errors == 0 {
+                assert_eq!((out.as_str(), err.as_str()), ("0\n3\n", ""), "k = {k}");
+                completed = true;
+            } else {
+                // Under a small enough limit the last line, `x`, fails as well.
+                assert!(
+                    !completed,
+                    "k = {k}: stopped after a smaller limit completed"
+                );
+                assert_eq!(summary.errors, err.lines().count(), "k = {k}: {err}");
+                assert!(
+                    err.lines().all(|l| l.ends_with(": nesting too deep")),
+                    "k = {k}: {err}"
+                );
+            }
+        }
+        assert!(completed);
+    }
+
+    /// For every limit on the depth of the syntax tree, a relational expression with nested
+    /// operands either parses or is rejected as too deep.
+    #[test]
+    fn every_parse_depth_limit_accepts_or_rejects_cleanly() {
+        let mut accepted = false;
+        for k in 1..=16 {
+            let (_, out, err) = run_on("if (((1)) < ((((2))))) 3\n", false, |ev| ev.max_depth = k);
+            if err.is_empty() {
+                assert_eq!(out, "3\n", "k = {k}");
+                accepted = true;
+            } else {
+                assert!(
+                    !accepted,
+                    "k = {k}: rejected after a smaller limit accepted"
+                );
+                assert_eq!(err, "(standard_in) 1: nesting too deep\n", "k = {k}");
+            }
+        }
+        assert!(accepted);
+    }
+
+    #[test]
+    fn runtime_diagnostics_of_less_common_errors() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "define f(a[]) {\nreturn (0)\n}\nf(1)\n",
+                "",
+                "Runtime error (func=(main)): Parameter type mismatch parameter a.\n",
+            ),
+            (
+                "define f(a) {\nreturn (0)\n}\nf(b[])\n",
+                "",
+                "Runtime error (func=(main)): Parameter type mismatch parameter a.\n",
+            ),
+            // A subscript computed by a call is evaluated on the machine, not the fast path.
+            (
+                "define f() {\nreturn (-1)\n}\na[f()]++\n",
+                "",
+                "Runtime error (func=(main)): Array a subscript out of bounds.\n",
+            ),
+            (
+                "for (x = 1/0; x < 1; x++) 5\n",
+                "",
+                "Runtime error (func=(main)): Divide by zero\n",
+            ),
+            (
+                "for (x = 0; 1/0; x++) 5\n",
+                "",
+                "Runtime error (func=(main)): Divide by zero\n",
+            ),
+            (
+                "for (x = 0; x < 1; x = 1/0) 5\n",
+                "5\n",
+                "Runtime error (func=(main)): Divide by zero\n",
+            ),
+            (
+                "define f() {\nibase = 99\nreturn (ibase)\n}\nf()\n",
+                "16\n",
+                "Runtime warning (func=f): ibase too large, set to 16\n",
+            ),
+            (
+                "scale = 2; .1 ^ 2000000000\n",
+                "",
+                "Runtime error (func=(main)): scale too large\n",
+            ),
+        ];
+        for (text, out, err) in cases {
+            let (_, actual_out, actual_err) = run(text);
+            assert_eq!(
+                (actual_out.as_str(), actual_err.as_str()),
+                (*out, *err),
+                "{text}"
+            );
+        }
+        let (_, out, err) = run_on("j(1, 10000000000)\n", true, |_| {});
+        assert_eq!(
+            (out.as_str(), err.as_str()),
+            ("", "Runtime error (func=(main)): argument too large\n")
+        );
+    }
+
+    #[test]
+    fn diagnostic_stream_flushes_its_writer() {
+        let (_, _, _) = run_on("", false, |ev| {
+            assert_eq!(ev.stderr_writer().flush(), Ok(()));
+        });
+    }
 }
