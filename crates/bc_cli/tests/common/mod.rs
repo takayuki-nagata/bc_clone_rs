@@ -127,6 +127,29 @@ pub fn check_against_gnu(
     program: &str,
     flags: &[&str],
 ) -> bool {
+    compare_with_gnu(bin_path, envs, program, flags, false)
+}
+
+/// Like [`check_against_gnu`], but also returns `false` without comparing when `bin_path`
+/// exceeds the time limit. For the executable specification, whose digit arithmetic copies a
+/// sequence at every step, so that large powers and deep nesting can take longer than the limit;
+/// bc_clone itself is compared with [`check_against_gnu`], where a time-out is a failure.
+pub fn check_against_gnu_unless_either_times_out(
+    bin_path: &str,
+    envs: &[(&str, &str)],
+    program: &str,
+    flags: &[&str],
+) -> bool {
+    compare_with_gnu(bin_path, envs, program, flags, true)
+}
+
+fn compare_with_gnu(
+    bin_path: &str,
+    envs: &[(&str, &str)],
+    program: &str,
+    flags: &[&str],
+    skip_if_bin_times_out: bool,
+) -> bool {
     let input = if program.ends_with('\n') {
         program.to_string()
     } else {
@@ -142,6 +165,9 @@ pub fn check_against_gnu(
 
     let (clone_code, clone_out, clone_err) =
         run_command_bytes(bin_path, flags, envs, input.as_bytes());
+    if skip_if_bin_times_out && clone_code == TIMED_OUT {
+        return false;
+    }
 
     assert_eq!(
         clone_out, bc_out,

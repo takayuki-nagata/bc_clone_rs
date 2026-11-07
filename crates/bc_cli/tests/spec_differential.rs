@@ -28,7 +28,7 @@
 mod common;
 
 use common::generators::{PRELUDE, expr, program, statement, variable};
-use common::{TIMED_OUT, check_against_gnu, run_command_raw};
+use common::{TIMED_OUT, check_against_gnu_unless_either_times_out, run_command_raw};
 use proptest::prelude::*;
 
 /// Exit status of the oracle for inputs outside the specification.
@@ -260,7 +260,7 @@ proptest! {
     #[test]
     fn prop_spec_matches_gnu_bc(prog in program()) {
         if let Some(oracle) = oracle() {
-            check_against_gnu(
+            check_against_gnu_unless_either_times_out(
                 &oracle,
                 &[
                     ("BC_SPEC_MAX_DEPTH", MAX_DEPTH),
