@@ -554,7 +554,7 @@ impl Evaluator {
             r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
             (r_state(*old(self), st) && r_rc(*code, nodes) && done(bs_ev_node(nodes, n, st))) ==> r_result(r, *final(self), bs_ev_node(nodes, n, st), old(self).eval_depth),
     {
-        let r = self.eval_node_ref(code, n, Ghost(nodes), Ghost(st));
+        let r = self.eval_leaf_ref(code, n, Ghost(nodes), Ghost(st));
         proof {
             if done(bs_ev_node(nodes, n, st)) {
                 let f = choose|f: u64| done(#[trigger] ev_node(nodes, n, st, f));
@@ -1752,7 +1752,7 @@ impl Evaluator {
             r is Ok ==> r->Ok_0.scale == 0,
             (r_state(*old(self), st) && r_rc(*code, nodes) && done(bs_exec_node(nodes, n, st))) ==> r_ret(r, *final(self), bs_exec_node(nodes, n, st), false),
     {
-        let r = self.exec_node_ref(code, n, Ghost(nodes), Ghost(st));
+        let r = self.exec_leaf_ref(code, n, Ghost(nodes), Ghost(st));
         proof {
             if done(bs_exec_node(nodes, n, st)) {
                 let f = choose|f: u64| done(#[trigger] exec_node(nodes, n, st, f));

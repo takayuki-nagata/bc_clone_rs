@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: MIT
 
-//! Tree-walking AST evaluator and dynamic scope manager for the bc clone.
+//! The evaluator: its state, the dynamic scopes of variables and arrays, and the output
+//! streams (`WrappedStdout`, `ErrWriter`).
 //!
-//! Complies with POSIX bc specifications for registers, arrays, function definitions,
-//! dynamic scope resolution, and WrappedStdout formatting.
+//! This module holds the state, its invariant (`Evaluator::inv`), the relation to the
+//! specification's state (`r_state`) and the verified storage layer (`var_get`, …, `arr_pop`).
+//! Execution is split into:
+//! - `machine`: expressions, statements and calls on an explicit stack of frames, with the
+//!   fast path for shallow call-free forms in `machine/quick.rs`;
+//! - `leaf`: the forms that the machine does not split into frames;
+//! - `ops`: the operations the frames apply to values (arithmetic, constants, registers,
+//!   assignment targets);
+//! - `call`: entering and leaving a function's scope;
+//! - `unit`: the statements of a unit and runtime diagnostics.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -98,7 +107,7 @@ use verus_builtin_macros::verus;
 use vstd::prelude::*;
 
 mod call;
-mod expr;
+mod leaf;
 // Some bindings are used only by the proofs, which a normal build erases.
 #[cfg_attr(not(verus_keep_ghost), allow(unused_variables))]
 #[allow(
@@ -109,7 +118,7 @@ mod expr;
     reason = "the code keeps the forms that the proofs reason about"
 )]
 mod machine;
-mod stmt;
+mod ops;
 #[cfg(test)]
 mod tests;
 mod unit;

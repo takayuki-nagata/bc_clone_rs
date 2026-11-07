@@ -1,66 +1,18 @@
 // SPDX-License-Identifier: MIT
 
-//! Expression evaluation (the specification's `ev`): operators, names, constants,
-//! assignments and `++`/`--`.
+//! The operations on values that the machine's frames, the fast path (`machine.rs`,
+//! `machine/quick.rs`) and the leaves (`leaf.rs`) use: arithmetic and `^` (`arith`), numeric
+//! constants (`literal`), array subscripts (`array_index`), stores to `scale`, `ibase` and `obase` with
+//! their clamp warnings (`store_register`), reading and writing an assignment target (`load`,
+//! `store`), runtime warnings (`warn`), and whether an expression statement is an assignment
+//! (`is_assignment`, through `is_asg`). The theorem of each relates it to the specification's
+//! function named in parentheses.
 
 use super::*;
 
 verus! {
 
 impl Evaluator {
-    /// `evaluate_node` (the specification's `ev_node`): one step of expression evaluation.
-    #[verifier::exec_allows_no_decreases_clause]
-    pub(crate) fn eval_node_ref(
-        &mut self,
-        code: &Rc<Code>,
-        n: usize,
-        Ghost(nodes): Ghost<SpecNodes>,
-        Ghost(st): Ghost<SpecState>,
-    ) -> (r: Result<BCNum, BcError>)
-        requires
-            old(self).inv(),
-            super::machine::leaf_node(*code, n),
-        ensures
-            final(self).inv(),
-            final(self).eval_depth == old(self).eval_depth,
-            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && r_rc(*code, nodes)) ==> forall|f: u64|
-                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
-    {
-        proof { if r_rc(*code, nodes) && n < nodes.len() { assert(r_node(code.nodes@[n as int], nodes[n as int])); } }
-        if n >= code.nodes.len() {
-            return Ok(BCNum::zero());
-        }
-        match &code.nodes[n] {
-            PNode::Reg(reg) => self.eval_register(*reg, Ghost(nodes), Ghost(n), Ghost(st)),
-            PNode::Number(t) => self.eval_number(t, Ghost(nodes), Ghost(n), Ghost(st)),
-            PNode::Var(name) => self.eval_variable(name, Ghost(nodes), Ghost(n), Ghost(st)),
-            _ => Ok(BCNum::zero()),
-        }
-    }
-
-    pub(crate) fn eval_register(&mut self, reg: Register, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
-        requires
-            old(self).inv(),
-        ensures
-            *final(self) == *old(self),
-            r is Ok && r->Ok_0.scale == 0,
-            (r_state(*old(self), st) && n < nodes.len() && nodes[n as int] == Node::Reg(reg_code(reg))) ==> forall|f: u64|
-                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
-    {
-        let value = match reg {
-            Register::Scale => self.scale,
-            Register::Ibase => self.ibase,
-            Register::Obase => self.obase,
-        };
-        let v = BCNum::new(big_from_usize(value), 0);
-        proof {
-            let x = num_u64(reg_get(st, reg_code(reg)) as u64);
-            lemma_u64_mag(reg_get(st, reg_code(reg)) as u64);
-        }
-        Ok(v)
-    }
-
     /// `l <op> r` at the current `scale` (the specification's `arith`), for the specification
     /// numbers `a`, `b` and state `st` that `l`, `r` and the evaluator correspond to. `^` goes
     /// through `power_ref`.
@@ -120,36 +72,6 @@ impl Evaluator {
         }
     }
 
-
-    /// The value of a variable (the specification's `var_get`).
-    pub(crate) fn eval_variable(&mut self, name: &String, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
-        requires
-            old(self).inv(),
-        ensures
-            *final(self) == *old(self),
-            r is Ok && r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && n < nodes.len() && nodes[n as int] == Node::Var(text_view(*name))) ==> forall|f: u64|
-                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
-    {
-        let v = self.var_get(name);
-        proof {
-            if r_state(*self, st) && n < nodes.len() && nodes[n as int] == Node::Var(text_view(*name)) {
-                let nm = text_view(*name);
-                lemma_var_get(st.vars, nm);
-                if self.variables@.contains_key(*name) {
-                    let s = var_lookup(st.vars, nm)->Some_0;
-                    assert(r_stack(self.variables@[*name]@, s));
-                    if s.len() > 0 {
-                        assert(r_num(self.variables@[*name]@[s.len() - 1], s[s.len() - 1]));
-                    }
-                } else {
-                    lemma_var_absent(self.variables@, st.vars, *name);
-                }
-                assert(r_num(v, var_get(st.vars, nm)));
-            }
-        }
-        Ok(v)
-    }
 
     /// Converts the subscript `idx` of array `name` to an index, truncating it to an integer
     /// (the specification's `array_index`). Negative subscripts and subscripts of at least
@@ -310,19 +232,6 @@ impl Evaluator {
         Ok(v)
     }
 
-    /// The value of a numeric constant (the specification's `ev_node` for `Node::Number`).
-    pub(crate) fn eval_number(&mut self, t: &String, Ghost(nodes): Ghost<SpecNodes>, Ghost(n): Ghost<usize>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
-        requires
-            old(self).inv(),
-        ensures
-            *final(self) == *old(self),
-            r is Ok ==> r->Ok_0.scale <= BC_SCALE_MAX,
-            (r_state(*old(self), st) && n < nodes.len() && nodes[n as int] == Node::Number(text_view(*t))) ==> forall|f: u64|
-                done(#[trigger] ev_node(nodes, n, st, f)) ==> r_result(r, *final(self), ev_node(nodes, n, st, f), old(self).eval_depth),
-    {
-        self.literal_ref(t, Ghost(st))
-    }
-
     /// The integer part of `|val|`, as `max + 1` if it exceeds `max`, and whether `val` is
     /// negative: what the specification's `store_register` compares with the register's range.
     #[allow(clippy::cast_possible_truncation, reason = "a magnitude of at most max <= 2^31")]
@@ -476,8 +385,6 @@ impl Evaluator {
         v
     }
 
-    /// Resolves an assignment target (the specification's `resolve`), evaluating an array
-    /// subscript exactly once.
     /// The specification's place of anything but a named expression: a variable with no name.
     pub(crate) fn empty_place() -> (p: Place)
         ensures
@@ -641,6 +548,37 @@ impl Evaluator {
                 BCNum::new(big_from_usize(v), 0)
             },
         }
+    }
+
+    /// Whether the expression is an assignment, possibly under unary minus (the specification's
+    /// `is_assignment`, with the most fuel).
+    pub(crate) fn is_assignment_ref(code: &Rc<Code>, e: usize, Ghost(nodes): Ghost<SpecNodes>) -> (r: bool)
+        ensures
+            r_rc(*code, nodes) ==> r == bc_spec::den::is_asg(nodes, e),
+    {
+        let ghost hyp = r_rc(*code, nodes);
+        let mut i = e;
+        let mut fuel: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+        while fuel > 0
+            invariant
+                hyp == r_rc(*code, nodes),
+                hyp ==> bc_spec::den::is_asg(nodes, e) == is_assignment(nodes, i, fuel),
+            decreases fuel,
+        {
+            if i >= code.nodes.len() {
+                return false;
+            }
+            proof { if hyp { assert(r_node(code.nodes@[i as int], nodes[i as int])); } }
+            match &code.nodes[i] {
+                PNode::Assign(..) => { return true; },
+                PNode::Neg(inner) => {
+                    i = *inner;
+                    fuel -= 1;
+                },
+                _ => { return false; },
+            }
+        }
+        false
     }
 
 }

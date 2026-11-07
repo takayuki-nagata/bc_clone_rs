@@ -508,7 +508,8 @@ dual_verified! {
         len <= BC_UNIT_MAX
     }
 
-    /// Verified control-flow short-circuit check (`eval/stmt.rs`).
+    /// Verified control-flow short-circuit check (`eval/machine.rs`, `eval/machine/quick.rs`,
+    /// `eval/leaf.rs`).
     pub(crate) fn verified_should_abort_execution(
         break_flag: bool,
         return_flag: bool,
@@ -521,7 +522,8 @@ dual_verified! {
         break_flag || return_flag || quit_flag
     }
 
-    /// Verified post-body loop flag transition for `while` and `for` loops (`eval/stmt.rs`).
+    /// Verified post-body loop flag transition for `while` and `for` loops (`eval/machine.rs`,
+    /// `eval/machine/quick.rs`).
     ///
     /// Returns `(should_exit_loop, next_break_flag)`.
     pub(crate) fn verified_loop_post_body_action(
@@ -622,7 +624,8 @@ dual_verified! {
     }
 
     /// Verified register clamping with warning classification for `scale`, `ibase`, and
-    /// `obase` assignments (`eval/expr.rs`, `docs/COMPATIBILITY.md` §3.3).
+    /// `obase` assignments (`eval/ops.rs`; `eval/mod.rs` for `set_scale`;
+    /// `docs/COMPATIBILITY.md` §3.3).
     ///
     /// `magnitude` is the absolute value of the integer part saturated to `usize::MAX`, and
     /// `negative` is the sign of the assigned value. Returns `(clamped, warning_kind)`:

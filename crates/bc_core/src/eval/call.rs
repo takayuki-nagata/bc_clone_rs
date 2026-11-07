@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 
-//! Function calls (the specification's `ev_call` and `run_call`): arguments, frames and
-//! the caller's restored state.
+//! The scopes of a function call (the specification's `ev_call` and `run_call`): pushing the
+//! arguments and `auto` locals, and `leave_call`, which pops them and restores the caller's
+//! state. The call itself runs on the machine (`machine.rs`).
 
 use super::*;
 
