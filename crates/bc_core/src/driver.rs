@@ -726,6 +726,11 @@ impl UnitAccumulator {
     /// `finish`, with its theorem.
     pub(crate) fn finish_ref(&mut self) -> (r: Option<(Vec<u8>, usize)>)
         ensures
+            final(self).inv(),
+            final(self).buf_view().len() == 0,
+            final(self).start_view() == old(self).start_view(),
+            final(self).next_view() == old(self).next_view(),
+            forall|n: int| old(self).next_ok(n) ==> final(self).next_ok(n),
             if old(self).buf_view().len() == 0 {
                 r is None
             } else {
@@ -784,109 +789,248 @@ proof fn lemma_take_line(t: Seq<u8>, pos: int, end: int)
     }
 }
 
-/// The units in `units` are those of the specification's `us`.
-spec fn r_units(units: Seq<(Vec<u8>, usize)>, us: Seq<Unit>) -> bool {
-    &&& units.len() == us.len()
-    &&& forall|i: int| 0 <= i < units.len() ==> (#[trigger] units[i]).0@ == us[i].text && units[i].1 as u64 == us[i].line
+/// A unit of the specification, from the text and first line of an implementation's unit.
+pub(crate) open spec fn unit_of(u: (Vec<u8>, usize)) -> Unit {
+    Unit { text: u.0@, line: u.1 as u64 }
 }
 
-/// Splits `text` into its units.
-fn split_source(text: &[u8]) -> (r: Vec<(Vec<u8>, usize)>)
-    requires
-        text@.len() < usize::MAX - 2,
+/// The units already split off do not change the rest of the split.
+proof fn lemma_split_out(t: Seq<u8>, buf: Seq<u8>, start: u64, next: u64, out: Seq<Unit>)
     ensures
-        r_units(r@, split_units(text@)),
+        split_units_from(t, buf, start, next, out) == out + split_units_from(t, buf, start, next, seq![]),
+    decreases t.len(),
 {
-    let mut units: Vec<(Vec<u8>, usize)> = Vec::new();
-    let mut acc = UnitAccumulator::new();
-    let mut pos: usize = 0;
-    let ghost mut out = Seq::<Unit>::empty();
-    proof { assert(text@.skip(0) =~= text@); }
-    while pos < text.len()
-        invariant
-            pos <= text@.len(),
-            text@.len() < usize::MAX - 2,
-            acc.inv(),
-            acc.buf_view().len() <= pos,
-            acc.next_ok(text@.len() - pos),
-            r_units(units@, out),
-            split_units_from(text@.skip(pos as int), acc.buf_view(), acc.start_view(), acc.next_view(), out) == split_units(text@),
-        decreases text@.len() - pos,
-    {
-        let mut end = pos + 1;
-        while end < text.len() && text[end - 1] != b'\n'
-            invariant
-                pos < end <= text@.len(),
-                forall|k: int| pos <= k < end - 1 ==> text@[k] != 10u8,
-            decreases text@.len() - end,
-        {
-            end = end + 1;
+    if t.len() == 0 {
+        if buf.len() == 0 {
+            assert(out + Seq::<Unit>::empty() =~= out);
+        } else {
+            assert(out.push(Unit { text: buf, line: start }) =~= out + seq![Unit { text: buf, line: start }]);
         }
-        let line = subslice(text, pos, end);
-        let ghost b0 = acc.buf_view();
-        let ghost (st0, nx0) = (acc.start_view(), acc.next_view());
-        proof {
-            lemma_take_line(text@, pos as int, end as int);
-            assert(line@[line@.len() - 1] == text@[end - 1]);
+    } else {
+        let lr = take_line(t);
+        if lr.1.len() < t.len() {
+            let start2 = if buf.len() == 0 { next } else { start };
+            let b2 = buf.add(lr.0);
+            let ends_nl = lr.0.len() > 0 && lr.0[lr.0.len() - 1] == 10u8;
+            let next2 = if ends_nl && next < 0xffff_ffff_ffff_ffffu64 { (next + 1) as u64 } else { next };
+            if unit_pending(b2) {
+                lemma_split_out(lr.1, b2, start2, next2, out);
+            } else {
+                let x = Unit { text: b2, line: start2 };
+                let rest = split_units_from(lr.1, seq![], start2, next2, seq![]);
+                lemma_split_out(lr.1, seq![], start2, next2, out.push(x));
+                lemma_split_out(lr.1, seq![], start2, next2, seq![x]);
+                assert(Seq::<Unit>::empty().push(x) =~= seq![x]);
+                assert(out.push(x) + rest =~= out + (seq![x] + rest));
+            }
+        } else {
+            assert(out + Seq::<Unit>::empty() =~= out);
         }
-        let ghost o_before = out;
-        let ghost a0 = acc;
-        let r = acc.push_line_ref(line);
-        proof {
-            let t = text@.skip(pos as int);
-            assert(t.len() > 0);
-            assert(take_line(t).1.len() < t.len());
-            assert(acc_step(a0, acc, line@, r));
-            if !unit_pending(b0.add(line@)) { assert(acc.buf_view() =~= Seq::<u8>::empty()); }
-            assert(a0.next_ok((text@.len() - end) + 1));
-        }
-        match r {
-            Some(u) => {
-                proof {
-                    let x = Unit { text: u.0@, line: u.1 as u64 };
-                    let o0 = out;
-                    out = out.push(x);
-                    assert forall|i: int| 0 <= i < units@.push(u).len() implies (#[trigger] units@.push(u)[i]).0@ == out[i].text && units@.push(u)[i].1 as u64 == out[i].line by {
-                        if i < o0.len() { assert(units@.push(u)[i] == units@[i]); assert(out[i] == o0[i]); }
-                    }
-                }
-                units.push(u);
-            },
-            None => {},
-        }
-        proof { assert(acc.next_ok(text@.len() - end)); }
-        pos = end;
     }
-    let ghost b0 = acc.buf_view();
-    let ghost st0 = acc.start_view();
-    match acc.finish_ref() {
-        Some(u) => {
+}
+
+/// A position in a text, with the lines read since the last unit: the state of splitting the
+/// text into units.
+pub(crate) struct UnitCursor {
+    pos: usize,
+    acc: UnitAccumulator,
+}
+
+impl UnitCursor {
+    /// The cursor is at a place in the text `t` from which splitting can go on.
+    pub(crate) closed spec fn inv(self, t: Seq<u8>) -> bool {
+        &&& self.pos <= t.len()
+        &&& t.len() < usize::MAX - 2
+        &&& self.acc.inv()
+        &&& self.acc.buf_view().len() <= self.pos
+        &&& self.acc.next_ok(t.len() - self.pos)
+    }
+
+    /// The units of `t` not yet split off.
+    pub(crate) closed spec fn rest(self, t: Seq<u8>) -> Seq<Unit> {
+        split_units_from(t.skip(self.pos as int), self.acc.buf_view(), self.acc.start_view(), self.acc.next_view(), seq![])
+    }
+
+    /// The cursor at the start of a text.
+    pub(crate) closed spec fn fresh(self) -> bool {
+        &&& self.pos == 0
+        &&& self.acc.inv()
+        &&& self.acc.buf_view().len() == 0
+        &&& self.acc.start_view() == 1
+        &&& self.acc.next_view() == 1
+    }
+
+    /// A cursor at the start of a text.
+    pub(crate) fn new() -> (r: Self)
+        ensures
+            r.fresh(),
+    {
+        UnitCursor { pos: 0, acc: UnitAccumulator::new() }
+    }
+
+    /// At the start of a text, the units not yet split off are all the units of the text.
+    pub(crate) proof fn lemma_fresh(self, t: Seq<u8>)
+        requires
+            self.fresh(),
+            t.len() < usize::MAX - 2,
+        ensures
+            self.inv(t),
+            self.rest(t) == split_units(t),
+    {
+        assert(t.skip(0) =~= t);
+        assert(self.acc.buf_view() =~= Seq::<u8>::empty());
+    }
+
+    /// Splits off the next unit of `text`, or returns `None` at the end of the text.
+    pub(crate) fn next_unit_ref(&mut self, text: &[u8]) -> (r: Option<(Vec<u8>, usize)>)
+        requires
+            old(self).inv(text@),
+        ensures
+            final(self).inv(text@),
+            match r {
+                Some(u) => old(self).rest(text@) == seq![unit_of(u)] + final(self).rest(text@),
+                None => old(self).rest(text@).len() == 0 && final(self).rest(text@).len() == 0,
+            },
+    {
+        let ghost r0 = self.rest(text@);
+        let mut result: Option<(Vec<u8>, usize)> = None;
+        let mut found = false;
+        while !found && self.pos < text.len()
+            invariant
+                self.inv(text@),
+                r0 == old(self).rest(text@),
+                found ==> (result matches Some(u) && r0 == seq![unit_of(u)] + self.rest(text@)),
+                !found ==> r0 == self.rest(text@),
+            decreases text@.len() - self.pos,
+        {
+            let pos = self.pos;
+            let mut end = pos + 1;
+            while end < text.len() && text[end - 1] != b'\n'
+                invariant
+                    pos < end <= text@.len(),
+                    forall|k: int| pos <= k < end - 1 ==> text@[k] != 10u8,
+                decreases text@.len() - end,
+            {
+                end = end + 1;
+            }
+            let line = subslice(text, pos, end);
+            let ghost b0 = self.acc.buf_view();
+            let ghost a0 = self.acc;
             proof {
-                let x = Unit { text: u.0@, line: u.1 as u64 };
-                let o0 = out;
-                out = out.push(x);
-                assert forall|i: int| 0 <= i < units@.push(u).len() implies (#[trigger] units@.push(u)[i]).0@ == out[i].text && units@.push(u)[i].1 as u64 == out[i].line by {
-                    if i < o0.len() { assert(units@.push(u)[i] == units@[i]); assert(out[i] == o0[i]); }
+                lemma_take_line(text@, pos as int, end as int);
+                assert(line@[line@.len() - 1] == text@[end - 1]);
+            }
+            // The position moves past the line first, so that a front end that recovers from a
+            // panic inside the step goes on after the line instead of reading it again.
+            self.pos = end;
+            let r = self.acc.push_line_ref(line);
+            proof {
+                let t = text@.skip(pos as int);
+                assert(t.len() > 0);
+                assert(take_line(t).1.len() < t.len());
+                assert(acc_step(a0, self.acc, line@, r));
+                if !unit_pending(b0.add(line@)) {
+                    assert(self.acc.buf_view() =~= Seq::<u8>::empty());
+                    let x = Unit { text: b0.add(line@), line: self.acc.start_view() };
+                    lemma_split_out(text@.skip(end as int), seq![], self.acc.start_view(), self.acc.next_view(), seq![x]);
+                    assert(Seq::<Unit>::empty().push(x) =~= seq![x]);
+                }
+                assert(a0.next_ok((text@.len() - end) + 1));
+            }
+            match r {
+                Some(u) => {
+                    result = Some(u);
+                    found = true;
+                },
+                None => {},
+            }
+        }
+        if !found {
+            let ghost b0 = self.acc.buf_view();
+            let ghost st0 = self.acc.start_view();
+            proof { assert(text@.skip(self.pos as int).len() == 0); }
+            result = self.acc.finish_ref();
+            proof {
+                assert(text@.skip(self.pos as int).len() == 0);
+                assert(self.acc.buf_view() =~= Seq::<u8>::empty());
+                if b0.len() > 0 {
+                    assert(Seq::<Unit>::empty().push(Unit { text: b0, line: st0 }) =~= seq![Unit { text: b0, line: st0 }]);
+                    assert(seq![Unit { text: b0, line: st0 }] + Seq::<Unit>::empty() =~= seq![Unit { text: b0, line: st0 }]);
                 }
             }
-            units.push(u);
-        },
-        None => {},
+        }
+        result
     }
-    proof { assert(text@.skip(pos as int).len() == 0); assert(out == split_units(text@)); }
-    units
 }
 
-/// `quit` stops `run_units`.
-proof fn lemma_run_units_step(opts: Options, rs: RunState, src: Seq<u8>, us: Seq<Unit>, i: int)
+/// The units of a text, split off one at a time and run by [`Evaluator::run_next_unit`]. This
+/// is the loop of [`Evaluator::run_source`] for a front end that runs each unit itself (`bc_clone`
+/// guards each one against an internal panic).
+pub struct SourceUnits {
+    text: Vec<u8>,
+    cur: UnitCursor,
+}
+
+impl SourceUnits {
+    /// The cursor is at a place in the text from which splitting can go on.
+    pub closed spec fn inv(self) -> bool {
+        self.cur.inv(self.text@)
+    }
+
+    /// The units of the text not yet split off.
+    pub closed spec fn rest(self) -> Seq<Unit> {
+        self.cur.rest(self.text@)
+    }
+
+    /// The units of `text`, which is bytes and need not be UTF-8.
+    #[verifier::external_body]
+    pub fn new(text: Vec<u8>) -> Self {
+        Self::new_ref(text)
+    }
+
+    /// `new`, for a text that is not too long to count.
+    pub(crate) fn new_ref(text: Vec<u8>) -> (r: Self)
+        requires
+            text@.len() < usize::MAX - 2,
+        ensures
+            r.inv(),
+            r.rest() == split_units(text@),
+    {
+        let cur = UnitCursor::new();
+        proof { cur.lemma_fresh(text@); }
+        SourceUnits { text, cur }
+    }
+}
+
+/// `run_units` runs the first unit, then the others.
+proof fn lemma_run_units_first(opts: Options, rs: RunState, src: Seq<u8>, us: Seq<Unit>)
     requires
-        0 <= i < us.len(),
+        us.len() > 0,
         !rs.quit,
     ensures
-        run_units(opts, rs, src, us.skip(i)) == run_units(opts, spec_run_unit(opts, rs, src, us[i]), src, us.skip(i + 1)),
+        run_units(opts, rs, src, us) == run_units(opts, spec_run_unit(opts, rs, src, us[0]), src, us.drop_first()),
 {
-    assert(us.skip(i)[0] == us[i]);
-    assert(us.skip(i).drop_first() =~= us.skip(i + 1));
+}
+
+/// The hypothesis of the theorem of a step: the state corresponds to the specification's and the
+/// settings to its options.
+pub(crate) open spec fn r_step_pre(e: Evaluator, policy: ExtensionPolicy, limit: usize, opts: Options, rs: RunState) -> bool {
+    &&& r_top(e, rs.st)
+    &&& r_settings(policy, limit, opts)
+    &&& limit < usize::MAX - 2
+}
+
+/// The theorem of a step: `None` at the end of the units, and otherwise the outcome of the first
+/// unit.
+pub(crate) open spec fn r_step(r: Option<UnitOutcome>, e0: Evaluator, e: Evaluator, rest0: Seq<Unit>, rest: Seq<Unit>, policy: ExtensionPolicy, limit: usize, opts: Options, rs: RunState, src: Seq<u8>) -> bool {
+    match r {
+        None => rest0.len() == 0 && rest.len() == 0 && e == e0,
+        Some(o) => {
+            &&& rest0.len() > 0
+            &&& rest == rest0.drop_first()
+            &&& r_step_pre(e0, policy, limit, opts, rs) ==> r_outcome(o, e, rs, spec_run_unit(opts, rs, src, rest0[0]))
+        },
+    }
 }
 
 impl Evaluator {
@@ -895,6 +1039,53 @@ impl Evaluator {
     #[verifier::external_body]
     pub fn run_source(&mut self, text: &[u8], source: &str) -> RunSummary {
         self.run_source_ref(text, source, Ghost(arbitrary()), Ghost(arbitrary()))
+    }
+
+    /// Runs the next unit of `units`, or returns `None` after the last one. A front end that
+    /// calls this until `None` or [`UnitOutcome::Quit`] runs the text as [`Evaluator::run_source`]
+    /// does.
+    #[verifier::external_body]
+    pub fn run_next_unit(&mut self, units: &mut SourceUnits, source: &str) -> Option<UnitOutcome> {
+        let policy = self.extension_policy;
+        let limit = self.max_depth;
+        self.run_next_source_unit_ref(units, source, policy, limit, Ghost(arbitrary()), Ghost(arbitrary()))
+    }
+
+    /// `run_next_unit`: one step of the specification's `run_units` on the units not yet run.
+    pub(crate) fn run_next_source_unit_ref(&mut self, units: &mut SourceUnits, source: &str, policy: ExtensionPolicy, limit: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>) -> (r: Option<UnitOutcome>)
+        requires
+            old(self).inv(),
+            old(units).inv(),
+        ensures
+            final(self).inv(),
+            final(units).inv(),
+            r_step(r, *old(self), *final(self), old(units).rest(), final(units).rest(), policy, limit, opts, rs, source.spec_bytes()),
+    {
+        self.run_next_unit_ref(units.text.as_slice(), &mut units.cur, source, policy, limit, Ghost(opts), Ghost(rs))
+    }
+
+    /// One step of the specification's `run_units` on the units of `text` not yet split off.
+    pub(crate) fn run_next_unit_ref(&mut self, text: &[u8], cur: &mut UnitCursor, source: &str, policy: ExtensionPolicy, limit: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>) -> (r: Option<UnitOutcome>)
+        requires
+            old(self).inv(),
+            old(cur).inv(text@),
+        ensures
+            final(self).inv(),
+            final(cur).inv(text@),
+            r_step(r, *old(self), *final(self), old(cur).rest(text@), final(cur).rest(text@), policy, limit, opts, rs, source.spec_bytes()),
+    {
+        let ghost rest0 = cur.rest(text@);
+        match cur.next_unit_ref(text) {
+            None => None,
+            Some(u) => {
+                proof {
+                    assert(rest0[0] == unit_of(u));
+                    assert(rest0.drop_first() =~= cur.rest(text@));
+                }
+                let ghost su = unit_of(u);
+                Some(self.run_unit_ref(u.0.as_slice(), source, u.1, policy, limit, Ghost(opts), Ghost(rs), Ghost(su)))
+            },
+        }
     }
 
     /// `run_source`: the refinement theorem of one input. The error count is related only as far
@@ -908,77 +1099,68 @@ impl Evaluator {
             r_source(r, *old(self), *final(self), opts, rs, source.spec_bytes(), text@),
     {
         let ghost src = source.spec_bytes();
-        let ghost us = split_units(text@);
-        let ghost goal = run_units(opts, rs, src, us);
+        let ghost goal = run_units(opts, rs, src, split_units(text@));
         let ghost hyp = r_source_pre(*self, opts, rs);
-        let units = split_source(text);
+        let mut units = UnitCursor::new();
+        proof { units.lemma_fresh(text@); }
         let policy = self.extension_policy;
         let limit = self.max_depth;
         let mut summary = RunSummary { errors: 0, quit: false };
         let ghost mut cur = rs;
-        let mut i: usize = 0;
-        proof { assert(us.skip(0) =~= us); }
-        while i < units.len()
+        let mut done = false;
+        while !done
             invariant
                 self.inv(),
-                i <= units@.len(),
-                r_units(units@, us),
+                units.inv(text@),
                 !summary.quit,
                 hyp == r_source_pre(*old(self), opts, rs),
-                goal == run_units(opts, rs, src, us),
-                us == split_units(text@),
+                goal == run_units(opts, rs, src, split_units(text@)),
                 src == source.spec_bytes(),
                 hyp ==> r_settings(policy, limit, opts) && limit < usize::MAX - 2,
+                done ==> units.rest(text@).len() == 0,
                 (hyp && !goal.not_modeled) ==> r_top(*self, cur.st) && !cur.quit && !cur.not_modeled
-                    && run_units(opts, cur, src, us.skip(i as int)) == goal
+                    && run_units(opts, cur, src, units.rest(text@)) == goal
                     && (cur.errors > 0) == (rs.errors > 0 || summary.errors > 0),
-            decreases units@.len() - i,
+            decreases units.rest(text@).len(), if done { 0int } else { 1int },
         {
-            let ghost u = us[i as int];
-            let ghost next = spec_run_unit(opts, cur, src, u);
-            let unit_i = &units[i];
-            let outcome = self.run_unit_ref(unit_i.0.as_slice(), source, unit_i.1, policy, limit, Ghost(opts), Ghost(cur), Ghost(u));
-            proof {
-                if hyp && !goal.not_modeled {
-                    lemma_run_units_step(opts, cur, src, us, i as int);
-                    assert(units@[i as int].0@ == u.text);
-                    if next.not_modeled {
-                        lemma_run_units_stop(opts, next, src, us.skip(i + 1));
-                    }
-                }
-            }
-            match outcome {
-                UnitOutcome::Completed => {},
-                UnitOutcome::Failed => {
-                    if summary.errors < usize::MAX {
-                        summary.errors = summary.errors + 1;
-                    }
+            let ghost rest0 = units.rest(text@);
+            let ghost next = if rest0.len() > 0 { spec_run_unit(opts, cur, src, rest0[0]) } else { cur };
+            match self.run_next_unit_ref(text, &mut units, source, policy, limit, Ghost(opts), Ghost(cur)) {
+                None => {
+                    done = true;
                 },
-                UnitOutcome::Quit => {
-                    summary.quit = true;
+                Some(outcome) => {
                     proof {
                         if hyp && !goal.not_modeled {
-                            lemma_run_units_step(opts, cur, src, us, i as int);
-                            assert(units@[i as int].0@ == u.text);
+                            lemma_run_units_first(opts, cur, src, rest0);
                             if next.not_modeled {
-                                lemma_run_units_stop(opts, next, src, us.skip(i + 1));
+                                lemma_run_units_stop(opts, next, src, units.rest(text@));
                             }
-                            assert(!next.not_modeled);
-                            assert(next.quit);
-                            lemma_run_units_stop(opts, next, src, us.skip(i + 1));
-                            assert(goal == next);
-                            assert(next.errors == cur.errors);
                         }
                     }
-                    return summary;
+                    match outcome {
+                        UnitOutcome::Completed => {},
+                        UnitOutcome::Failed => {
+                            if summary.errors < usize::MAX {
+                                summary.errors = summary.errors + 1;
+                            }
+                        },
+                        UnitOutcome::Quit => {
+                            summary.quit = true;
+                            proof {
+                                if hyp && !goal.not_modeled {
+                                    assert(!next.not_modeled);
+                                    assert(next.quit);
+                                    lemma_run_units_stop(opts, next, src, units.rest(text@));
+                                    assert(goal == next);
+                                    assert(next.errors == cur.errors);
+                                }
+                            }
+                            return summary;
+                        },
+                    }
+                    proof { if hyp && !goal.not_modeled { cur = next; } }
                 },
-            }
-            proof { if hyp && !goal.not_modeled { cur = next; } }
-            i = i + 1;
-        }
-        proof {
-            if hyp && !goal.not_modeled {
-                assert(us.skip(i as int).len() == 0);
             }
         }
         summary
@@ -1111,8 +1293,8 @@ proof fn lemma_sources(es: Seq<Evaluator>, ss: Seq<RunSummary>, opts: Options, r
 /// (`with_streams`, with `lemma_set_limit` for the nesting limit) and go through `run_source_ref`
 /// on the inputs in order, then the output, the diagnostics and the exit status are those of the
 /// specification's `run`, unless it leaves its model. The front ends' own loops are not proved
-/// to do this: the embedded targets call `run_source`, and `bc_clone` has its own loop over
-/// `push_line` and `run_unit`.
+/// to do this: the embedded targets call `run_source`, and `bc_clone` calls `run_next_unit` until
+/// `None` or `quit` for a file or piped input, and `push_line` and `run_unit` in the REPL.
 pub(crate) proof fn lemma_outcome(es: Seq<Evaluator>, ss: Seq<RunSummary>, opts: Options, inputs: Seq<Input>)
     requires
         r_top(es[0], initial(opts.max_eval_depth)),
@@ -1200,6 +1382,79 @@ mod tests {
         let out = out.0.borrow().clone();
         let err = err.0.borrow().clone();
         (summary, out, err)
+    }
+
+    /// Texts whose units are split in every way the accumulator can: continuations (also after
+    /// `\r`), blocks, comments and strings over several lines, a last line without a newline,
+    /// an incomplete unit at the end, `quit`, and errors.
+    const SPLIT_CASES: &[&[u8]] = &[
+        b"",
+        b"\n",
+        b"1\n2\n",
+        b"1\n2",
+        b"1 + \\\n2\n3\n",
+        b"1 + \\\r\n2\r\n",
+        b"{\n1\n}\n2\n",
+        b"define f(x) {\nreturn (x)\n}\nf(3)\n",
+        b"/* a\nb */ 4\n\"x\ny\"\n",
+        b"{\n1\n",
+        b"1\nquit\n2\n",
+        b"1 +\n2 +; 3\n4/0\n5\n",
+        b"\xff\n6\n",
+    ];
+
+    /// The units of a text as the accumulator gives them line by line.
+    fn units_by_lines(text: &[u8]) -> Vec<(Vec<u8>, usize)> {
+        let mut acc = UnitAccumulator::new();
+        let mut units: Vec<(Vec<u8>, usize)> = text
+            .split_inclusive(|&b| b == b'\n')
+            .filter_map(|l| acc.push_line(l))
+            .collect();
+        units.extend(acc.finish());
+        units
+    }
+
+    #[test]
+    fn the_cursor_splits_a_text_as_the_accumulator_does_line_by_line() {
+        for &text in SPLIT_CASES {
+            let mut cur = UnitCursor::new();
+            let mut units = Vec::new();
+            while let Some(u) = cur.next_unit_ref(text) {
+                units.push(u);
+            }
+            assert_eq!(cur.next_unit_ref(text), None);
+            assert_eq!(units, units_by_lines(text), "{:?}", text);
+        }
+    }
+
+    #[test]
+    fn running_the_units_one_at_a_time_is_running_the_source() {
+        let run_bytes = |step: bool, text: &[u8]| {
+            let out = Shared::default();
+            let err = Shared::default();
+            let mut ev = Evaluator::new(false, Box::new(out.clone()), Box::new(err.clone()));
+            let summary = if step {
+                let mut units = SourceUnits::new(text.to_vec());
+                let mut summary = RunSummary::default();
+                while let Some(outcome) = ev.run_next_unit(&mut units, STDIN_SOURCE) {
+                    match outcome {
+                        UnitOutcome::Completed => {}
+                        UnitOutcome::Failed => summary.errors += 1,
+                        UnitOutcome::Quit => {
+                            summary.quit = true;
+                            break;
+                        }
+                    }
+                }
+                summary
+            } else {
+                ev.run_source(text, STDIN_SOURCE)
+            };
+            (summary, out.0.borrow().clone(), err.0.borrow().clone())
+        };
+        for &text in SPLIT_CASES {
+            assert_eq!(run_bytes(true, text), run_bytes(false, text), "{:?}", text);
+        }
     }
 
     #[cfg(all(not(miri), target_pointer_width = "64"))]

@@ -60,7 +60,7 @@ pub mod verified_kernels;
 #[cfg(verus_keep_ghost)]
 pub mod verus_proofs;
 
-pub use driver::{RunSummary, STDIN_SOURCE, UnitAccumulator, UnitOutcome};
+pub use driver::{RunSummary, STDIN_SOURCE, SourceUnits, UnitAccumulator, UnitOutcome};
 pub use error::{BcError, RuntimeError};
 pub use eval::{BcWriter, ErrWriter, Evaluator, WrappedStdout};
 pub use math::BCNum;
