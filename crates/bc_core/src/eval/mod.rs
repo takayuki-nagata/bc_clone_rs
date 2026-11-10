@@ -666,15 +666,16 @@ pub(crate) proof fn lemma_assign_x_mono(nodes: Seq<bc_spec::parser::Node>, p: bc
     }
 }
 
-/// `e1` and `e2` differ at most in their variables and arrays.
-pub(crate) open spec fn same_but_storage(e1: Evaluator, e2: Evaluator) -> bool {
+/// `e1` and `e2` agree on every field except their variables, arrays, diagnostic stream and
+/// evaluation depth: the part that `same_but_storage`, `same_but_err` and `same_but_depth`
+/// share. A new field of `Evaluator` goes here, or in each of those three that keeps it.
+pub(crate) open spec fn same_fixed(e1: Evaluator, e2: Evaluator) -> bool {
     &&& e1.functions == e2.functions
     &&& e1.scale == e2.scale
     &&& e1.ibase == e2.ibase
     &&& e1.obase == e2.obase
     &&& e1.math_enabled == e2.math_enabled
     &&& e1.stdout_writer == e2.stdout_writer
-    &&& e1.stderr_writer == e2.stderr_writer
     &&& e1.break_flag == e2.break_flag
     &&& e1.return_flag == e2.return_flag
     &&& e1.return_value == e2.return_value
@@ -683,8 +684,30 @@ pub(crate) open spec fn same_but_storage(e1: Evaluator, e2: Evaluator) -> bool {
     &&& e1.call_stack == e2.call_stack
     &&& e1.max_depth == e2.max_depth
     &&& e1.max_eval_depth == e2.max_eval_depth
-    &&& e1.eval_depth == e2.eval_depth
     &&& e1.invocation_ibase == e2.invocation_ibase
+}
+
+/// `e1` and `e2` differ at most in their variables and arrays.
+pub(crate) open spec fn same_but_storage(e1: Evaluator, e2: Evaluator) -> bool {
+    &&& same_fixed(e1, e2)
+    &&& e1.stderr_writer == e2.stderr_writer
+    &&& e1.eval_depth == e2.eval_depth
+}
+
+/// `e1` and `e2` differ at most in their diagnostic stream.
+pub(crate) open spec fn same_but_err(e1: Evaluator, e2: Evaluator) -> bool {
+    &&& same_fixed(e1, e2)
+    &&& e1.variables == e2.variables
+    &&& e1.arrays == e2.arrays
+    &&& e1.eval_depth == e2.eval_depth
+}
+
+/// `e1` and `e2` differ at most in their evaluation depth.
+pub(crate) open spec fn same_but_depth(e1: Evaluator, e2: Evaluator) -> bool {
+    &&& same_fixed(e1, e2)
+    &&& e1.variables == e2.variables
+    &&& e1.arrays == e2.arrays
+    &&& e1.stderr_writer == e2.stderr_writer
 }
 
 /// A resolved target corresponds to the specification's `Place`.
@@ -694,28 +717,6 @@ pub(crate) open spec fn r_place(p: Place, sp: bc_spec::eval::Place) -> bool {
         Place::Element(n, i) => sp.kind == 1 && sp.name == text_view(n) && sp.idx as int == i as int && i < 16777216,
         Place::Register(r) => sp.kind == 2 && sp.reg == reg_code(r),
     }
-}
-
-/// `e1` and `e2` differ at most in their diagnostic stream.
-pub(crate) open spec fn same_but_err(e1: Evaluator, e2: Evaluator) -> bool {
-    &&& e1.variables == e2.variables
-    &&& e1.arrays == e2.arrays
-    &&& e1.functions == e2.functions
-    &&& e1.scale == e2.scale
-    &&& e1.ibase == e2.ibase
-    &&& e1.obase == e2.obase
-    &&& e1.math_enabled == e2.math_enabled
-    &&& e1.stdout_writer == e2.stdout_writer
-    &&& e1.break_flag == e2.break_flag
-    &&& e1.return_flag == e2.return_flag
-    &&& e1.return_value == e2.return_value
-    &&& e1.quit_flag == e2.quit_flag
-    &&& e1.extension_policy == e2.extension_policy
-    &&& e1.call_stack == e2.call_stack
-    &&& e1.max_depth == e2.max_depth
-    &&& e1.max_eval_depth == e2.max_eval_depth
-    &&& e1.eval_depth == e2.eval_depth
-    &&& e1.invocation_ibase == e2.invocation_ibase
 }
 
 impl WrappedStdout {
@@ -789,28 +790,6 @@ pub(crate) proof fn lemma_inv_frame(e1: Evaluator, e2: Evaluator)
     ensures
         e2.inv(),
 {
-}
-
-/// `e1` and `e2` differ at most in their evaluation depth.
-pub(crate) open spec fn same_but_depth(e1: Evaluator, e2: Evaluator) -> bool {
-    &&& e1.variables == e2.variables
-    &&& e1.arrays == e2.arrays
-    &&& e1.functions == e2.functions
-    &&& e1.scale == e2.scale
-    &&& e1.ibase == e2.ibase
-    &&& e1.obase == e2.obase
-    &&& e1.math_enabled == e2.math_enabled
-    &&& e1.stdout_writer == e2.stdout_writer
-    &&& e1.stderr_writer == e2.stderr_writer
-    &&& e1.break_flag == e2.break_flag
-    &&& e1.return_flag == e2.return_flag
-    &&& e1.return_value == e2.return_value
-    &&& e1.quit_flag == e2.quit_flag
-    &&& e1.extension_policy == e2.extension_policy
-    &&& e1.call_stack == e2.call_stack
-    &&& e1.max_depth == e2.max_depth
-    &&& e1.max_eval_depth == e2.max_eval_depth
-    &&& e1.invocation_ibase == e2.invocation_ibase
 }
 
 /// Changing only the depth keeps the state related, at the new depth.
