@@ -41,19 +41,20 @@ impl Evaluator {
     /// A call (the specification's `ev_call`): the function, then its arguments.
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(30)]
-    pub(super) fn step_call(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, name: &String, args: &Vec<PArg>, Ghost(nodes): Ghost<SpecNodes>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn step_call(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, name: &String, args: &Vec<PArg>, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             n < code.nodes@.len(),
             code.nodes@[n as int] == PNode::Call(*name, *args),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_node(*old(self), old(frames)@, *code, nodes, n, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_node(*old(self), old(frames)@, *code, cx.nodes, n, g, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_node(*self, frames@, *code, nodes, n, g, goal);
         let ghost parent = bs_ev_node(nodes, n, g.s);
         let ghost sname = text_view(*name);
@@ -70,7 +71,7 @@ impl Evaluator {
             Some(fd) => fd.clone(),
             None => {
                 if self.math_enabled {
-                    return self.math_start(frames, code, n, name, args, Ghost(nodes), Ghost(g), Ghost(goal), Ghost(d0));
+                    return self.math_start(frames, code, n, name, args, Ghost(g), Ghost(cx));
                 }
                 let r = Err(BcError::Runtime { kind: RuntimeError::UndefinedFunction(name.clone()), func: None });
                 proof {
@@ -118,25 +119,26 @@ impl Evaluator {
                 assert(gf.params.skip(0) =~= gf.params);
             }
         }
-        self.args_next(frames, code, n, fd, 0, Vec::new(), Ghost(nodes), Ghost(gf), Ghost(Seq::empty()), Ghost(g), Ghost(goal), Ghost(d0))
+        self.args_next(frames, code, n, fd, 0, Vec::new(), Ghost(gf), Ghost(Seq::empty()), Ghost(g), Ghost(cx))
     }
 
     /// The arguments of the call at node `n` from the `i`-th on (the specification's `ev_args`),
     /// then the call.
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(80)]
-    fn args_next(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, fd: FunctionDef, i0: usize, vals0: Vec<(String, ArgValue)>, Ghost(nodes): Ghost<SpecNodes>, Ghost(gf): Ghost<SpecFunc>, Ghost(acc0): Ghost<SpecArgVals>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn args_next(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, fd: FunctionDef, i0: usize, vals0: Vec<(String, ArgValue)>, Ghost(gf): Ghost<SpecFunc>, Ghost(acc0): Ghost<SpecArgVals>, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             args_ok(vals0@),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_args(*old(self), old(frames)@, *code, nodes, n, fd, i0, vals0@, gf, acc0, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_args(*old(self), old(frames)@, *code, cx.nodes, n, fd, i0, vals0@, gf, acc0, g, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal; let ghost d0 = cx.d0;
         let ghost hyp = m_args(*self, frames@, *code, nodes, n, fd, i0, vals0@, gf, acc0, g, goal);
         let ghost sargs = call_args(nodes, n);
         let mut i = i0;
@@ -156,6 +158,7 @@ impl Evaluator {
         };
         loop
             invariant
+                cx == (MCx { nodes: nodes, goal: goal, d0: d0 }),
                 self.inv(),
                 frames_ok(frames@, self.eval_depth, d0),
                 wants(frames@, d0),
@@ -203,7 +206,7 @@ impl Evaluator {
                         assert(r_rc(*code, nodes));
                     }
                 }
-                return self.enter_call(frames, code, n, fd, vals, Ghost(nodes), Ghost(gf), Ghost(acc), Ghost(g), Ghost(goal), Ghost(d0));
+                return self.enter_call(frames, code, n, fd, vals, Ghost(gf), Ghost(acc), Ghost(g), Ghost(cx));
             }
             let param = &params[i];
             match &args[i] {
@@ -265,7 +268,7 @@ impl Evaluator {
                             assert(done(parent) ==> parent == apply(k, bs_ev(nodes, e, g.s)));
                         }
                     }
-                    return self.push_sub(frames, code, Frame::ArgVal(fd, n, i, vals), e, Ghost(nodes), Ghost(k), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                    return self.push_sub(frames, code, Frame::ArgVal(fd, n, i, vals), e, Ghost(k), Ghost(g), Ghost(parent), Ghost(cx));
                 },
             }
         }
@@ -274,21 +277,22 @@ impl Evaluator {
     /// Enters the function with its arguments (the specification's `run_call`, up to its body).
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(40)]
-    fn enter_call(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, fd: FunctionDef, vals: Vec<(String, ArgValue)>, Ghost(nodes): Ghost<SpecNodes>, Ghost(gf): Ghost<SpecFunc>, Ghost(acc): Ghost<SpecArgVals>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn enter_call(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, fd: FunctionDef, vals: Vec<(String, ArgValue)>, Ghost(gf): Ghost<SpecFunc>, Ghost(acc): Ghost<SpecArgVals>, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             args_ok(vals@),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            (r_rc(*code, nodes) && r_state(*old(self), g.s) && r_mframes(old(frames)@, g.ks, *code, nodes) && done(goal)
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            (r_rc(*code, cx.nodes) && r_state(*old(self), g.s) && r_mframes(old(frames)@, g.ks, *code, cx.nodes) && done(cx.goal)
                 && r_func(fd, gf) && r_argvals(vals@, acc) && n < code.nodes@.len() && call_named(*code, n, gf.name)
-                && den(g.ks, leave(gf, saved_of(g.s), bs_body(gf.nodes, gf.body, enter(gf, acc, g.s)))) == goal)
-                ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+                && den(g.ks, leave(gf, saved_of(g.s), bs_body(gf.nodes, gf.body, enter(gf, acc, g.s)))) == cx.goal)
+                ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal; let ghost d0 = cx.d0;
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, g.s) && r_mframes(frames@, g.ks, *code, nodes) && done(goal)
                 && r_func(fd, gf) && r_argvals(vals@, acc) && n < code.nodes@.len() && call_named(*code, n, gf.name)
                 && den(g.ks, leave(gf, saved_of(g.s), bs_body(gf.nodes, gf.body, enter(gf, acc, g.s)))) == goal;
@@ -361,17 +365,18 @@ impl Evaluator {
     /// The body of the function at node `def` from statement `i` on (the specification's
     /// `exec_body`).
     #[verifier::exec_allows_no_decreases_clause]
-    pub(super) fn body_next(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, def: usize, i: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn body_next(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, def: usize, i: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            old(frames)@.len() > 0 && (old(frames)@.last() is Call || old(frames)@.last() is Body) || !wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            old(frames)@.len() > 0 && (old(frames)@.last() is Call || old(frames)@.last() is Body) || !wants(old(frames)@, cx.d0),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_body(*old(self), old(frames)@, *code, nodes, def, i, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_body(*old(self), old(frames)@, *code, cx.nodes, def, i, g, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_body(*self, frames@, *code, nodes, def, i, g, goal);
         proof { if hyp { assert(r_node(code.nodes@[def as int], nodes[def as int])); } }
         if def < code.nodes.len() {
@@ -392,7 +397,7 @@ impl Evaluator {
                         assert(rest[0] == body@[i as int]);
                     }
                 }
-                return self.push_sub_s(frames, code, Frame::Body(def, i + 1), body[i], Ghost(nodes), Ghost(k), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                return self.push_sub_s(frames, code, Frame::Body(def, i + 1), body[i], Ghost(k), Ghost(g), Ghost(parent), Ghost(cx));
             }
         }
         (Step::Ret(Ok(BCNum::zero())), Ghost(g))
@@ -401,11 +406,11 @@ impl Evaluator {
     /// Leaves the function whose body gave the result `ret` (the specification's `leave`).
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(30)]
-    pub(super) fn ret_call(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, caller: Rc<Code>, def: usize, name: String, saved_flag: bool, saved_inv: Option<usize>, saved_val: BCNum, ret: Result<BCNum, BcError>, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_call(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, caller: Rc<Code>, def: usize, name: String, saved_flag: bool, saved_inv: Option<usize>, saved_val: BCNum, ret: Result<BCNum, BcError>, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             saved_val.scale <= BC_SCALE_MAX,
             match saved_inv {
                 Some(b) => 2 <= b <= IBASE_MAX,
@@ -413,13 +418,14 @@ impl Evaluator {
             },
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            (r_rc(*code, nodes) && r_ret(ret, *old(self), x, false) && r_call_frame(Frame::Call(caller, def, name, saved_flag, saved_inv, saved_val), k, *code, nodes)
-                && (k matches K::Call(_, _, cn) && r_rc(caller, cn) && r_mframes(old(frames)@, ks1, caller, cn))
-                && den(ks1, apply(k, x)) == goal && done(goal))
-                ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            (r_rc(*code, cx.nodes) && r_ret(ret, *old(self), pop.x, false) && r_call_frame(Frame::Call(caller, def, name, saved_flag, saved_inv, saved_val), pop.k, *code, cx.nodes)
+                && (pop.k matches K::Call(_, _, cn) && r_rc(caller, cn) && r_mframes(old(frames)@, pop.ks, caller, cn))
+                && den(pop.ks, apply(pop.k, pop.x)) == cx.goal && done(cx.goal))
+                ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = r_rc(*code, nodes) && r_ret(ret, *self, x, false) && r_call_frame(Frame::Call(caller, def, name, saved_flag, saved_inv, saved_val), k, *code, nodes)
                 && (k matches K::Call(_, _, cn) && r_rc(caller, cn) && r_mframes(frames@, ks1, caller, cn))
                 && den(ks1, apply(k, x)) == goal && done(goal);
@@ -450,42 +456,44 @@ impl Evaluator {
 
     /// With the result of the function body's statement (the frame `K::Body`).
     #[verifier::exec_allows_no_decreases_clause]
-    pub(super) fn ret_body(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, def: usize, i: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_body(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, def: usize, i: usize, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            !wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            !wants(old(frames)@, cx.d0),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after_s(*old(self), old(frames)@, *code, nodes, Frame::Body(def, i), k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after_s(*old(self), old(frames)@, *code, cx.nodes, Frame::Body(def, i), pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after_s(*self, frames@, *code, nodes, Frame::Body(def, i), k, ks1, x, goal);
         let ghost y = apply(k, x);
         proof { if hyp { lemma_den_done(ks1, y); } }
         if self.return_flag {
             return (Step::Ret(Ok(BCNum::zero())), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: y }));
         }
-        self.body_next(frames, code, def, i, Ghost(nodes), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: y }), Ghost(goal), Ghost(d0))
+        self.body_next(frames, code, def, i, Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: y }), Ghost(cx))
     }
 
     /// With the value of a value argument (the frame `K::ArgVal`).
     #[verifier::exec_allows_no_decreases_clause]
-    pub(super) fn ret_argval(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, fd: FunctionDef, n: usize, i: usize, vals: Vec<(String, ArgValue)>, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_argval(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, fd: FunctionDef, n: usize, i: usize, vals: Vec<(String, ArgValue)>, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
             args_ok(vals@),
             i < usize::MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::ArgVal(fd, n, i, vals), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::ArgVal(fd, n, i, vals), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::ArgVal(fd, n, i, vals), v, k, ks1, x, goal);
         let ghost (gf, acc, pname) = match k { K::ArgVal(_, f, _, _, nm, a) => (f, a, nm), _ => arbitrary() };
         let ghost sv = bc_spec::eval::ArgVal { is_array: false, name: pname, val: x.val, frame: bc_spec::eval::empty_frame() };
@@ -515,24 +523,25 @@ impl Evaluator {
                 }
             }
         }
-        self.args_next(frames, code, n, fd, i + 1, vals, Ghost(nodes), Ghost(gf), Ghost(acc.push(sv)), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: x }), Ghost(goal), Ghost(d0))
+        self.args_next(frames, code, n, fd, i + 1, vals, Ghost(gf), Ghost(acc.push(sv)), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: x }), Ghost(cx))
     }
 
     /// A call of a `-l` function (no user function has the name): its arguments go on the stack.
     /// The specification does not model `-l`, so nothing relates these frames.
     #[verifier::exec_allows_no_decreases_clause]
-    fn math_start(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, name: &String, args: &Vec<PArg>, Ghost(nodes): Ghost<SpecNodes>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn math_start(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, name: &String, args: &Vec<PArg>, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
             old(self).math_enabled,
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            !m_node(*old(self), old(frames)@, *code, nodes, n, g, goal),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            !m_node(*old(self), old(frames)@, *code, cx.nodes, n, g, cx.goal),
     {
+        let ghost d0 = cx.d0;
         let nb = name.as_str().as_bytes();
         let ghost f0 = frames@;
         if nb.len() == 1 && args.len() == 1 {

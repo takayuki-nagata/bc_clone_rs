@@ -94,13 +94,11 @@ pub(crate) enum Step {
 #[cfg(not(verus_keep_ghost))]
 pub(crate) type MG = ();
 #[cfg(not(verus_keep_ghost))]
-pub(crate) type MRoot = ();
+pub(crate) type MCx = ();
+#[cfg(not(verus_keep_ghost))]
+pub(crate) type MPop = ();
 #[cfg(verus_keep_ghost)]
 pub(crate) type MK = K;
-#[cfg(verus_keep_ghost)]
-pub(crate) type MKs = Seq<K>;
-#[cfg(not(verus_keep_ghost))]
-pub(crate) type MKs = ();
 #[cfg(not(verus_keep_ghost))]
 pub(crate) type MK = ();
 #[cfg(verus_keep_ghost)]
@@ -135,6 +133,23 @@ pub ghost struct MG {
 pub ghost struct MRoot {
     pub d: usize,
     pub e: bool,
+}
+
+/// What stays fixed while the machine runs in one arena: the arena's model, the result of the
+/// whole evaluation, and the bottom of the stack.
+#[cfg(verus_keep_ghost)]
+pub ghost struct MCx {
+    pub nodes: Seq<bc_spec::parser::Node>,
+    pub goal: ER,
+    pub d0: MRoot,
+}
+
+/// The frame just popped: its continuation, the frames below it, and the result it receives.
+#[cfg(verus_keep_ghost)]
+pub ghost struct MPop {
+    pub k: K,
+    pub ks: Seq<K>,
+    pub x: ER,
 }
 
 /// Whether the frame takes the result of an expression (a value) rather than of a statement.
@@ -524,18 +539,19 @@ impl Evaluator {
     /// Continues with the result `r` of a sub-computation: pops one frame.
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(40)]
-    fn step_ret(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, ret: Result<BCNum, BcError>, Ghost(nodes): Ghost<SpecNodes>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn step_ret(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, ret: Result<BCNum, BcError>, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
             old(frames)@.len() > 0,
             ret is Ok ==> ret->Ok_0.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_ret(*old(self), old(frames)@, *code, nodes, ret, g, goal, d0) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_ret(*old(self), old(frames)@, *code, cx.nodes, ret, g, cx.goal, cx.d0) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal; let ghost d0 = cx.d0;
         let ghost hyp = m_ret(*self, frames@, *code, nodes, ret, g, goal, d0);
         let ghost fr0 = frames@;
         let ghost x = g.x;
@@ -561,7 +577,7 @@ impl Evaluator {
         };
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: g.s, x: y };
         if let Frame::Call(caller, def, name, flag, inv, sv) = fr {
-            return self.ret_call(frames, code, caller, def, name, flag, inv, sv, ret, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0));
+            return self.ret_call(frames, code, caller, def, name, flag, inv, sv, ret, Ghost(MPop { k: k, ks: ks1, x: x }), Ghost(cx));
         }
         let depth = match fr {
             Frame::Depth(d) => Some(d),
@@ -588,9 +604,9 @@ impl Evaluator {
             Err(e) => { return (Step::Ret(Err(e)), Ghost(g1)); },
         };
         if Self::takes_value_ref(&fr) {
-            self.ret_ok(frames, code, fr, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0))
+            self.ret_ok(frames, code, fr, v, Ghost(MPop { k: k, ks: ks1, x: x }), Ghost(cx))
         } else {
-            self.ret_stmt(frames, code, fr, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0))
+            self.ret_stmt(frames, code, fr, Ghost(MPop { k: k, ks: ks1, x: x }), Ghost(cx))
         }
     }
 
@@ -603,40 +619,40 @@ impl Evaluator {
 
     /// With the value of a sub-computation of the frame `fr`.
     #[verifier::exec_allows_no_decreases_clause]
-    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    fn ret_ok(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, fr: Frame, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn ret_ok(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, fr: Frame, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
             v.scale <= BC_SCALE_MAX,
             mframe_ok(fr),
             takes_value(fr),
-            gives_value(fr) == wants(old(frames)@, d0),
+            gives_value(fr) == wants(old(frames)@, cx.d0),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            !(fr is Depth) && m_after(*old(self), old(frames)@, *code, nodes, fr, v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            !(fr is Depth) && m_after(*old(self), old(frames)@, *code, cx.nodes, fr, v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost d0 = cx.d0;
         match fr {
             Frame::Depth(_) => (Step::Ret(Ok(v)), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: x })),
-            Frame::ArrayIdx(t) => self.ret_arrayidx(frames, code, t, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::AssignIdx(t, op, value) => self.ret_assignidx(frames, code, t, op, value, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::UpdateIdx(t, inc, prefix) => self.ret_updateidx(frames, code, t, inc, prefix, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::Unary(which) => self.ret_unary(frames, code, which, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::BinL(op, right) => self.ret_binl(frames, code, op, right, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::BinR(op, a) => self.ret_binr(frames, code, op, a, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::RelL(op, right) => self.ret_rell(frames, code, op, right, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::RelR(op, a) => self.ret_relr(frames, code, op, a, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::Store(place) => self.ret_store(frames, code, place, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::OpStore(place, op, a) => self.ret_opstore(frames, code, place, op, a, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::ExprStmt(e) => self.ret_exprstmt(frames, code, e, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::Return => self.ret_return(frames, code, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::IfCond(b) => self.ret_ifcond(frames, code, b, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::ForInit(c, p, b) => self.loop_start(frames, code, c, Some(p), b, Ghost(nodes), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: x }), Ghost(goal), Ghost(d0)),
-            Frame::LoopCond(c, p, b) => self.ret_loopcond(frames, code, c, p, b, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
-            Frame::LoopPost(c, p, b) => self.loop_start(frames, code, c, p, b, Ghost(nodes), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: x }), Ghost(goal), Ghost(d0)),
-            Frame::ArgVal(fd, n, i, vals) => self.ret_argval(frames, code, fd, n, i, vals, v, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
+            Frame::ArrayIdx(t) => self.ret_arrayidx(frames, code, t, v, Ghost(pop), Ghost(cx)),
+            Frame::AssignIdx(t, op, value) => self.ret_assignidx(frames, code, t, op, value, v, Ghost(pop), Ghost(cx)),
+            Frame::UpdateIdx(t, inc, prefix) => self.ret_updateidx(frames, code, t, inc, prefix, v, Ghost(pop), Ghost(cx)),
+            Frame::Unary(which) => self.ret_unary(frames, code, which, v, Ghost(pop), Ghost(cx)),
+            Frame::BinL(op, right) => self.ret_binl(frames, code, op, right, v, Ghost(pop), Ghost(cx)),
+            Frame::BinR(op, a) => self.ret_binr(frames, code, op, a, v, Ghost(pop), Ghost(cx)),
+            Frame::RelL(op, right) => self.ret_rell(frames, code, op, right, v, Ghost(pop), Ghost(cx)),
+            Frame::RelR(op, a) => self.ret_relr(frames, code, op, a, v, Ghost(pop), Ghost(cx)),
+            Frame::Store(place) => self.ret_store(frames, code, place, v, Ghost(pop), Ghost(cx)),
+            Frame::OpStore(place, op, a) => self.ret_opstore(frames, code, place, op, a, v, Ghost(pop), Ghost(cx)),
+            Frame::ExprStmt(e) => self.ret_exprstmt(frames, code, e, v, Ghost(pop), Ghost(cx)),
+            Frame::Return => self.ret_return(frames, code, v, Ghost(pop), Ghost(cx)),
+            Frame::IfCond(b) => self.ret_ifcond(frames, code, b, v, Ghost(pop), Ghost(cx)),
+            Frame::ForInit(c, p, b) => self.loop_start(frames, code, c, Some(p), b, Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: x }), Ghost(cx)),
+            Frame::LoopCond(c, p, b) => self.ret_loopcond(frames, code, c, p, b, v, Ghost(pop), Ghost(cx)),
+            Frame::LoopPost(c, p, b) => self.loop_start(frames, code, c, p, b, Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: x }), Ghost(cx)),
+            Frame::ArgVal(fd, n, i, vals) => self.ret_argval(frames, code, fd, n, i, vals, v, Ghost(pop), Ghost(cx)),
             Frame::Math1(n) => (Step::Ret(self.finish_math1(code, n, v)), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: x })),
             Frame::MathJ1(n) => {
                 if n < code.nodes.len() {
@@ -662,18 +678,19 @@ impl Evaluator {
     /// With the result of a statement, for a frame that takes one.
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(40)]
-    fn ret_stmt(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, fr: Frame, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn ret_stmt(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, fr: Frame, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
             !takes_value(fr),
-            gives_value(fr) == wants(old(frames)@, d0),
+            gives_value(fr) == wants(old(frames)@, cx.d0),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            !(fr is DepthS) && m_after_s(*old(self), old(frames)@, *code, nodes, fr, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            !(fr is DepthS) && m_after_s(*old(self), old(frames)@, *code, cx.nodes, fr, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after_s(*self, frames@, *code, nodes, fr, k, ks1, x, goal);
         let ghost y = apply(k, x);
         proof { if hyp { lemma_den_done(ks1, y); } }
@@ -682,7 +699,7 @@ impl Evaluator {
                 if self.break_flag || self.return_flag {
                     return (Step::Ret(Ok(BCNum::zero())), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: y }));
                 }
-                self.list_next(frames, code, n, i, Ghost(nodes), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: y }), Ghost(goal), Ghost(d0))
+                self.list_next(frames, code, n, i, Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: y }), Ghost(cx))
             },
             Frame::LoopBody(c, p, b) => {
                 let (should_break, next_break) = verified_loop_post_body_action(self.break_flag, self.return_flag, self.quit_flag);
@@ -694,12 +711,12 @@ impl Evaluator {
                 match p {
                     Some(post) => {
                         let ghost kp = K::LoopPost(nodes, c, post, true, b);
-                        self.push_sub(frames, code, Frame::LoopPost(c, p, b), post, Ghost(nodes), Ghost(kp), Ghost(MG { nodes: nodes, ks: ks1, s: st2, x: y }), Ghost(goal), Ghost(y), Ghost(d0))
+                        self.push_sub(frames, code, Frame::LoopPost(c, p, b), post, Ghost(kp), Ghost(MG { nodes: nodes, ks: ks1, s: st2, x: y }), Ghost(y), Ghost(cx))
                     },
-                    None => self.loop_start(frames, code, c, None, b, Ghost(nodes), Ghost(MG { nodes: nodes, ks: ks1, s: st2, x: y }), Ghost(goal), Ghost(d0)),
+                    None => self.loop_start(frames, code, c, None, b, Ghost(MG { nodes: nodes, ks: ks1, s: st2, x: y }), Ghost(cx)),
                 }
             },
-            Frame::Body(def, i) => self.ret_body(frames, code, def, i, Ghost(nodes), Ghost(k), Ghost(ks1), Ghost(x), Ghost(goal), Ghost(d0)),
+            Frame::Body(def, i) => self.ret_body(frames, code, def, i, Ghost(pop), Ghost(cx)),
             _ => (Step::Ret(Ok(BCNum::zero())), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: y })),
         }
     }
@@ -739,19 +756,19 @@ impl Evaluator {
         {
             match step {
                 Step::Eval(j) => {
-                    let (next, Ghost(g2)) = self.step_eval(&mut frames, &cur, j, Ghost(ns), Ghost(g), Ghost(goal), Ghost(d0));
+                    let (next, Ghost(g2)) = self.step_eval(&mut frames, &cur, j, Ghost(g), Ghost(MCx { nodes: ns, goal: goal, d0: d0 }));
                     step = next;
                     proof { g = g2; }
                 },
                 Step::Exec(j) => {
-                    let (next, Ghost(g2)) = self.step_exec(&mut frames, &cur, j, Ghost(ns), Ghost(g), Ghost(goal), Ghost(d0));
+                    let (next, Ghost(g2)) = self.step_exec(&mut frames, &cur, j, Ghost(g), Ghost(MCx { nodes: ns, goal: goal, d0: d0 }));
                     step = next;
                     proof { g = g2; }
                 },
                 Step::Enter(c, def) => {
                     cur = c;
                     proof { ns = g.nodes; }
-                    let (next, Ghost(g2)) = self.body_next(&mut frames, &cur, def, 0, Ghost(ns), Ghost(g), Ghost(goal), Ghost(d0));
+                    let (next, Ghost(g2)) = self.body_next(&mut frames, &cur, def, 0, Ghost(g), Ghost(MCx { nodes: ns, goal: goal, d0: d0 }));
                     step = next;
                     proof { g = g2; }
                 },
@@ -769,7 +786,7 @@ impl Evaluator {
                         }
                         return res;
                     }
-                    let (next, Ghost(g2)) = self.step_ret(&mut frames, &cur, res, Ghost(ns), Ghost(g), Ghost(goal), Ghost(d0));
+                    let (next, Ghost(g2)) = self.step_ret(&mut frames, &cur, res, Ghost(g), Ghost(MCx { nodes: ns, goal: goal, d0: d0 }));
                     step = next;
                     proof { g = g2; }
                 },

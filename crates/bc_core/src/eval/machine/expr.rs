@@ -34,17 +34,18 @@ impl Evaluator {
 
     /// Enters the evaluation of node `n`: its nesting level, then its form.
     #[verifier::exec_allows_no_decreases_clause]
-    pub(super) fn step_eval(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn step_eval(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_eval(*old(self), old(frames)@, *code, nodes, n, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_eval(*old(self), old(frames)@, *code, cx.nodes, n, g, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal; let ghost d0 = cx.d0;
         let ghost hyp = m_eval(*self, frames@, *code, nodes, n, g, goal);
         if Self::quick_ok(code, n, QUICK_BUDGET) {
             let ghost x = bs_ev(nodes, n, g.s);
@@ -86,29 +87,30 @@ impl Evaluator {
                 lemma_den_done(g.ks.push(k), bs_ev_node(nodes, n, s1));
             }
         }
-        self.step_node(frames, code, n, Ghost(nodes), Ghost(MG { nodes: nodes, ks: g.ks.push(k), s: s1, x: g.x }), Ghost(goal), Ghost(d0))
+        self.step_node(frames, code, n, Ghost(MG { nodes: nodes, ks: g.ks.push(k), s: s1, x: g.x }), Ghost(cx))
     }
 
     /// A form whose first sub-computation is node `child`.
     /// Evaluates `child` for the frame `f`: by the fast path when it can, else on a new frame.
     #[verifier::exec_allows_no_decreases_clause]
-    pub(super) fn push_sub(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, f: Frame, child: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(parent): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn push_sub(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, f: Frame, child: usize, Ghost(k): Ghost<MK>, Ghost(g): Ghost<MG>, Ghost(parent): Ghost<MResult>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
             mframe_ok(f),
             !(f is Depth) && !(f is DepthS),
-            gives_value(f) == wants(old(frames)@, d0),
+            gives_value(f) == wants(old(frames)@, cx.d0),
             takes_value(f),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            (r_rc(*code, nodes) && r_state(*old(self), g.s) && r_mframes(old(frames)@, g.ks, *code, nodes)
-                && r_mframe(f, k, *code, nodes) && done(goal) && den(g.ks, parent) == goal
-                && (done(parent) ==> parent == apply(k, bs_ev(nodes, child, g.s))))
-                ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            (r_rc(*code, cx.nodes) && r_state(*old(self), g.s) && r_mframes(old(frames)@, g.ks, *code, cx.nodes)
+                && r_mframe(f, k, *code, cx.nodes) && done(cx.goal) && den(g.ks, parent) == cx.goal
+                && (done(parent) ==> parent == apply(k, bs_ev(cx.nodes, child, g.s))))
+                ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, g.s) && r_mframes(frames@, g.ks, *code, nodes)
             && r_mframe(f, k, *code, nodes) && done(goal) && den(g.ks, parent) == goal
             && (done(parent) ==> parent == apply(k, bs_ev(nodes, child, g.s)));
@@ -123,31 +125,32 @@ impl Evaluator {
                 }
             }
             return match self.quick_eval(code, child, QUICK_BUDGET, Ghost(nodes), Ghost(g.s)) {
-                Ok(v) => self.ret_ok(frames, code, f, v, Ghost(nodes), Ghost(k), Ghost(g.ks), Ghost(x), Ghost(goal), Ghost(d0)),
+                Ok(v) => self.ret_ok(frames, code, f, v, Ghost(MPop { k: k, ks: g.ks, x: x }), Ghost(cx)),
                 Err(e) => (Step::Ret(Err(e)), Ghost(MG { nodes: nodes, ks: g.ks, s: g.s, x: parent })),
             };
         }
-        self.push_frame(frames, code, f, child, Ghost(nodes), Ghost(k), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0))
+        self.push_frame(frames, code, f, child, Ghost(k), Ghost(g), Ghost(parent), Ghost(cx))
     }
 
     #[verifier::exec_allows_no_decreases_clause]
-    fn push_frame(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, f: Frame, child: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(parent): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn push_frame(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, f: Frame, child: usize, Ghost(k): Ghost<MK>, Ghost(g): Ghost<MG>, Ghost(parent): Ghost<MResult>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
             mframe_ok(f),
             !(f is Depth) && !(f is DepthS),
-            gives_value(f) == wants(old(frames)@, d0),
+            gives_value(f) == wants(old(frames)@, cx.d0),
             takes_value(f),
         ensures
             *final(self) == *old(self),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            (r_rc(*code, nodes) && r_state(*old(self), g.s) && r_mframes(old(frames)@, g.ks, *code, nodes)
-                && r_mframe(f, k, *code, nodes) && done(goal) && den(g.ks, parent) == goal
-                && (done(parent) ==> parent == apply(k, bs_ev(nodes, child, g.s))))
-                ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            (r_rc(*code, cx.nodes) && r_state(*old(self), g.s) && r_mframes(old(frames)@, g.ks, *code, cx.nodes)
+                && r_mframe(f, k, *code, cx.nodes) && done(cx.goal) && den(g.ks, parent) == cx.goal
+                && (done(parent) ==> parent == apply(k, bs_ev(cx.nodes, child, g.s))))
+                ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal; let ghost d0 = cx.d0;
         let ghost f0 = frames@;
         let ghost fv = f;
         frames.push(f);
@@ -168,17 +171,18 @@ impl Evaluator {
     /// One step of a form (the specification's `ev_node`).
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(30)]
-    fn step_node(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn step_node(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_node(*old(self), old(frames)@, *code, nodes, n, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_node(*old(self), old(frames)@, *code, cx.nodes, n, g, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_node(*self, frames@, *code, nodes, n, g, goal);
         let ghost parent = bs_ev_node(nodes, n, g.s);
         proof {
@@ -193,19 +197,19 @@ impl Evaluator {
             match &code.nodes[n] {
                 PNode::Neg(e) => {
                     proof { if hyp { lemma_step_unary(nodes, n, 0u8, *e, g.s); } }
-                    return self.push_sub(frames, code, Frame::Unary(0), *e, Ghost(nodes), Ghost(K::Unary(0u8)), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                    return self.push_sub(frames, code, Frame::Unary(0), *e, Ghost(K::Unary(0u8)), Ghost(g), Ghost(parent), Ghost(cx));
                 },
                 PNode::Length(e) => {
                     proof { if hyp { lemma_step_unary(nodes, n, 1u8, *e, g.s); } }
-                    return self.push_sub(frames, code, Frame::Unary(1), *e, Ghost(nodes), Ghost(K::Unary(1u8)), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                    return self.push_sub(frames, code, Frame::Unary(1), *e, Ghost(K::Unary(1u8)), Ghost(g), Ghost(parent), Ghost(cx));
                 },
                 PNode::Sqrt(e) => {
                     proof { if hyp { lemma_step_unary(nodes, n, 2u8, *e, g.s); } }
-                    return self.push_sub(frames, code, Frame::Unary(2), *e, Ghost(nodes), Ghost(K::Unary(2u8)), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                    return self.push_sub(frames, code, Frame::Unary(2), *e, Ghost(K::Unary(2u8)), Ghost(g), Ghost(parent), Ghost(cx));
                 },
                 PNode::ScaleOf(e) => {
                     proof { if hyp { lemma_step_unary(nodes, n, 3u8, *e, g.s); } }
-                    return self.push_sub(frames, code, Frame::Unary(3), *e, Ghost(nodes), Ghost(K::Unary(3u8)), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                    return self.push_sub(frames, code, Frame::Unary(3), *e, Ghost(K::Unary(3u8)), Ghost(g), Ghost(parent), Ghost(cx));
                 },
                 PNode::Paren(e) => {
                     proof { if hyp { lemma_step_paren(nodes, n, *e, g.s); } }
@@ -214,26 +218,26 @@ impl Evaluator {
                 PNode::Binary(op, l, r) => {
                     let ghost k = K::BinL(nodes, bin_code(*op), *r);
                     proof { if hyp { lemma_step_binary(nodes, n, bin_code(*op), *l, *r, g.s); } }
-                    return self.push_sub(frames, code, Frame::BinL(*op, *r), *l, Ghost(nodes), Ghost(k), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                    return self.push_sub(frames, code, Frame::BinL(*op, *r), *l, Ghost(k), Ghost(g), Ghost(parent), Ghost(cx));
                 },
                 PNode::Rel(op, l, r) => {
                     let ghost k = K::RelL(nodes, rel_code(*op), *r);
                     proof { if hyp { lemma_step_rel(nodes, n, rel_code(*op), *l, *r, g.s); } }
-                    return self.push_sub(frames, code, Frame::RelL(*op, *r), *l, Ghost(nodes), Ghost(k), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                    return self.push_sub(frames, code, Frame::RelL(*op, *r), *l, Ghost(k), Ghost(g), Ghost(parent), Ghost(cx));
                 },
                 PNode::Array(name, i) => {
                     let ghost k = K::ArrayIdx(text_view(*name));
                     proof { if hyp { lemma_step_array(nodes, n, text_view(*name), *i, g.s); } }
-                    return self.push_sub(frames, code, Frame::ArrayIdx(n), *i, Ghost(nodes), Ghost(k), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                    return self.push_sub(frames, code, Frame::ArrayIdx(n), *i, Ghost(k), Ghost(g), Ghost(parent), Ghost(cx));
                 },
                 PNode::Assign(op, t, v) => {
-                    return self.step_assign(frames, code, n, *op, *t, *v, Ghost(nodes), Ghost(g), Ghost(goal), Ghost(d0));
+                    return self.step_assign(frames, code, n, *op, *t, *v, Ghost(g), Ghost(cx));
                 },
                 PNode::Call(name, args) => {
-                    return self.step_call(frames, code, n, name, args, Ghost(nodes), Ghost(g), Ghost(goal), Ghost(d0));
+                    return self.step_call(frames, code, n, name, args, Ghost(g), Ghost(cx));
                 },
                 PNode::Update(inc, prefix, t) => {
-                    return self.step_update(frames, code, n, *inc, *prefix, *t, Ghost(nodes), Ghost(g), Ghost(goal), Ghost(d0));
+                    return self.step_update(frames, code, n, *inc, *prefix, *t, Ghost(g), Ghost(cx));
                 },
                 _ => {},
             }
@@ -246,19 +250,20 @@ impl Evaluator {
     /// An assignment: its target, then its value.
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    fn step_assign(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, op: AssignOp, t: usize, v: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn step_assign(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, op: AssignOp, t: usize, v: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             n < code.nodes@.len(),
             code.nodes@[n as int] == PNode::Assign(op, t, v),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_node(*old(self), old(frames)@, *code, nodes, n, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_node(*old(self), old(frames)@, *code, cx.nodes, n, g, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_node(*self, frames@, *code, nodes, n, g, goal);
         let ghost parent = bs_ev_node(nodes, n, g.s);
         proof {
@@ -272,13 +277,13 @@ impl Evaluator {
             if let PNode::Array(name, i) = &code.nodes[t] {
                 let ghost k = K::AssignIdx(nodes, text_view(*name), assign_code(op), v);
                 proof { if hyp { lemma_step_assign_elem(nodes, n, assign_code(op), text_view(*name), *i, t, v, g.s); } }
-                return self.push_sub(frames, code, Frame::AssignIdx(t, op, v), *i, Ghost(nodes), Ghost(k), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                return self.push_sub(frames, code, Frame::AssignIdx(t, op, v), *i, Ghost(k), Ghost(g), Ghost(parent), Ghost(cx));
             }
         }
         let place = self.plain_place_ref(code, t, Ghost(nodes));
         let ghost sp = plain_place(nodes, t);
         proof { if hyp { lemma_step_assign_plain(nodes, n, assign_code(op), t, v, g.s); } }
-        self.assign_to_ref(frames, code, op, v, place, Ghost(nodes), Ghost(sp), Ghost(g), Ghost(goal), Ghost(d0))
+        self.assign_to_ref(frames, code, op, v, place, Ghost(sp), Ghost(g), Ghost(cx))
     }
 
     /// The place of a target that is not a subscript.
@@ -329,19 +334,20 @@ impl Evaluator {
     /// The assignment once its target is known (the specification's `assign_to`).
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    fn assign_to_ref(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: AssignOp, v: usize, place: Place, Ghost(nodes): Ghost<SpecNodes>, Ghost(sp): Ghost<SpecPlace>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn assign_to_ref(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: AssignOp, v: usize, place: Place, Ghost(sp): Ghost<SpecPlace>, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            (r_rc(*code, nodes) && r_state(*old(self), g.s) && r_mframes(old(frames)@, g.ks, *code, nodes) && r_place(place, sp) && done(goal)
-                && den(g.ks, assign_to(nodes, assign_code(op), v, sp, g.s)) == goal)
-                ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            (r_rc(*code, cx.nodes) && r_state(*old(self), g.s) && r_mframes(old(frames)@, g.ks, *code, cx.nodes) && r_place(place, sp) && done(cx.goal)
+                && den(g.ks, assign_to(cx.nodes, assign_code(op), v, sp, g.s)) == cx.goal)
+                ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, g.s) && r_mframes(frames@, g.ks, *code, nodes) && r_place(place, sp) && done(goal)
             && den(g.ks, assign_to(nodes, assign_code(op), v, sp, g.s)) == goal;
         let ghost parent = assign_to(nodes, assign_code(op), v, sp, g.s);
@@ -359,13 +365,13 @@ impl Evaluator {
         match op {
             AssignOp::Assign => {
                 proof { if hyp { assert(acode == 0); } }
-                self.push_sub(frames, code, Frame::Store(place), v, Ghost(nodes), Ghost(K::Store(sp)), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0))
+                self.push_sub(frames, code, Frame::Store(place), v, Ghost(K::Store(sp)), Ghost(g), Ghost(parent), Ghost(cx))
             },
             AssignOp::Compound(bin) => {
                 let old_v = self.load_ref(&place, Ghost(sp), Ghost(g.s));
                 let ghost k = K::OpStore(sp, bin_code(bin), bc_spec::eval::load(g.s, sp));
                 proof { if hyp { assert(acode != 0); assert((acode - 1) as u8 == bin_code(bin)); } }
-                self.push_sub(frames, code, Frame::OpStore(place, bin, old_v), v, Ghost(nodes), Ghost(k), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0))
+                self.push_sub(frames, code, Frame::OpStore(place, bin, old_v), v, Ghost(k), Ghost(g), Ghost(parent), Ghost(cx))
             },
         }
     }
@@ -373,19 +379,20 @@ impl Evaluator {
     /// `++`/`--`.
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    fn step_update(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, inc: bool, prefix: bool, t: usize, Ghost(nodes): Ghost<SpecNodes>, Ghost(g): Ghost<MG>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    fn step_update(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, inc: bool, prefix: bool, t: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             n < code.nodes@.len(),
             code.nodes@[n as int] == PNode::Update(inc, prefix, t),
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_node(*old(self), old(frames)@, *code, nodes, n, g, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_node(*old(self), old(frames)@, *code, cx.nodes, n, g, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_node(*self, frames@, *code, nodes, n, g, goal);
         let ghost parent = bs_ev_node(nodes, n, g.s);
         proof {
@@ -399,7 +406,7 @@ impl Evaluator {
             if let PNode::Array(name, i) = &code.nodes[t] {
                 let ghost k = K::UpdateIdx(text_view(*name), inc, prefix);
                 proof { if hyp { lemma_step_update_elem(nodes, n, inc, prefix, text_view(*name), *i, t, g.s); } }
-                return self.push_sub(frames, code, Frame::UpdateIdx(t, inc, prefix), *i, Ghost(nodes), Ghost(k), Ghost(g), Ghost(goal), Ghost(parent), Ghost(d0));
+                return self.push_sub(frames, code, Frame::UpdateIdx(t, inc, prefix), *i, Ghost(k), Ghost(g), Ghost(parent), Ghost(cx));
             }
         }
         let place = self.plain_place_ref(code, t, Ghost(nodes));
@@ -603,19 +610,19 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
-    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    pub(super) fn ret_arrayidx(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, t: usize, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_arrayidx(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, t: usize, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::ArrayIdx(t), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::ArrayIdx(t), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::ArrayIdx(t), v, k, ks1, x, goal);
         let ghost y = apply(k, x);
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: x.st, x: y };
@@ -631,18 +638,19 @@ impl Evaluator {
 
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    pub(super) fn ret_assignidx(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, t: usize, op: AssignOp, value: usize, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_assignidx(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, t: usize, op: AssignOp, value: usize, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::AssignIdx(t, op, value), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::AssignIdx(t, op, value), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::AssignIdx(t, op, value), v, k, ks1, x, goal);
         let ghost y = apply(k, x);
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: x.st, x: y };
@@ -659,7 +667,7 @@ impl Evaluator {
                         let ghost sp = elem_place(text_view(*name), x);
                         let place = Place::Element(name.clone(), i);
                         proof { if hyp { assert(r_num(v, x.val)); lemma_array_index_value(x.val); } }
-                        return self.assign_to_ref(frames, code, op, value, place, Ghost(nodes), Ghost(sp), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: x }), Ghost(goal), Ghost(d0));
+                        return self.assign_to_ref(frames, code, op, value, place, Ghost(sp), Ghost(MG { nodes: nodes, ks: ks1, s: x.st, x: x }), Ghost(cx));
                     }
                 }
                 (Step::Ret(Ok(v)), Ghost(g1))
@@ -667,18 +675,19 @@ impl Evaluator {
 
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    pub(super) fn ret_updateidx(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, t: usize, inc: bool, prefix: bool, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_updateidx(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, t: usize, inc: bool, prefix: bool, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::UpdateIdx(t, inc, prefix), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::UpdateIdx(t, inc, prefix), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::UpdateIdx(t, inc, prefix), v, k, ks1, x, goal);
         let ghost y = apply(k, x);
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: x.st, x: y };
@@ -703,19 +712,19 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
-    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    pub(super) fn ret_unary(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, which: u8, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_unary(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, which: u8, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::Unary(which), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::Unary(which), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::Unary(which), v, k, ks1, x, goal);
         let ghost y = apply(k, x);
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: x.st, x: y };
@@ -726,18 +735,19 @@ impl Evaluator {
 
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    pub(super) fn ret_binl(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: BinOp, right: usize, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_binl(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: BinOp, right: usize, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::BinL(op, right), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::BinL(op, right), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::BinL(op, right), v, k, ks1, x, goal);
         let ghost y = apply(k, x);
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: x.st, x: y };
@@ -745,24 +755,25 @@ impl Evaluator {
                 let ghost kr = K::BinR(bin_code(op), x.val);
                 let ghost g2 = MG { nodes: nodes, ks: ks1, s: x.st, x: x };
                 proof { if hyp { assert(y == bin_r(bin_code(op), x.val, bs_ev(nodes, right, x.st))); } }
-                self.push_sub(frames, code, Frame::BinR(op, v), right, Ghost(nodes), Ghost(kr), Ghost(g2), Ghost(goal), Ghost(y), Ghost(d0))
+                self.push_sub(frames, code, Frame::BinR(op, v), right, Ghost(kr), Ghost(g2), Ghost(y), Ghost(cx))
     }
 
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    pub(super) fn ret_binr(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: BinOp, a: BCNum, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_binr(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: BinOp, a: BCNum, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
             a.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::BinR(op, a), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::BinR(op, a), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::BinR(op, a), v, k, ks1, x, goal);
         let ghost y = apply(k, x);
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: x.st, x: y };
@@ -774,42 +785,44 @@ impl Evaluator {
 
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    pub(super) fn ret_rell(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: RelOp, right: usize, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_rell(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: RelOp, right: usize, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::RelL(op, right), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::RelL(op, right), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::RelL(op, right), v, k, ks1, x, goal);
         let ghost y = apply(k, x);
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: x.st, x: y };
         proof { if hyp { lemma_den_done(ks1, y); } }
                 let ghost kr = K::RelR(rel_code(op), x.val);
                 let ghost g2 = MG { nodes: nodes, ks: ks1, s: x.st, x: x };
-                self.push_sub(frames, code, Frame::RelR(op, v), right, Ghost(nodes), Ghost(kr), Ghost(g2), Ghost(goal), Ghost(y), Ghost(d0))
+                self.push_sub(frames, code, Frame::RelR(op, v), right, Ghost(kr), Ghost(g2), Ghost(y), Ghost(cx))
     }
 
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    pub(super) fn ret_relr(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: RelOp, a: BCNum, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_relr(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: RelOp, a: BCNum, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
             a.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::RelR(op, a), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::RelR(op, a), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::RelR(op, a), v, k, ks1, x, goal);
         let ghost y = apply(k, x);
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: x.st, x: y };
@@ -820,19 +833,19 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
-    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    pub(super) fn ret_store(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, place: Place, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_store(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, place: Place, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::Store(place), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::Store(place), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::Store(place), v, k, ks1, x, goal);
         let ghost y = apply(k, x);
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: x.st, x: y };
@@ -844,19 +857,20 @@ impl Evaluator {
 
     #[verifier::exec_allows_no_decreases_clause]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
-    pub(super) fn ret_opstore(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, place: Place, op: BinOp, a: BCNum, v: BCNum, Ghost(nodes): Ghost<SpecNodes>, Ghost(k): Ghost<MK>, Ghost(ks1): Ghost<MKs>, Ghost(x): Ghost<MResult>, Ghost(goal): Ghost<MResult>, Ghost(d0): Ghost<MRoot>) -> (r: (Step, Ghost<MG>))
+    pub(super) fn ret_opstore(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, place: Place, op: BinOp, a: BCNum, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
-            frames_ok(old(frames)@, old(self).eval_depth, d0),
-            wants(old(frames)@, d0),
+            frames_ok(old(frames)@, old(self).eval_depth, cx.d0),
+            wants(old(frames)@, cx.d0),
             v.scale <= BC_SCALE_MAX,
             a.scale <= BC_SCALE_MAX,
         ensures
             final(self).inv(),
-            frames_ok(final(frames)@, final(self).eval_depth, d0),
-            step_ok(r.0, final(frames)@, d0),
-            m_after(*old(self), old(frames)@, *code, nodes, Frame::OpStore(place, op, a), v, k, ks1, x, goal) ==> m_step(*final(self), final(frames)@, *code, nodes, r.0, r.1@, goal, d0),
+            frames_ok(final(frames)@, final(self).eval_depth, cx.d0),
+            step_ok(r.0, final(frames)@, cx.d0),
+            m_after(*old(self), old(frames)@, *code, cx.nodes, Frame::OpStore(place, op, a), v, pop.k, pop.ks, pop.x, cx.goal) ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
+        let ghost k = pop.k; let ghost ks1 = pop.ks; let ghost x = pop.x; let ghost nodes = cx.nodes; let ghost goal = cx.goal;
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::OpStore(place, op, a), v, k, ks1, x, goal);
         let ghost y = apply(k, x);
         let ghost g1 = MG { nodes: nodes, ks: ks1, s: x.st, x: y };
