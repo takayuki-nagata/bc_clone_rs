@@ -137,7 +137,7 @@ GNU's own results are *not* exact at the requested scale. When you change a func
 section of `docs/MATH_ERROR_BOUNDS.md` in sync.
 
 ### Evaluator (`src/eval/`)
-- Expressions and statements run on an explicit stack of frames (`eval/machine.rs`), so their
+- Expressions and statements run on an explicit stack of frames (`eval/machine.rs` and its submodules), so their
   nesting does not use the native stack. A frame is what remains of one syntactic form once a sub-computation has
   a result; the proof relates it to the specification's `bc_spec::den::K` and keeps the meaning
   of the stack (`den`) equal to the result of the whole evaluation, so `eval_ref` has the same
@@ -163,7 +163,7 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   locals push a new entry on entry. `BTreeMap` keeps the storage `no_std`-friendly and deterministic.
 - `Evaluator::leave_call` pops the parameter and `auto` frames and restores the caller's
   control-flow flags and invocation `ibase` on every return path of a call, including `Err`
-  returns (`ret_call` in `eval/machine.rs`). It is called explicitly (there is no RAII guard, which Verus cannot
+  returns (`ret_call` in `eval/machine/func.rs`). It is called explicitly (there is no RAII guard, which Verus cannot
   reason about), so a panic inside a call would leave the frames pushed; `bc_core` must not
   panic.
 - Output goes through the `BcWriter` trait. `WrappedStdout` wraps long numbers at 70 columns with
@@ -198,8 +198,8 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   targets. The driver takes bytes; the CLI and the C API pass their input without decoding it.
 - Recursion is bounded: `Evaluator::max_depth` limits the depth of the syntax tree (checked while
   parsing, the only part whose native recursion grows with the input), and `Evaluator::max_eval_depth` the number of
-  levels evaluated at once, function calls included, on the heap (`eval/machine.rs`). Each front
-  end sets the first for the stack it runs on (`bc_cli` runs the engine on a 512 MiB-stack
+  levels evaluated at once, function calls included, on the heap (`eval/machine.rs` and its
+  submodules). Each front end sets the first for the stack it runs on (`bc_cli` runs the engine on a 512 MiB-stack
   thread) and the second for the heap (`bc_cli`: 2 000 000, about 320 bytes a level; the other
   targets use one limit for both). Do not add a recursive walk over the arena: the trees in it
   can be as deep as `max_depth`, and evaluation must not use more native stack than the fast

@@ -508,8 +508,8 @@ dual_verified! {
         len <= BC_UNIT_MAX
     }
 
-    /// Verified control-flow short-circuit check (`eval/machine.rs`, `eval/machine/quick.rs`,
-    /// `eval/leaf.rs`).
+    /// Verified control-flow short-circuit check (`eval/machine/stmt.rs`,
+    /// `eval/machine/quick.rs`, `eval/leaf.rs`).
     pub(crate) fn verified_should_abort_execution(
         break_flag: bool,
         return_flag: bool,

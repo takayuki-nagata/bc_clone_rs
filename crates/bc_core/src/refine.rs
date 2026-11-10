@@ -21,8 +21,8 @@
 //! `Evaluator::exec_ref`: if `r_state(e, st)` and `r_code(code, nodes)`, then for node `n` and
 //! every fuel with which the specification's `ev` (or `exec`) finishes, the result and the new
 //! state correspond to it (`r_result`; `bc_spec::fuel` shows that every finishing fuel gives the
-//! same result). They are proved of the explicit-stack machine (`eval/machine.rs`): the
-//! specification's fuel-free semantics (`bc_spec::den`) gives a meaning to the machine's frames,
+//! same result). They are proved of the explicit-stack machine (`eval/machine.rs` and its
+//! submodules): the specification's fuel-free semantics (`bc_spec::den`) gives a meaning to the machine's frames,
 //! each step keeps that meaning equal to the result of the whole evaluation, and the fast path
 //! (`eval/machine/quick.rs`) has the theorems of the steps it replaces.
 

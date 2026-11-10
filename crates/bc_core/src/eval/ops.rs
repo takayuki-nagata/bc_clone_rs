@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-//! The operations on values that the machine's frames, the fast path (`machine.rs`,
-//! `machine/quick.rs`) and the leaves (`leaf.rs`) use: arithmetic and `^` (`arith`), numeric
+//! The operations on values that the machine's frames (`machine.rs` and its submodules), the
+//! fast path (`machine/quick.rs`) and the leaves (`leaf.rs`) use: arithmetic and `^` (`arith`), numeric
 //! constants (`literal`), array subscripts (`array_index`), stores to `scale`, `ibase` and `obase` with
 //! their clamp warnings (`store_register`), reading and writing an assignment target (`load`,
 //! `store`), runtime warnings (`warn`), and whether an expression statement is an assignment
