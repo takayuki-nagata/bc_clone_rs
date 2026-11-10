@@ -310,8 +310,8 @@ pub open spec fn rel_code(t: Token) -> u8 {
     else { if two { 5u8 } else { 4u8 } }
 }
 
-/// `get_infix_info` with `verified_pratt_infix_info`: `(precedence, is_assignment,
-/// next_min_precedence)`; precedence -1 for a token that is not an infix operator.
+/// `infix_info` of `bc_core`'s parser (`verified_pratt_infix_info`): `(precedence,
+/// is_assignment, next_min_precedence)`; precedence -1 for a token that is not an infix operator.
 pub open spec fn infix_info(k: Tok) -> (i8, bool, i8) {
     match k {
         Tok::AssignOp => (1i8, true, 1i8),

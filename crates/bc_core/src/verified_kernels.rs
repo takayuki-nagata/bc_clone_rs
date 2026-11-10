@@ -394,7 +394,7 @@ dual_verified! {
         }
     }
 
-    /// Verified Pratt parser `next_min_prec` calculation (`parser/parse.rs`).
+    /// Verified Pratt parser `next_min_prec` calculation (called by `verified_pratt_infix_info`).
     pub(crate) fn verified_pratt_next_min_prec(op_prec: i8, right_assoc: bool) -> (res: i8)
         requires [
             1 <= op_prec && op_prec <= 10,
@@ -489,7 +489,7 @@ dual_verified! {
         base_prec + extra_prec + 15
     }
 
-    /// Verified nesting-limit check (`parser/parse.rs` and `eval/`): whether `depth` enclosing
+    /// Verified nesting-limit check (`parser/parse/` and `eval/`): whether `depth` enclosing
     /// levels plus `height` more stay within `max_depth`, computed without overflow.
     pub(crate) fn verified_nesting_within_limit(depth: usize, height: usize, max_depth: usize) -> (res: bool)
         ensures [
@@ -662,7 +662,7 @@ dual_verified! {
     }
 
     /// Verified Pratt parser infix operator precedence, associativity, and `next_min_prec`
-    /// (`parser/parse.rs:Parser::get_infix_info`).
+    /// (`infix_info` in `parser/parse/expr.rs`).
     ///
     /// Returns `(op_prec, right_assoc, next_min_prec)`.
     pub(crate) fn verified_pratt_infix_info(tok_kind: u8) -> (res: (i8, bool, i8))
