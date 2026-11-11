@@ -18,8 +18,9 @@
 //!   API, which is not itself proved: for every unit, the syntax tree (or error) and extension
 //!   uses correspond to the compiled specification's `parse_unit`.
 //!
-//! Inputs are kept small and shallow: the compiled specification copies its state at every
-//! step, so its time grows quadratically with the nesting depth. Cases where
+//! The compiled specification shares the parts of its state that grow with the run
+//! (`bc_spec/src/persist.rs`), so nesting a thousand levels deep is cheap; its digit arithmetic
+//! still copies a sequence at every step, so large numbers are slow. Cases where
 //! either side exceeds the time limit, or that the specification does not model, are skipped.
 //! Set `PROPTEST_CASES` for long runs.
 
@@ -183,18 +184,18 @@ fn flags() -> impl Strategy<Value = Vec<&'static str>> {
     prop::sample::select(vec![vec![], vec!["-w"], vec!["-s"], vec!["-sw"]])
 }
 
-/// Nested programs within the specification's practical depth.
-fn shallow_deep_program() -> impl Strategy<Value = String> {
+/// Long operator chains, and parentheses and recursion up to a thousand levels deep.
+fn deep_program() -> impl Strategy<Value = String> {
     let op = || prop::sample::select(vec!["+", "-", "*"]);
     prop_oneof![
-        prop::collection::vec((op(), 0u32..10), 1..300).prop_map(|terms| {
+        prop::collection::vec((op(), 0u32..10), 1..2000).prop_map(|terms| {
             let chain: String = terms.iter().map(|(o, n)| format!("{o}{n}")).collect();
             format!("1{chain}\n")
         }),
-        (1usize..150, op()).prop_map(|(depth, o)| {
+        (1usize..1000, op()).prop_map(|(depth, o)| {
             format!("{}1{}\n", format!("(2{o}").repeat(depth), ")".repeat(depth))
         }),
-        (1usize..100, 1u32..5).prop_map(|(n, k)| format!(
+        (1usize..1000, 1u32..5).prop_map(|(n, k)| format!(
             "define g(n) {{\nif (n == 0) return (0)\nreturn (n % {k} + g(n - 1))\n}}\ng({n})\n"
         )),
     ]
@@ -253,7 +254,7 @@ proptest! {
     })]
 
     #[test]
-    fn prop_nested_programs_match_spec(prog in shallow_deep_program()) {
+    fn prop_nested_programs_match_spec(prog in deep_program()) {
         check_against_spec(prog.as_bytes(), &[]);
     }
 
