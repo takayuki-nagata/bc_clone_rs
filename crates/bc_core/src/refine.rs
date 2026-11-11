@@ -301,9 +301,9 @@ pub open spec fn r_arrays(m: Map<String, Vec<BTreeMap<usize, BCNum>>>, arrays: S
 /// A function definition: name, parameters and `auto` list, and a body that is the list of
 /// subtrees `f.body` of the arena of the unit that defined it.
 pub open spec fn r_func(fd: FunctionDef, f: Func) -> bool {
-    &&& r_rc(fd.code, f.nodes)
-    &&& fd.def < f.nodes.len()
-    &&& f.nodes[fd.def as int] == Node::Define(f.name, f.params, f.autos, f.body)
+    &&& r_rc(fd.code, f.nodes.s)
+    &&& fd.def < f.nodes.s.len()
+    &&& f.nodes.s[fd.def as int] == Node::Define(f.name, f.params, f.autos, f.body)
 }
 
 pub open spec fn r_funcs(m: Map<String, FunctionDef>, funcs: Seq<Func>) -> bool {

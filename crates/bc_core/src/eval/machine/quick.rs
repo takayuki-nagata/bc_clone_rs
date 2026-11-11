@@ -541,6 +541,7 @@ impl Evaluator {
         if !assignment {
             let mut text = v.format_bytes(self.obase);
             text.push(10);
+            proof { bc_spec::output::lemma_write_wrapped_append(out_log(&self.stdout_writer), out_col(&self.stdout_writer), text@); }
             self.stdout_writer.write_bytes(&text);
             self.stdout_writer.flush_out();
         }

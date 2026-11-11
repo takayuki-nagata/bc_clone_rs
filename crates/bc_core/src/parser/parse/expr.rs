@@ -10,7 +10,7 @@ verus! {
 spec fn r_eres(r: Result<(usize, usize), BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
         Ok((x, h)) => p.ok && r_p(q, toks, cfg, p.st) && h as u64 == p.h && h <= q.max_depth + 2
-            && r_grown(s0, p.st) && x == p.node && x < p.st.nodes.len(),
+            && r_grown(s0, p.st) && x == p.node && x < p.st.nodes.s.len(),
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
@@ -18,8 +18,8 @@ spec fn r_eres(r: Result<(usize, usize), BcError>, q: Parser, toks: Seq<SToken>,
 spec fn r_ares(r: Result<(Vec<PArg>, usize), BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
         Ok((a, h)) => p.ok && r_p(q, toks, cfg, p.st) && h as u64 == p.h && h <= q.max_depth + 1
-            && extends(s0.nodes, p.st.nodes) && p.st.cur >= s0.cur
-            && p.st.nodes.len() - s0.nodes.len() <= p.st.cur - s0.cur && p.st.depth == s0.depth
+            && extends(s0.nodes.s, p.st.nodes.s) && p.st.cur >= s0.cur
+            && p.st.nodes.s.len() - s0.nodes.s.len() <= p.st.cur - s0.cur && p.st.depth == s0.depth
             && r_args(a@, p.args),
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
@@ -130,9 +130,9 @@ impl Parser {
         requires
             r_p(*old(self), toks, cfg, s),
             r_node(pn, n),
-            extends(s0.nodes, s.nodes),
-            s0.nodes.len() <= 2 * s0.cur,
-            s.nodes.len() - s0.nodes.len() + 1 <= s.cur - s0.cur,
+            extends(s0.nodes.s, s.nodes.s),
+            s0.nodes.s.len() <= 2 * s0.cur,
+            s.nodes.s.len() - s0.nodes.s.len() + 1 <= s.cur - s0.cur,
             s.depth == s0.depth,
         ensures
             pushed(*old(self), *final(self), pn),
@@ -141,24 +141,26 @@ impl Parser {
                 &&& g.ok
                 &&& g.h == h
                 &&& g.node == idx
-                &&& idx == s.nodes.len()
-                &&& g.st.nodes.len() == s.nodes.len() + 1
-                &&& g.st.nodes[g.node as int] == n
+                &&& idx == s.nodes.s.len()
+                &&& g.st.nodes.s.len() == s.nodes.s.len() + 1
+                &&& g.st.nodes.s[g.node as int] == n
                 &&& g.st.cur == s.cur
                 &&& g.st.ext == s.ext
                 &&& r_p(*final(self), toks, cfg, g.st)
-                &&& extends(s.nodes, g.st.nodes)
+                &&& extends(s.nodes.s, g.st.nodes.s)
                 &&& r_grown(s0, g.st)
             }),
     {
         let idx = self.nodes.len();
         self.nodes.push(pn);
         proof {
+            // A `Vec` holds at most `usize::MAX` nodes, so the arena was not full.
+            assert(self.nodes@.len() == self.nodes.len());
             let g = add_node(s, n, h);
-            assert(g.st.nodes =~= s.nodes.push(n));
+            assert(g.st.nodes.s =~= s.nodes.s.push(n));
             assert(cur_tok(toks, g.st) == cur_tok(toks, s));
-            assert forall|i: int| 0 <= i < self.nodes@.len() implies #[trigger] r_node(self.nodes@[i], g.st.nodes[i]) by {
-                if i < s.nodes.len() { assert(r_node(old(self).nodes@[i], s.nodes[i])); }
+            assert forall|i: int| 0 <= i < self.nodes@.len() implies #[trigger] r_node(self.nodes@[i], g.st.nodes.s[i]) by {
+                if i < s.nodes.s.len() { assert(r_node(old(self).nodes@[i], s.nodes.s[i])); }
             }
         }
         idx
@@ -380,8 +382,8 @@ impl Parser {
             invariant
                 r_p(*self, toks, cfg, cur),
                 r_grown(st, cur),
-                st.nodes.len() <= 2 * st.cur,
-                left == node && left < cur.nodes.len(),
+                st.nodes.s.len() <= 2 * st.cur,
+                left == node && left < cur.nodes.s.len(),
                 height as u64 == sh,
                 height <= self.max_depth + 2,
                 min_prec >= 0,
@@ -553,7 +555,7 @@ impl Parser {
         ensures
             r_eres(r.0, *final(self), toks, cfg, st, r.1@),
             r.0 matches Ok((_, h)) ==> h <= final(self).max_depth,
-            r.0 is Ok ==> r.1@.st.nodes.len() - st.nodes.len() + 1 <= r.1@.st.cur - st.cur,
+            r.0 is Ok ==> r.1@.st.nodes.s.len() - st.nodes.s.len() + 1 <= r.1@.st.cur - st.cur,
             forall|f: u64| #![trigger p_parenthesized(toks, cfg, st, f)] pdone(p_parenthesized(toks, cfg, st, f)) ==> p_parenthesized(toks, cfg, st, f) == r.1@,
     {
         let ghost e = s_eat(toks, st, Tok::Lparen);
@@ -936,7 +938,7 @@ impl Parser {
                 let (res, Ghost(a)) = self.parse_subscript(name, Ghost(n.name), Ghost(toks), Ghost(cfg), Ghost(n.st));
                 proof {
                     assert(n.st.cur > st.cur);
-                    assert(n.st.nodes.len() == st.nodes.len());
+                    assert(n.st.nodes.s.len() == st.nodes.s.len());
                     assert forall|f: u64| #![trigger p_named(toks, cfg, st, f)] pdone(p_named(toks, cfg, st, f)) implies p_named(toks, cfg, st, f) == a by {
                         assert(f > 0);
                         assert(pdone(p_subscript(toks, cfg, n.st, n.name, (f - 1) as u64)));
@@ -1026,11 +1028,11 @@ impl Parser {
         loop
             invariant
                 r_p(*self, toks, cfg, cur),
-                extends(st.nodes, cur.nodes),
+                extends(st.nodes.s, cur.nodes.s),
                 cur.cur >= st.cur,
-                cur.nodes.len() - st.nodes.len() <= cur.cur - st.cur,
+                cur.nodes.s.len() - st.nodes.s.len() <= cur.cur - st.cur,
                 cur.depth == st.depth,
-                st.nodes.len() <= 2 * st.cur,
+                st.nodes.s.len() <= 2 * st.cur,
                 r_args(args@, acc),
                 height as u64 == sh,
                 height <= self.max_depth + 1,

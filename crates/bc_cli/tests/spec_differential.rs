@@ -432,7 +432,8 @@ mod parser_relation {
             assert!(ext_ok, "extension uses differ for {text:?}: {ext:?}");
             match parsed {
                 Ok(stmts) => assert!(
-                    p.ok && r_nodes(&nodes, &p.st.nodes) && stmts == p.list,
+                    p.ok && r_nodes(&nodes, &bc_spec::eval::exec_arena_code(&p.st.nodes).s.v)
+                        && stmts == p.list,
                     "syntax trees differ for {text:?}"
                 ),
                 Err(BcError::Quit) => assert!(!p.ok && p.err.quit, "quit differs for {text:?}"),

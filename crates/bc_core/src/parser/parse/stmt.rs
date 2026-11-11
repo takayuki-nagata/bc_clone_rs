@@ -54,10 +54,10 @@ impl Parser {
         requires
             r_pc(*old(self), toks, cfg, s),
             r_node(pn, n),
-            extends(s0.nodes, s.nodes),
-            s0.nodes.len() <= 2 * s0.cur,
+            extends(s0.nodes.s, s.nodes.s),
+            s0.nodes.s.len() <= 2 * s0.cur,
             s.cur > s0.cur,
-            s.nodes.len() - s0.nodes.len() + 1 <= 2 * (s.cur - s0.cur),
+            s.nodes.s.len() - s0.nodes.s.len() + 1 <= 2 * (s.cur - s0.cur),
             s.depth == s0.depth,
         ensures
             pushed(*old(self), *final(self), pn),
@@ -66,25 +66,27 @@ impl Parser {
                 &&& g.ok
                 &&& g.flag
                 &&& g.node == idx
-                &&& idx == s.nodes.len()
-                &&& g.st.nodes.len() == s.nodes.len() + 1
-                &&& g.st.nodes[g.node as int] == n
+                &&& idx == s.nodes.s.len()
+                &&& g.st.nodes.s.len() == s.nodes.s.len() + 1
+                &&& g.st.nodes.s[g.node as int] == n
                 &&& g.st.cur == s.cur
                 &&& g.st.ext == s.ext
                 &&& r_pc(*final(self), toks, cfg, g.st)
                 &&& (s.cur < toks.len() ==> r_p(*final(self), toks, cfg, g.st))
-                &&& extends(s.nodes, g.st.nodes)
+                &&& extends(s.nodes.s, g.st.nodes.s)
                 &&& r_sgrown(s0, g.st)
             }),
     {
         let idx = self.nodes.len();
         self.nodes.push(pn);
         proof {
+            // A `Vec` holds at most `usize::MAX` nodes, so the arena was not full.
+            assert(self.nodes@.len() == self.nodes.len());
             let g = add_node(s, n, h);
-            assert(g.st.nodes =~= s.nodes.push(n));
+            assert(g.st.nodes.s =~= s.nodes.s.push(n));
             assert(cur_tok(toks, g.st) == cur_tok(toks, s));
-            assert forall|i: int| 0 <= i < self.nodes@.len() implies #[trigger] r_node(self.nodes@[i], g.st.nodes[i]) by {
-                if i < s.nodes.len() { assert(r_node(old(self).nodes@[i], s.nodes[i])); }
+            assert forall|i: int| 0 <= i < self.nodes@.len() implies #[trigger] r_node(self.nodes@[i], g.st.nodes.s[i]) by {
+                if i < s.nodes.s.len() { assert(r_node(old(self).nodes@[i], s.nodes.s[i])); }
             }
         }
         idx
@@ -429,8 +431,8 @@ impl Parser {
                 return (Err(y), Ghost(a));
             },
         };
-        proof { assert(r_node(self.nodes@[x as int], a.st.nodes[x as int])); }
-        let ghost st2 = if a.st.nodes[a.node as int] is Rel { s_extension(toks, cfg, a.st, comparison_msg()) } else { a.st };
+        proof { assert(r_node(self.nodes@[x as int], a.st.nodes.s[x as int])); }
+        let ghost st2 = if a.st.nodes.s[a.node as int] is Rel { s_extension(toks, cfg, a.st, comparison_msg()) } else { a.st };
         if matches!(self.nodes[x], PNode::Rel(..)) {
             self.extension(comparison_text(), Ghost(toks), Ghost(cfg), Ghost(a.st), Ghost(comparison_msg()));
         }

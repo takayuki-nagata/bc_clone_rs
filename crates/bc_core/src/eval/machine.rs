@@ -325,7 +325,7 @@ pub(crate) open spec fn r_call_frame(f: Frame, k: K, code: Rc<Code>, nodes: Spec
     match (f, k) {
         (Frame::Call(_, def, name, flag, inv, v), K::Call(g, sv, _)) => {
             &&& r_rc(code, nodes)
-            &&& g.nodes == nodes
+            &&& g.nodes.s == nodes
             &&& def < nodes.len()
             &&& nodes[def as int] == Node::Define(g.name, g.params, g.autos, g.body)
             &&& g.name == text_view(name)

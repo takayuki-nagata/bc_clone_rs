@@ -22,6 +22,7 @@
 //! 5 `>=`; `Reg` 0 `scale`, 1 `ibase`, 2 `obase`.
 
 use crate::lexer::*;
+use crate::persist::*;
 use vstd::contrib::exec_spec::*;
 use vstd::prelude::*;
 
@@ -91,7 +92,7 @@ pub struct PState {
     pub loop_depth: u64,
     pub in_function: bool,
     pub ext: Seq<ExtUse>,
-    pub nodes: Seq<Node>,
+    pub nodes: Arena,
 }
 
 /// Why parsing stopped: `quit`, a diagnostic (`line` within the unit), or exhausted fuel.
@@ -176,8 +177,8 @@ pub open spec fn st_push_ext(st: PState, u: ExtUse) -> PState {
 
 /// Appends a node to the arena; its index is the old length.
 pub open spec fn add_node(st: PState, n: Node, h: u64) -> PR {
-    let idx = st.nodes.len() as usize;
-    let st2 = PState { cur: st.cur, depth: st.depth, last_line: st.last_line, loop_depth: st.loop_depth, in_function: st.in_function, ext: st.ext, nodes: st.nodes.push(n) };
+    let idx = arena_len(st.nodes);
+    let st2 = PState { cur: st.cur, depth: st.depth, last_line: st.last_line, loop_depth: st.loop_depth, in_function: st.in_function, ext: st.ext, nodes: arena_push(st.nodes, n) };
     pr_node(st2, idx, h)
 }
 
@@ -543,7 +544,7 @@ pub open spec fn p_expr_stmt(toks: Seq<Token>, cfg: PCfg, st: PState, fuel: u64)
         let r = p_relational(toks, cfg, st, (fuel - 1) as u64);
         if !r.ok { r }
         else {
-            let is_rel = r.node < r.st.nodes.len() && r.st.nodes[r.node as int] is Rel;
+            let is_rel = r.node < arena_len(r.st.nodes) && arena_at(r.st.nodes, r.node) is Rel;
             let st2 = if is_rel { extension(toks, cfg, r.st, comparison_msg()) } else { r.st };
             add_node(st2, Node::ExprStmt(r.node), 0u64)
         }
@@ -1073,7 +1074,7 @@ pub open spec fn p_arg_list(toks: Seq<Token>, cfg: PCfg, st: PState, acc: Seq<Ar
 
 /// Parses a unit: `Parser::try_new` and `try_parse_program`. `list` holds the items.
 pub open spec fn parse_unit(toks: Seq<Token>, cfg: PCfg) -> PR {
-    let st0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: seq![] };
+    let st0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: arena_empty() };
     if lex_error_at(toks, 0usize) { lex_err(st0, token_at(toks, 0usize)) }
     else { p_program(toks, cfg, st0, seq![], 0x4000_0000_0000_0000u64) }
 }

@@ -191,7 +191,7 @@ pub open spec fn leave(f: Func, s: Saved, x: ER) -> ER {
 
 /// The rest of a call once its arguments are known.
 pub open spec fn after_args(f: Func, a: ArgsR) -> ER {
-    if !a.r.ok { a.r } else { leave(f, saved_of(a.r.st), bs_body(f.nodes, f.body, enter(f, a.vals, a.r.st))) }
+    if !a.r.ok { a.r } else { leave(f, saved_of(a.r.st), bs_body(f.nodes.s, f.body, enter(f, a.vals, a.r.st))) }
 }
 
 pub open spec fn bin_r(op: u8, a: Num, x: ER) -> ER {
@@ -585,9 +585,9 @@ pub proof fn lemma_step_call(nodes: Seq<Node>, n: usize, name: Seq<u8>, args: Se
     if a.r.ok {
         let s3 = enter(g, a.vals, a.r.st);
         assert(h > 0);
-        let r = exec_body(g.nodes, g.body, s3, (h - 1) as u64);
+        let r = exec_body(g.nodes.s, g.body, s3, (h - 1) as u64);
         assert(done(r));
-        lemma_bs_body(g.nodes, g.body, s3, (h - 1) as u64);
+        lemma_bs_body(g.nodes.s, g.body, s3, (h - 1) as u64);
     }
 }
 

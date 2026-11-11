@@ -142,4 +142,34 @@ pub open spec fn write_wrapped(out: Seq<u8>, col: u64, s: Seq<u8>) -> (Seq<u8>, 
 
 } // exec_spec_verified!
 
+/// `write_wrapped` appends to `out` what it writes from an empty output, and ends at the same
+/// column; `print` is defined this way.
+pub proof fn lemma_write_wrapped_append(out: Seq<u8>, col: u64, s: Seq<u8>)
+    ensures
+        write_wrapped(out, col, s) == (out.add(write_wrapped(Seq::empty(), col, s).0), write_wrapped(Seq::empty(), col, s).1),
+    decreases s.len(),
+{
+    let e = Seq::<u8>::empty();
+    if s.len() == 0 {
+        assert(out.add(e) =~= out);
+    } else {
+        let c = s[0];
+        let rest = s.drop_first();
+        let (o1, p1, c1) = if c == 10u8 {
+            (out.push(10u8), e.push(10u8), 0u64)
+        } else if 0x80 <= c && c <= 0xbf {
+            (out.push(c), e.push(c), col)
+        } else if col >= 68 {
+            (out.push(92u8).push(10u8).push(c), e.push(92u8).push(10u8).push(c), 1u64)
+        } else {
+            (out.push(c), e.push(c), (col + 1) as u64)
+        };
+        lemma_write_wrapped_append(o1, c1, rest);
+        lemma_write_wrapped_append(p1, c1, rest);
+        let w = write_wrapped(e, c1, rest).0;
+        assert(o1 =~= out.add(p1));
+        assert(o1.add(w) =~= out.add(p1.add(w)));
+    }
+}
+
 } // verus!

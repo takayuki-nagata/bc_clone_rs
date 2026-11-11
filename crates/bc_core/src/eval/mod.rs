@@ -263,7 +263,7 @@ pub(crate) open spec fn r_args_result(r: Result<Vec<(String, ArgValue)>, BcError
 
 /// The output streams as written so far.
 pub(crate) open spec fn r_output(out: WrappedStdout, err: ErrWriter, st: EState) -> bool {
-    out_log(&out) == st.out && out_col(&out) == st.col && err_log(&err) == st.err
+    out_log(&out) == st.out.s && out_col(&out) == st.col && err_log(&err) == st.err.s
 }
 
 /// The whole evaluator state corresponds to the specification's `EState` (without `-l`).

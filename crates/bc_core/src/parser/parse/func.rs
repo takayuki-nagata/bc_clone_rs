@@ -9,7 +9,7 @@ verus! {
 
 spec fn r_plist(r: Result<Vec<Param>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
-        Ok(l) => p.ok && r_p(q, toks, cfg, p.st) && p.st.nodes == s0.nodes && p.st.cur >= s0.cur && p.st.depth == s0.depth && r_params(l@, p.params),
+        Ok(l) => p.ok && r_p(q, toks, cfg, p.st) && p.st.nodes.s == s0.nodes.s && p.st.cur >= s0.cur && p.st.depth == s0.depth && r_params(l@, p.params),
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
@@ -58,7 +58,7 @@ impl Parser {
         loop
             invariant
                 r_p(*self, toks, cfg, cur),
-                cur.nodes == st.nodes,
+                cur.nodes.s == st.nodes.s,
                 cur.cur >= st.cur,
                 cur.depth == st.depth,
                 r_params(lst@, acc),
@@ -322,9 +322,9 @@ impl Parser {
             r_params(params@, sparams),
         ensures
             match r.0 {
-                Ok(x) => r.1@.ok && r.1@.flag && r_p(*final(self), toks, cfg, r.1@.st) && extends(st.nodes, r.1@.st.nodes) && r.1@.st.cur > st.cur
-                    && r.1@.st.nodes.len() - st.nodes.len() <= 2 * (r.1@.st.cur - st.cur) && r.1@.st.depth == st.depth
-                    && x == r.1@.node && x < r.1@.st.nodes.len(),
+                Ok(x) => r.1@.ok && r.1@.flag && r_p(*final(self), toks, cfg, r.1@.st) && extends(st.nodes.s, r.1@.st.nodes.s) && r.1@.st.cur > st.cur
+                    && r.1@.st.nodes.s.len() - st.nodes.s.len() <= 2 * (r.1@.st.cur - st.cur) && r.1@.st.depth == st.depth
+                    && x == r.1@.node && x < r.1@.st.nodes.s.len(),
                 Err(x) => r_perr(x, final(self).extension_uses@, r.1@),
             },
             forall|f: u64| #![trigger p_function_body(toks, cfg, st, sname, sparams, f)] pdone(p_function_body(toks, cfg, st, sname, sparams, f)) ==> p_function_body(toks, cfg, st, sname, sparams, f) == r.1@,
@@ -398,9 +398,9 @@ impl Parser {
             r_params(autos@, sautos),
         ensures
             match r.0 {
-                Ok(x) => r.1@.ok && r.1@.flag && r_p(*final(self), toks, cfg, r.1@.st) && extends(st.nodes, r.1@.st.nodes) && r.1@.st.cur > st.cur
-                    && r.1@.st.nodes.len() - st.nodes.len() <= 2 * (r.1@.st.cur - st.cur) && r.1@.st.depth == st.depth
-                    && x == r.1@.node && x < r.1@.st.nodes.len(),
+                Ok(x) => r.1@.ok && r.1@.flag && r_p(*final(self), toks, cfg, r.1@.st) && extends(st.nodes.s, r.1@.st.nodes.s) && r.1@.st.cur > st.cur
+                    && r.1@.st.nodes.s.len() - st.nodes.s.len() <= 2 * (r.1@.st.cur - st.cur) && r.1@.st.depth == st.depth
+                    && x == r.1@.node && x < r.1@.st.nodes.s.len(),
                 Err(x) => r_perr(x, final(self).extension_uses@, r.1@),
             },
             forall|f: u64| #![trigger p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)] pdone(p_function_stmts(toks, cfg, st, sname, sparams, sautos, f)) ==> p_function_stmts(toks, cfg, st, sname, sparams, sautos, f) == r.1@,

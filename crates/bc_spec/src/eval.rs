@@ -49,7 +49,7 @@ pub struct Func {
     pub params: Seq<Param>,
     pub autos: Seq<Param>,
     pub body: Seq<usize>,
-    pub nodes: Seq<Node>,
+    pub nodes: Code,
 }
 
 pub struct EState {
@@ -59,8 +59,8 @@ pub struct EState {
     pub scale: u32,
     pub ibase: u32,
     pub obase: u32,
-    pub out: Seq<u8>,
-    pub err: Seq<u8>,
+    pub out: Bytes,
+    pub err: Bytes,
     pub col: u64,
     pub brk: bool,
     pub ret: bool,
@@ -177,11 +177,11 @@ pub open spec fn with_regs(st: EState, scale: u32, ibase: u32, obase: u32) -> ES
     EState { vars: st.vars, arrays: st.arrays, funcs: st.funcs, scale: scale, ibase: ibase, obase: obase, out: st.out, err: st.err, col: st.col, brk: st.brk, ret: st.ret, ret_val: st.ret_val, calls: st.calls, depth: st.depth, max_depth: st.max_depth, has_inv: st.has_inv, inv_ibase: st.inv_ibase }
 }
 
-pub open spec fn with_out(st: EState, out: Seq<u8>, col: u64) -> EState {
+pub open spec fn with_out(st: EState, out: Bytes, col: u64) -> EState {
     EState { vars: st.vars, arrays: st.arrays, funcs: st.funcs, scale: st.scale, ibase: st.ibase, obase: st.obase, out: out, err: st.err, col: col, brk: st.brk, ret: st.ret, ret_val: st.ret_val, calls: st.calls, depth: st.depth, max_depth: st.max_depth, has_inv: st.has_inv, inv_ibase: st.inv_ibase }
 }
 
-pub open spec fn with_err(st: EState, err: Seq<u8>) -> EState {
+pub open spec fn with_err(st: EState, err: Bytes) -> EState {
     EState { vars: st.vars, arrays: st.arrays, funcs: st.funcs, scale: st.scale, ibase: st.ibase, obase: st.obase, out: st.out, err: err, col: st.col, brk: st.brk, ret: st.ret, ret_val: st.ret_val, calls: st.calls, depth: st.depth, max_depth: st.max_depth, has_inv: st.has_inv, inv_ibase: st.inv_ibase }
 }
 
@@ -199,13 +199,13 @@ pub open spec fn with_call(st: EState, calls: NameStack, has_inv: bool, inv_ibas
 
 /// Writes to standard output through the wrapping writer.
 pub open spec fn print(st: EState, s: Seq<u8>) -> EState {
-    let w = write_wrapped(st.out, st.col, s);
-    with_out(st, w.0, w.1)
+    let w = write_wrapped(seq![], st.col, s);
+    with_out(st, bytes_add(st.out, w.0), w.1)
 }
 
 /// `Runtime warning (func=<f>): <msg>` on standard error.
 pub open spec fn warn(st: EState, msg: Seq<u8>) -> EState {
-    with_err(st, st.err.add(seq![82u8, 117, 110, 116, 105, 109, 101, 32, 119, 97, 114, 110, 105, 110, 103, 32, 40, 102, 117, 110, 99, 61]).add(current_func(st)).add(seq![41u8, 58, 32]).add(msg).push(10u8))
+    with_err(st, bytes_push(bytes_add(bytes_add(bytes_add(bytes_add(st.err, seq![82u8, 117, 110, 116, 105, 109, 101, 32, 119, 97, 114, 110, 105, 110, 103, 32, 40, 102, 117, 110, 99, 61]), current_func(st)), seq![41u8, 58, 32]), msg), 10u8))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -806,7 +806,7 @@ pub open spec fn run_call(f: Func, vals: Seq<ArgVal>, st: EState, fuel: u64) -> 
         let st1 = push_autos(push_args(st, vals), f.autos);
         let st2 = with_flags(st1, st1.brk, false, zero_num());
         let st3 = with_call(st2, names_push(st2.calls, f.name), true, st2.ibase);
-        let r = exec_body(f.nodes, f.body, st3, (fuel - 1) as u64);
+        let r = exec_body(f.nodes.s, f.body, st3, (fuel - 1) as u64);
         if !r.ok {
             ER { ok: false, err: in_function(r.err, f.name), st: leave_call(r.st, f, s), val: zero_num() }
         } else {
@@ -918,7 +918,7 @@ pub open spec fn exec_for(nodes: Seq<Node>, i: usize, c: usize, p: usize, b: usi
 
 /// A function definition, which takes effect when executed.
 pub open spec fn exec_define(nodes: Seq<Node>, name: Seq<u8>, params: Seq<Param>, autos: Seq<Param>, body: Seq<usize>, st: EState) -> ER {
-    let func = Func { name: name, params: params, autos: autos, body: body, nodes: nodes };
+    let func = Func { name: name, params: params, autos: autos, body: body, nodes: code_of(nodes) };
     er_ok(with_funcs(st, define_func(st.funcs, func, seq![])), zero_num())
 }
 

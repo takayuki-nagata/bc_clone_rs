@@ -50,6 +50,7 @@ impl Evaluator {
         }
         match &code.nodes[n] {
             PNode::Str(t) => {
+                proof { bc_spec::output::lemma_write_wrapped_append(out_log(&self.stdout_writer), out_col(&self.stdout_writer), t@); }
                 self.stdout_writer.write_bytes(t.as_slice());
                 self.stdout_writer.flush_out();
                 proof {
@@ -92,7 +93,7 @@ impl Evaluator {
                     if hyp {
                         match nodes[n as int] {
                             Node::Define(sname, ps, autos, body) => {
-                                let g = Func { name: sname, params: ps, autos: autos, body: body, nodes: nodes };
+                                let g = Func { name: sname, params: ps, autos: autos, body: body, nodes: bc_spec::eval::code_of(nodes) };
                                 assert(r_func(gfd, g));
                                 lemma_r_funcs_define(m, st.funcs, *name, gfd, g);
                             },

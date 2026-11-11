@@ -92,7 +92,7 @@ impl Evaluator {
                 assert(self.functions@.contains_key(*name));
                 assert(r_func(fd, gf));
                 lemma_find_func_index(g.s.funcs, sname);
-                assert(r_node(fd.code.nodes@[fd.def as int], gf.nodes[fd.def as int]));
+                assert(r_node(fd.code.nodes@[fd.def as int], gf.nodes.s[fd.def as int]));
             }
         }
         if fd.def >= fd.code.nodes.len() {
@@ -147,7 +147,7 @@ impl Evaluator {
         let mut i = i0;
         let mut vals = vals0;
         let ghost mut acc = acc0;
-        proof { if hyp { assert(r_node(code.nodes@[n as int], nodes[n as int])); assert(r_node(fd.code.nodes@[fd.def as int], gf.nodes[fd.def as int])); } }
+        proof { if hyp { assert(r_node(code.nodes@[n as int], nodes[n as int])); assert(r_node(fd.code.nodes@[fd.def as int], gf.nodes.s[fd.def as int])); } }
         if n >= code.nodes.len() || fd.def >= fd.code.nodes.len() {
             return (Step::Ret(Ok(BCNum::zero())), Ghost(g));
         }
@@ -200,7 +200,7 @@ impl Evaluator {
                         lemma_args_end(nodes, a, p, g.s, acc);
                         assert(r_argvals(vals@, acc));
                         assert(call_named(*code, n, gf.name));
-                        assert(parent == leave(gf, saved_of(g.s), bs_body(gf.nodes, gf.body, enter(gf, acc, g.s))));
+                        assert(parent == leave(gf, saved_of(g.s), bs_body(gf.nodes.s, gf.body, enter(gf, acc, g.s))));
                         assert(den(g.ks, parent) == goal);
                         assert(r_mframes(frames@, g.ks, *code, nodes));
                         assert(r_state(*self, g.s));
@@ -294,14 +294,14 @@ impl Evaluator {
             step_ok(r.0, final(frames)@, cx.d0),
             (r_rc(*code, cx.nodes) && r_state(*old(self), g.s) && r_mframes(old(frames)@, g.ks, *code, cx.nodes) && done(cx.goal)
                 && r_func(fd, gf) && r_argvals(vals@, acc) && n < code.nodes@.len() && call_named(*code, n, gf.name)
-                && den(g.ks, leave(gf, saved_of(g.s), bs_body(gf.nodes, gf.body, enter(gf, acc, g.s)))) == cx.goal)
+                && den(g.ks, leave(gf, saved_of(g.s), bs_body(gf.nodes.s, gf.body, enter(gf, acc, g.s)))) == cx.goal)
                 ==> m_step(*final(self), final(frames)@, *code, cx.nodes, r.0, r.1@, cx.goal, cx.d0),
     {
         let ghost nodes = cx.nodes; let ghost goal = cx.goal; let ghost d0 = cx.d0;
         let ghost hyp = r_rc(*code, nodes) && r_state(*self, g.s) && r_mframes(frames@, g.ks, *code, nodes) && done(goal)
                 && r_func(fd, gf) && r_argvals(vals@, acc) && n < code.nodes@.len() && call_named(*code, n, gf.name)
-                && den(g.ks, leave(gf, saved_of(g.s), bs_body(gf.nodes, gf.body, enter(gf, acc, g.s)))) == goal;
-        proof { if hyp { assert(r_node(fd.code.nodes@[fd.def as int], gf.nodes[fd.def as int])); } }
+                && den(g.ks, leave(gf, saved_of(g.s), bs_body(gf.nodes.s, gf.body, enter(gf, acc, g.s)))) == goal;
+        proof { if hyp { assert(r_node(fd.code.nodes@[fd.def as int], gf.nodes.s[fd.def as int])); } }
         if n >= code.nodes.len() || fd.def >= fd.code.nodes.len() {
             return (Step::Ret(Ok(BCNum::zero())), Ghost(g));
         }
@@ -357,14 +357,14 @@ impl Evaluator {
             assert(frames@.drop_last() =~= f0);
             assert(frames_ok(frames@, self.eval_depth, d0));
             if hyp {
-                lemma_den_done(g.ks, leave(gf, sv, bs_body(gf.nodes, gf.body, s3)));
-                lemma_den_push(g.ks, k, bs_body(gf.nodes, gf.body, s3));
-                assert(r_call_frame(fv, k, callee, gf.nodes));
-                lemma_push_call(f0, g.ks, fv, k, *code, nodes, callee, gf.nodes);
+                lemma_den_done(g.ks, leave(gf, sv, bs_body(gf.nodes.s, gf.body, s3)));
+                lemma_den_push(g.ks, k, bs_body(gf.nodes.s, gf.body, s3));
+                assert(r_call_frame(fv, k, callee, gf.nodes.s));
+                lemma_push_call(f0, g.ks, fv, k, *code, nodes, callee, gf.nodes.s);
                 assert(gf.body.skip(0) =~= gf.body);
             }
         }
-        (Step::Enter(callee, def), Ghost(MG { nodes: gf.nodes, ks: g.ks.push(k), s: s3, x: g.x }))
+        (Step::Enter(callee, def), Ghost(MG { nodes: gf.nodes.s, ks: g.ks.push(k), s: s3, x: g.x }))
     }
 
     /// The body of the function at node `def` from statement `i` on (the specification's
@@ -507,7 +507,7 @@ impl Evaluator {
         let ghost hyp = m_after(*self, frames@, *code, nodes, Frame::ArgVal(fd, n, i, vals), v, k, ks1, x, goal);
         let ghost (gf, acc, pname) = match k { K::ArgVal(_, f, _, _, nm, a) => (f, a, nm), _ => arbitrary() };
         let ghost sv = bc_spec::eval::ArgVal { is_array: false, name: pname, val: x.val, frame: bc_spec::eval::empty_frame() };
-        proof { if hyp { assert(r_node(fd.code.nodes@[fd.def as int], gf.nodes[fd.def as int])); } }
+        proof { if hyp { assert(r_node(fd.code.nodes@[fd.def as int], gf.nodes.s[fd.def as int])); } }
         let pn = if fd.def < fd.code.nodes.len() {
             match &fd.code.nodes[fd.def] {
                 PNode::Define(decl) => if i < decl.params.len() { decl.params[i].name.clone() } else { String::new() },

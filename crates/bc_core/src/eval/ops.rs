@@ -154,7 +154,7 @@ impl Evaluator {
                 if n > 0 {
                     assert(text_view(e0.call_stack@[n - 1]) == st.calls.s[st.calls.s.len() - 1]);
                 }
-                assert(err_log(&self.stderr_writer) =~= w.err);
+                assert(err_log(&self.stderr_writer) =~= w.err.s);
             }
         }
     }

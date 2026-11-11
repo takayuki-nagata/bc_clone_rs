@@ -22,7 +22,7 @@ use crate::refine::{r_code, r_err, text_view};
 use crate::verified_kernels::{verified_repl_block_scan, verified_unit_within_limit};
 use alloc::rc::Rc;
 #[cfg(verus_keep_ghost)]
-use bc_spec::eval::{EState, with_call, with_depth, with_err, with_flags};
+use bc_spec::eval::{EState, bytes_add, with_call, with_depth, with_err, with_flags};
 #[cfg(verus_keep_ghost)]
 use bc_spec::fuel::done;
 #[cfg(verus_keep_ghost)]
@@ -132,7 +132,7 @@ pub(crate) open spec fn r_ext(ext: Seq<(usize, String)>, sext: Seq<ExtUse>) -> b
 pub(crate) open spec fn r_parsed(parsed: Result<Vec<usize>, BcError>, ext: Seq<(usize, String)>, code: Code, p: PR) -> bool {
     &&& r_ext(ext, p.st.ext)
     &&& match parsed {
-        Ok(stmts) => p.ok && r_code(code, p.st.nodes) && stmts@ == p.list,
+        Ok(stmts) => p.ok && r_code(code, p.st.nodes.s) && stmts@ == p.list,
         Err(BcError::Quit) => !p.ok && p.err.quit,
         Err(BcError::Syntax { line, message, .. }) => !p.ok && !p.err.quit && p.err.line == line as u64
             && p.err.msg == text_view(message),
@@ -379,7 +379,7 @@ impl Evaluator {
         }
         let reject = matches!(policy, ExtensionPolicy::Reject);
         self.write_ext_diags(ext, source, first_line, reject, Ghost(p.st.ext));
-        let ghost st1 = with_err(st0, st0.err.add(ext_diags(p.st.ext, src, first, reject)));
+        let ghost st1 = with_err(st0, bytes_add(st0.err, ext_diags(p.st.ext, src, first, reject)));
         proof {
             if hyp {
                 assert(r_state(*self, st1));
@@ -398,10 +398,10 @@ impl Evaluator {
             Ok(stmts) => {
                 let ghost e1 = *self;
                 let code = Rc::new(code);
-                let r = self.exec_items_ref(&code, &stmts, Ghost(p.st.nodes), Ghost(p.list), Ghost(st1));
+                let r = self.exec_items_ref(&code, &stmts, Ghost(p.st.nodes.s), Ghost(p.list), Ghost(st1));
                 let ghost e_run = *self;
                 self.flush_stdout();
-                let ghost x = bc_spec::top::exec_items(p.st.nodes, p.list, st1, 0x4000_0000_0000_0000u64);
+                let ghost x = bc_spec::top::exec_items(p.st.nodes.s, p.list, st1, 0x4000_0000_0000_0000u64);
                 match r {
                     Ok(()) => {
                         proof {
@@ -429,7 +429,7 @@ impl Evaluator {
                                 assert(r_err(BcError::Runtime { kind, func }, x.err));
                                 let st2 = with_flags(x.st, false, false, x.st.ret_val);
                                 assert(r_state(e2, with_depth(st2, 0)));
-                                lemma_r_top(*self, with_err(st2, st2.err.add(bc_spec::top::runtime_diag(x.err))), 0);
+                                lemma_r_top(*self, with_err(st2, bytes_add(st2.err, bc_spec::top::runtime_diag(x.err))), 0);
                             }
                         }
                         UnitOutcome::Failed
@@ -458,7 +458,7 @@ impl Evaluator {
                 self.flush_stderr();
                 proof {
                     if hyp {
-                        lemma_r_top(*self, with_err(st1, st1.err.add(at_line(src, first, p.err.line)).add(p.err.msg).push(10u8)), 0);
+                        lemma_r_top(*self, with_err(st1, bc_spec::eval::bytes_push(bytes_add(bytes_add(st1.err, at_line(src, first, p.err.line)), p.err.msg), 10u8)), 0);
                     }
                 }
                 UnitOutcome::Failed
@@ -505,7 +505,7 @@ impl Evaluator {
                 ==> r_outcome(r, *final(self), rs, spec_run_unit(opts, rs, source.spec_bytes(), u)),
     {
         if !verified_unit_within_limit(unit.len()) {
-            let ghost e0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: seq![] };
+            let ghost e0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: bc_spec::eval::arena_empty() };
             let ghost p = pr_err(e0, PErr { quit: false, out_of_fuel: false, line: 1u64, msg: unit_too_long_msg() });
             let too_long = Err(BcError::Syntax { line: 1, message: unit_too_long_text() });
             let none = Vec::new();
@@ -515,7 +515,8 @@ impl Evaluator {
                 let st0 = with_call(with_depth(rs.st, 0u64), rs.st.calls, false, rs.st.inv_ibase);
                 let src = source.spec_bytes();
                 assert(ext_diags(e0.ext, src, first_line as u64, opts.reject_extensions) == Seq::<u8>::empty());
-                assert(st0.err.add(Seq::<u8>::empty()) =~= st0.err);
+                assert(st0.err.s.add(Seq::<u8>::empty()) =~= st0.err.s);
+                assert(bytes_add(st0.err, Seq::<u8>::empty()) == st0.err);
                 assert(with_err(st0, st0.err) == st0);
             }
             return r;

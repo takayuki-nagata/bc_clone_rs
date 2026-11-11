@@ -57,7 +57,7 @@ pub open spec fn initial(max_depth: u64) -> EState {
     EState {
         vars: seq![], arrays: seq![], funcs: seq![],
         scale: 0u32, ibase: 10u32, obase: 10u32,
-        out: seq![], err: seq![], col: 0u64,
+        out: bytes_empty(), err: bytes_empty(), col: 0u64,
         brk: false, ret: false, ret_val: zero_num(),
         calls: names_empty(), depth: 0u64, max_depth: max_depth, has_inv: false, inv_ibase: 10u32,
     }
@@ -111,7 +111,7 @@ pub open spec fn unit_too_long_msg() -> Seq<u8> {
 pub open spec fn run_unit(opts: Options, rs: RunState, source: Seq<u8>, u: Unit) -> RunState {
     if u.text.len() > 1000000000 {
         let st0 = with_call(with_depth(rs.st, 0u64), rs.st.calls, false, rs.st.inv_ibase);
-        failed(rs, with_err(st0, st0.err.add(at_line(source, u.line, 1u64)).add(unit_too_long_msg()).push(10u8)))
+        failed(rs, with_err(st0, bytes_push(bytes_add(bytes_add(st0.err, at_line(source, u.line, 1u64)), unit_too_long_msg()), 10u8)))
     } else {
         run_parsed_unit(opts, rs, source, u)
     }
@@ -127,7 +127,7 @@ pub open spec fn run_parsed_unit(opts: Options, rs: RunState, source: Seq<u8>, u
 pub open spec fn run_parse_result(opts: Options, rs: RunState, source: Seq<u8>, first: u64, p: PR) -> RunState {
     let st0 = with_call(with_depth(rs.st, 0u64), rs.st.calls, false, rs.st.inv_ibase);
     let reject = opts.reject_extensions;
-    let st1 = with_err(st0, st0.err.add(ext_diags(p.st.ext, source, first, reject)));
+    let st1 = with_err(st0, bytes_add(st0.err, ext_diags(p.st.ext, source, first, reject)));
     if p.err.out_of_fuel {
         RunState { st: st1, errors: rs.errors, quit: true, not_modeled: true }
     } else if reject && p.st.ext.len() > 0 && p.ok {
@@ -136,17 +136,17 @@ pub open spec fn run_parse_result(opts: Options, rs: RunState, source: Seq<u8>, 
         if p.err.quit {
             RunState { st: st1, errors: rs.errors, quit: true, not_modeled: false }
         } else {
-            failed(rs, with_err(st1, st1.err.add(at_line(source, first, p.err.line)).add(p.err.msg).push(10u8)))
+            failed(rs, with_err(st1, bytes_push(bytes_add(bytes_add(st1.err, at_line(source, first, p.err.line)), p.err.msg), 10u8)))
         }
     } else {
-        let r = exec_items(p.st.nodes, p.list, st1, 0x4000_0000_0000_0000u64);
+        let r = exec_items(arena_code(p.st.nodes).s, p.list, st1, 0x4000_0000_0000_0000u64);
         if r.ok {
             RunState { st: r.st, errors: rs.errors, quit: false, not_modeled: false }
         } else if r.err.out_of_fuel {
             RunState { st: r.st, errors: rs.errors, quit: true, not_modeled: true }
         } else {
             let st2 = with_flags(r.st, false, false, r.st.ret_val);
-            failed(rs, with_err(st2, st2.err.add(runtime_diag(r.err))))
+            failed(rs, with_err(st2, bytes_add(st2.err, runtime_diag(r.err))))
         }
     }
 }
@@ -174,7 +174,7 @@ pub open spec fn run_inputs(opts: Options, rs: RunState, inputs: Seq<Input>) -> 
 /// standard input): exit status 1 if any unit failed.
 pub open spec fn run(opts: Options, inputs: Seq<Input>) -> Outcome {
     let rs = run_inputs(opts, RunState { st: initial(opts.max_eval_depth), errors: 0u64, quit: false, not_modeled: false }, inputs);
-    Outcome { stdout: rs.st.out, stderr: rs.st.err, status: if rs.errors > 0 { 1u8 } else { 0u8 }, not_modeled: rs.not_modeled }
+    Outcome { stdout: bytes_seq(rs.st.out), stderr: bytes_seq(rs.st.err), status: if rs.errors > 0 { 1u8 } else { 0u8 }, not_modeled: rs.not_modeled }
 }
 
 } // exec_spec_verified!

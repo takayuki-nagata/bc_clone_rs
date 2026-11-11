@@ -175,9 +175,9 @@ spec fn r_p(p: Parser, toks: Seq<SToken>, cfg: PCfg, st: PState) -> bool {
 /// [`r_p`], possibly after the final `Eof` was consumed.
 spec fn r_pc(p: Parser, toks: Seq<SToken>, cfg: PCfg, st: PState) -> bool {
     &&& toks_wf(toks)
-    &&& r_nodes(p.nodes@, st.nodes)
+    &&& r_nodes(p.nodes@, st.nodes.s)
     &&& st.cur <= toks.len()
-    &&& st.nodes.len() <= 2 * st.cur
+    &&& st.nodes.s.len() <= 2 * st.cur
     &&& p.max_depth < usize::MAX - 2
     &&& p.lexer.inv()
     &&& p.lexer.text_len() <= 1_000_000_000
@@ -207,7 +207,7 @@ spec fn r_perr(e: BcError, ext: Seq<(usize, String)>, p: PR) -> bool {
 
 spec fn r_unit(r: Result<(), BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
-        Ok(()) => p.ok && r_p(q, toks, cfg, p.st) && p.st.nodes == s0.nodes && p.st.cur >= s0.cur && p.st.depth == s0.depth,
+        Ok(()) => p.ok && r_p(q, toks, cfg, p.st) && p.st.nodes.s == s0.nodes.s && p.st.cur >= s0.cur && p.st.depth == s0.depth,
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
@@ -270,7 +270,7 @@ impl Parser {
         ensures
             match r {
                 Ok(()) => s_eat(toks, st, Tok::Eof).ok && r_pc(*final(self), toks, cfg, s_eat(toks, st, Tok::Eof).st)
-                    && s_eat(toks, st, Tok::Eof).st.nodes == st.nodes && s_eat(toks, st, Tok::Eof).st.cur == st.cur + 1 && s_eat(toks, st, Tok::Eof).st.depth == st.depth,
+                    && s_eat(toks, st, Tok::Eof).st.nodes.s == st.nodes.s && s_eat(toks, st, Tok::Eof).st.cur == st.cur + 1 && s_eat(toks, st, Tok::Eof).st.depth == st.depth,
                 Err(x) => r_perr(x, final(self).extension_uses@, s_eat(toks, st, Tok::Eof)),
             },
     {
@@ -370,7 +370,7 @@ impl Parser {
             match r {
                 Ok(s) => s_eat_name(toks, cfg, st).ok && r_p(*final(self), toks, cfg, s_eat_name(toks, cfg, st).st)
                     && text_view(s) == s_eat_name(toks, cfg, st).name
-                    && s_eat_name(toks, cfg, st).st.nodes == st.nodes && s_eat_name(toks, cfg, st).st.cur >= st.cur,
+                    && s_eat_name(toks, cfg, st).st.nodes.s == st.nodes.s && s_eat_name(toks, cfg, st).st.cur >= st.cur,
                 Err(x) => r_perr(x, final(self).extension_uses@, s_eat_name(toks, cfg, st)),
             },
     {
@@ -406,7 +406,7 @@ impl Parser {
         loop
             invariant
                 r_p(*self, toks, cfg, cur),
-                cur.nodes == st.nodes,
+                cur.nodes.s == st.nodes.s,
                 cur.cur >= st.cur,
                 cur.depth == st.depth,
                 forall|f: u64| #![trigger p_skip_newlines(toks, st, f)] pdone(p_skip_newlines(toks, st, f)) ==>
@@ -473,15 +473,15 @@ proof fn lemma_skip_step(toks: Seq<SToken>, st: PState, cur: PState)
 
 /// The state `s` came after `s0` in an expression: the arena grew by at most one node per token.
 spec fn r_grown(s0: PState, s: PState) -> bool {
-    &&& extends(s0.nodes, s.nodes)
+    &&& extends(s0.nodes.s, s.nodes.s)
     &&& s.cur > s0.cur
-    &&& s.nodes.len() - s0.nodes.len() <= s.cur - s0.cur
+    &&& s.nodes.s.len() - s0.nodes.s.len() <= s.cur - s0.cur
     &&& s.depth == s0.depth
 }
 
 spec fn r_xres(r: Result<usize, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
-        Ok(x) => p.ok && r_p(q, toks, cfg, p.st) && r_grown(s0, p.st) && x == p.node && x < p.st.nodes.len(),
+        Ok(x) => p.ok && r_p(q, toks, cfg, p.st) && r_grown(s0, p.st) && x == p.node && x < p.st.nodes.s.len(),
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
@@ -530,23 +530,23 @@ impl Parser {
 
 /// The state `s` came after `s0` in a statement.
 spec fn r_sgrown(s0: PState, s: PState) -> bool {
-    &&& extends(s0.nodes, s.nodes)
+    &&& extends(s0.nodes.s, s.nodes.s)
     &&& s.cur > s0.cur
-    &&& s.nodes.len() - s0.nodes.len() <= 2 * (s.cur - s0.cur)
+    &&& s.nodes.s.len() - s0.nodes.s.len() <= 2 * (s.cur - s0.cur)
     &&& s.depth == s0.depth
 }
 
 spec fn r_sres(r: Result<usize, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
-        Ok(x) => p.ok && p.flag && r_p(q, toks, cfg, p.st) && r_sgrown(s0, p.st) && x == p.node && x < p.st.nodes.len(),
+        Ok(x) => p.ok && p.flag && r_p(q, toks, cfg, p.st) && r_sgrown(s0, p.st) && x == p.node && x < p.st.nodes.s.len(),
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
 }
 
 spec fn r_lres(r: Result<Vec<usize>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
-        Ok(l) => p.ok && r_p(q, toks, cfg, p.st) && extends(s0.nodes, p.st.nodes) && p.st.cur >= s0.cur
-            && p.st.nodes.len() - s0.nodes.len() <= 2 * (p.st.cur - s0.cur) && p.st.depth == s0.depth
+        Ok(l) => p.ok && r_p(q, toks, cfg, p.st) && extends(s0.nodes.s, p.st.nodes.s) && p.st.cur >= s0.cur
+            && p.st.nodes.s.len() - s0.nodes.s.len() <= 2 * (p.st.cur - s0.cur) && p.st.depth == s0.depth
             && l@ == p.list,
         Err(x) => r_perr(x, q.extension_uses@, p),
     }
@@ -600,7 +600,7 @@ pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: us
         pdone(parse_unit(tokenize(unit@), cfg)) ==> r_parsed(r.0, r.1@, r.2, parse_unit(tokenize(unit@), cfg)),
 {
     let ghost toks = tokenize(unit@);
-    let ghost st0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: seq![] };
+    let ghost st0 = PState { cur: 0usize, depth: 0u64, last_line: 1u64, loop_depth: 0u64, in_function: false, ext: seq![], nodes: bc_spec::eval::arena_empty() };
     let mut lexer = Lexer::new(unit);
     proof { lemma_tokenize_wf(unit@); lemma_rest_step(toks, 0); }
     let current_token = match lexer.try_get_next_token() {

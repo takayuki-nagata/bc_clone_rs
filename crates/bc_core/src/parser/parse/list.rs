@@ -10,10 +10,10 @@ verus! {
 /// `Parser::parse_input_item`: `flag` tells whether there is an item.
 spec fn r_ires(r: Result<Option<usize>, BcError>, q: Parser, toks: Seq<SToken>, cfg: PCfg, s0: PState, p: PR) -> bool {
     match r {
-        Ok(o) => p.ok && r_pc(q, toks, cfg, p.st) && extends(s0.nodes, p.st.nodes) && p.st.cur >= s0.cur
-            && p.st.nodes.len() - s0.nodes.len() <= 2 * (p.st.cur - s0.cur) && p.st.depth == s0.depth
+        Ok(o) => p.ok && r_pc(q, toks, cfg, p.st) && extends(s0.nodes.s, p.st.nodes.s) && p.st.cur >= s0.cur
+            && p.st.nodes.s.len() - s0.nodes.s.len() <= 2 * (p.st.cur - s0.cur) && p.st.depth == s0.depth
             && match o {
-                Some(x) => p.flag && x == p.node && x < p.st.nodes.len(),
+                Some(x) => p.flag && x == p.node && x < p.st.nodes.s.len(),
                 None => !p.flag,
             },
         Err(x) => r_perr(x, q.extension_uses@, p),
@@ -252,7 +252,7 @@ impl Parser {
             r_pc(*old(self), toks, cfg, st),
         ensures
             match r.0 {
-                Ok(l) => r.1@.ok && l@ == r.1@.list && r_nodes(final(self).nodes@, r.1@.st.nodes) && r_ext(final(self).extension_uses@, r.1@.st.ext),
+                Ok(l) => r.1@.ok && l@ == r.1@.list && r_nodes(final(self).nodes@, r.1@.st.nodes.s) && r_ext(final(self).extension_uses@, r.1@.st.ext),
                 Err(x) => r_perr(x, final(self).extension_uses@, r.1@),
             },
             forall|f: u64| #![trigger p_program(toks, cfg, st, seq![], f)] pdone(p_program(toks, cfg, st, seq![], f)) ==> p_program(toks, cfg, st, seq![], f) == r.1@,
@@ -264,9 +264,9 @@ impl Parser {
         loop
             invariant
                 r_pc(*self, toks, cfg, cur),
-                extends(st.nodes, cur.nodes),
-                st.nodes.len() <= 2 * st.cur,
-                cur.nodes.len() <= 2 * cur.cur,
+                extends(st.nodes.s, cur.nodes.s),
+                st.nodes.s.len() <= 2 * st.cur,
+                cur.nodes.s.len() <= 2 * cur.cur,
                 stmts@ == acc,
                 prog_chain(toks, cfg, st, cur, acc),
         {
@@ -420,11 +420,11 @@ impl Parser {
         loop
             invariant
                 r_p(*self, toks, cfg, cur),
-                extends(st.nodes, cur.nodes),
+                extends(st.nodes.s, cur.nodes.s),
                 cur.cur >= st.cur,
-                cur.nodes.len() - st.nodes.len() <= 2 * (cur.cur - st.cur),
+                cur.nodes.s.len() - st.nodes.s.len() <= 2 * (cur.cur - st.cur),
                 cur.depth == st.depth,
-                st.nodes.len() <= 2 * st.cur,
+                st.nodes.s.len() <= 2 * st.cur,
                 stmts@ == acc,
                 semi_chain(toks, cfg, st, cur, acc),
         {
@@ -530,11 +530,11 @@ impl Parser {
         loop
             invariant
                 r_p(*self, toks, cfg, cur),
-                extends(st.nodes, cur.nodes),
+                extends(st.nodes.s, cur.nodes.s),
                 cur.cur >= st.cur,
-                cur.nodes.len() - st.nodes.len() <= 2 * (cur.cur - st.cur),
+                cur.nodes.s.len() - st.nodes.s.len() <= 2 * (cur.cur - st.cur),
                 cur.depth == st.depth,
-                st.nodes.len() <= 2 * st.cur,
+                st.nodes.s.len() <= 2 * st.cur,
                 stmts@ == acc,
                 sl_chain(toks, cfg, st, cur, acc),
         {
