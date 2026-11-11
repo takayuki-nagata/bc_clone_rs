@@ -1288,6 +1288,22 @@ mod tests {
         assert_eq!(verified_zephyr_classify_char(b'~'), 4);
         assert_eq!(verified_zephyr_classify_char(0x1F), 0);
         assert_eq!(verified_zephyr_classify_char(0x80), 0);
+        assert_eq!(
+            verified_zephyr_repl_action(b'\n', 0, 4),
+            REPL_ACTION_EVAL_LINE
+        );
+        assert_eq!(verified_zephyr_repl_action(0x08, 0, 4), REPL_ACTION_NONE);
+        assert_eq!(
+            verified_zephyr_repl_action(0x7F, 1, 4),
+            REPL_ACTION_BACKSPACE
+        );
+        assert_eq!(verified_zephyr_repl_action(0x03, 4, 4), REPL_ACTION_CTRL_C);
+        assert_eq!(
+            verified_zephyr_repl_action(b'1', 3, 4),
+            REPL_ACTION_APPEND_CHAR
+        );
+        assert_eq!(verified_zephyr_repl_action(b'1', 4, 4), REPL_ACTION_NONE);
+        assert_eq!(verified_zephyr_repl_action(0x80, 0, 4), REPL_ACTION_NONE);
         assert_eq!(verified_lexer_advance_step(5, 10, false), (6, 10));
         assert_eq!(verified_lexer_advance_step(5, 10, true), (6, 11));
         assert_eq!(verified_decimal_scale_shift(2, 5), (3, true));

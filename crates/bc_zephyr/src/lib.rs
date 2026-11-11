@@ -12,7 +12,10 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
-use bc_core::verified_kernels::verified_zephyr_classify_char;
+use bc_core::verified_kernels::{
+    REPL_ACTION_APPEND_CHAR, REPL_ACTION_BACKSPACE, REPL_ACTION_CTRL_C, REPL_ACTION_EVAL_LINE,
+    verified_zephyr_repl_action,
+};
 use bc_core::{BcWriter, Evaluator, STDIN_SOURCE, UnitAccumulator, UnitOutcome};
 use core::cell::RefCell;
 use core::fmt::Write;
@@ -389,8 +392,8 @@ pub fn run_repl_with<G, P, S, W>(
         }
 
         let b = ch as u8;
-        match verified_zephyr_classify_char(b) {
-            1 => {
+        match verified_zephyr_repl_action(b, line_buf.len(), REPL_MAX_LINE) {
+            REPL_ACTION_EVAL_LINE => {
                 print_str("\r\n");
                 line_buf.push('\n');
                 // Lines are grouped into input units exactly as in the CLI, so multi-line
@@ -410,17 +413,17 @@ pub fn run_repl_with<G, P, S, W>(
                 }
                 print_str(if acc.is_pending() { "... " } else { "bc> " });
             }
-            2 if !line_buf.is_empty() => {
+            REPL_ACTION_BACKSPACE => {
                 line_buf.pop();
                 print_str("\x08 \x08");
             }
-            3 => {
+            REPL_ACTION_CTRL_C => {
                 line_buf.clear();
                 acc.clear();
                 print_str("^C\r\nbc> ");
             }
             // Characters beyond REPL_MAX_LINE are ignored so typing cannot exhaust the heap.
-            4 if line_buf.len() < REPL_MAX_LINE => {
+            REPL_ACTION_APPEND_CHAR => {
                 line_buf.push(b as char);
                 putc(b as char);
             }

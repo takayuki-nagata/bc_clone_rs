@@ -16,7 +16,10 @@ use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
-use bc_core::verified_kernels::verified_zephyr_classify_char;
+use bc_core::verified_kernels::{
+    REPL_ACTION_APPEND_CHAR, REPL_ACTION_BACKSPACE, REPL_ACTION_CTRL_C, REPL_ACTION_EVAL_LINE,
+    verified_zephyr_repl_action,
+};
 use bc_core::{BcWriter, Evaluator, STDIN_SOURCE, UnitAccumulator};
 use core::cell::RefCell;
 use core::fmt::Write;
@@ -297,8 +300,8 @@ fn main() -> ! {
         }
         let byte = rx_byte[0];
 
-        match verified_zephyr_classify_char(byte) {
-            1 => {
+        match verified_zephyr_repl_action(byte, line_buf.len(), REPL_MAX_LINE) {
+            REPL_ACTION_EVAL_LINE => {
                 print!("\r\n");
                 line_buf.push(b'\n');
                 // Lines are grouped into input units exactly as in the CLI. There is no
@@ -310,19 +313,19 @@ fn main() -> ! {
                 line_buf.clear();
                 print!("{}", if acc.is_pending() { "... " } else { "bc> " });
             }
-            2 if !line_buf.is_empty() => {
+            REPL_ACTION_BACKSPACE => {
                 // Backspace / Delete
                 line_buf.pop();
                 print!("\x08 \x08");
             }
-            3 => {
+            REPL_ACTION_CTRL_C => {
                 // Ctrl+C: Cancel current line and any pending multi-line unit
                 line_buf.clear();
                 acc.clear();
                 print!("^C\r\nbc> ");
             }
             // Characters beyond REPL_MAX_LINE are ignored so typing cannot exhaust the heap.
-            4 if line_buf.len() < REPL_MAX_LINE => {
+            REPL_ACTION_APPEND_CHAR => {
                 // Printable ASCII characters
                 line_buf.push(byte);
                 print!("{}", byte as char);

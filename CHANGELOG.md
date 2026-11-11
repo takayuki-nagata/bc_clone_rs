@@ -36,6 +36,10 @@ themselves are not proved. AGENTS.md lists what the proofs assume.
   number to decimal text (`length(2^3000000)`: five times as fast).
 
 ### Verification
+- The serial REPLs of Zephyr and the M5Stamp C3 choose their line-editing action with the
+  verified kernel `verified_zephyr_repl_action`, which proves that a backspace is chosen only for
+  a non-empty line and a character is appended only below the line limit. The Verus design models of the C-FFI copy (covered by the
+  Kani harness on the production `write_c_string`) and of the Zephyr line editor were removed.
 - The parsing of an input is proved against the specification, so that without `-l` the theorem now
   covers `Evaluator::run_source`, and by composition (`lemma_outcome`) a run from the initial state:
   the lexer (`tokenize`), the parser (`parse_unit`), the unit splitting (`split_units`) and each unit

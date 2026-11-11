@@ -256,6 +256,21 @@ fn proof_verified_math_eval_ffi_and_zephyr_kernels() {
     let ch: u8 = kani::any();
     let z_class = verified_zephyr_classify_char(ch);
     assert!(z_class <= 4);
+
+    let line_len: usize = kani::any();
+    let max_line: usize = kani::any();
+    let action = verified_zephyr_repl_action(ch, line_len, max_line);
+    assert!(action <= 4);
+    assert_eq!(action == REPL_ACTION_EVAL_LINE, z_class == 1);
+    assert_eq!(
+        action == REPL_ACTION_BACKSPACE,
+        z_class == 2 && line_len > 0
+    );
+    assert_eq!(action == REPL_ACTION_CTRL_C, z_class == 3);
+    assert_eq!(
+        action == REPL_ACTION_APPEND_CHAR,
+        z_class == 4 && line_len < max_line
+    );
 }
 
 /// Bit-precise verification of CLI argument classification and initial scale across symbolic slices.

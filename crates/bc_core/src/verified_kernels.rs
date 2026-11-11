@@ -116,6 +116,11 @@ dual_verified! {
     pub const CLI_ARG_OPT_W: u8 = 5;
     pub const CLI_ARG_END_OF_OPTIONS: u8 = 6;
     pub const CLI_ARG_OPT_CLUSTER: u8 = 7;
+    pub const REPL_ACTION_NONE: u8 = 0;
+    pub const REPL_ACTION_EVAL_LINE: u8 = 1;
+    pub const REPL_ACTION_BACKSPACE: u8 = 2;
+    pub const REPL_ACTION_CTRL_C: u8 = 3;
+    pub const REPL_ACTION_APPEND_CHAR: u8 = 4;
 
     /// Verified hexadecimal digit parser (`eval/` assignments to `ibase`/`obase`).
     ///
@@ -583,7 +588,7 @@ dual_verified! {
     /// - `3`: Ctrl+C interrupt (`0x03`)
     /// - `4`: Printable ASCII (`0x20..=0x7E`)
     /// - `0`: Ignored control/non-ASCII byte
-    pub fn verified_zephyr_classify_char(b: u8) -> (res: u8)
+    pub(crate) fn verified_zephyr_classify_char(b: u8) -> (res: u8)
         ensures [
             res <= 4,
             (b == 13 || b == 10) <==> res == 1,
@@ -602,6 +607,39 @@ dual_verified! {
             4
         } else {
             0
+        }
+    }
+
+    /// Verified line-editing action of the serial REPLs for byte `b` when the line holds
+    /// `line_len` bytes and accepts at most `max_line` (`bc_zephyr::run_repl_with` and the
+    /// M5Stamp C3 application, `examples/m5stamp_c3/src/bin/main.rs`).
+    ///
+    /// Returns one of the `REPL_ACTION_*` codes: `EVAL_LINE` (pass the line on, then clear it),
+    /// `BACKSPACE` (drop the last byte), `CTRL_C` (discard the line and the pending unit),
+    /// `APPEND_CHAR` (append and echo `b`), or `NONE`. A backspace is chosen only for a
+    /// non-empty line and a character is appended only below `max_line`. The callers pass the
+    /// line's length and only edit the line as the action says, which keeps it at most
+    /// `max_line` bytes (plus the newline they add before evaluating it).
+    pub fn verified_zephyr_repl_action(b: u8, line_len: usize, max_line: usize) -> (res: u8)
+        ensures [
+            res <= 4,
+            res == 1 <==> (b == 13 || b == 10),
+            res == 2 <==> ((b == 8 || b == 127) && line_len > 0),
+            res == 3 <==> b == 3,
+            res == 4 <==> (32 <= b && b <= 126 && line_len < max_line),
+        ]
+    {
+        let kind = verified_zephyr_classify_char(b);
+        if kind == 1 {
+            REPL_ACTION_EVAL_LINE
+        } else if kind == 2 && line_len > 0 {
+            REPL_ACTION_BACKSPACE
+        } else if kind == 3 {
+            REPL_ACTION_CTRL_C
+        } else if kind == 4 && line_len < max_line {
+            REPL_ACTION_APPEND_CHAR
+        } else {
+            REPL_ACTION_NONE
         }
     }
 

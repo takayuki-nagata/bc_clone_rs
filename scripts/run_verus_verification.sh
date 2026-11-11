@@ -7,7 +7,7 @@ set -euo pipefail
 # shellcheck source=scripts/verus_env.sh
 source "$(dirname "$0")/verus_env.sh"
 
-echo "=== Running Verus Formal Verification on bc_core (verus_proofs) ==="
+echo "=== Running Verus Formal Verification on bc_core ==="
 echo "Using Verus binary: $VERUS_BIN"
 "$VERUS_BIN" --version
 
