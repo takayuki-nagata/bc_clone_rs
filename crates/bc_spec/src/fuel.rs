@@ -275,7 +275,7 @@ pub proof fn lemma_run_call_mono(func: Func, vals: Seq<ArgVal>, st: EState, f: u
     if f > 0 {
         let st1 = push_autos(push_args(st, vals), func.autos);
         let st2 = with_flags(st1, st1.brk, false, zero_num());
-        let st3 = with_call(st2, st2.calls.push(func.name), true, st2.ibase);
+        let st3 = with_call(st2, names_push(st2.calls, func.name), true, st2.ibase);
         let r = exec_body(func.nodes, func.body, st3, (f - 1) as u64);
         // An error keeps whether it ran out of fuel when it is attributed to the function.
         assert(done(r));

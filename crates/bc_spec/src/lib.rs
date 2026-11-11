@@ -30,7 +30,11 @@
 //! - no `Map` fields: environments are association lists;
 //! - no typed `let`, no `&` expressions;
 //! - keep functions small: a large one can exceed the resource limit in its generated
-//!   equivalence proof, which `#[verifier::rlimit]` does not reach (split it, as `p_reg`).
+//!   equivalence proof, which `#[verifier::rlimit]` does not reach (split it, as `p_reg`);
+//! - the compiled code copies every field of a struct it builds, so a part of the state that
+//!   grows with the run uses a type of `persist.rs`, which the compiled code shares instead,
+//!   and only through that type's operations (its `exec_*` functions are written and
+//!   verified by hand there, with the contract the macro expects).
 //!
 //! Functions that are compiled with `exec_spec_unverified!` because their equivalence proof
 //! does not go through are listed here: (none yet).
@@ -59,6 +63,7 @@ pub mod lexer_lemmas;
 pub mod num;
 pub mod output;
 pub mod parser;
+pub mod persist;
 pub mod power;
 pub mod spec_num;
 pub mod top;

@@ -59,7 +59,7 @@ pub open spec fn initial(max_depth: u64) -> EState {
         scale: 0u32, ibase: 10u32, obase: 10u32,
         out: seq![], err: seq![], col: 0u64,
         brk: false, ret: false, ret_val: zero_num(),
-        calls: seq![], depth: 0u64, max_depth: max_depth, has_inv: false, inv_ibase: 10u32,
+        calls: names_empty(), depth: 0u64, max_depth: max_depth, has_inv: false, inv_ibase: 10u32,
     }
 }
 

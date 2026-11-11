@@ -152,7 +152,7 @@ impl Evaluator {
                 assert(sep@ == seq![41u8, 58, 32]);
                 assert(nl@ == seq![10u8]);
                 if n > 0 {
-                    assert(text_view(e0.call_stack@[n - 1]) == st.calls[st.calls.len() - 1]);
+                    assert(text_view(e0.call_stack@[n - 1]) == st.calls.s[st.calls.s.len() - 1]);
                 }
                 assert(err_log(&self.stderr_writer) =~= w.err);
             }
@@ -519,7 +519,7 @@ impl Evaluator {
                             assert(r_frames(ps, ss));
                             assert(r_frame(ps[ps.len() - 1]@, ss[ss.len() - 1]));
                             lemma_r_frame_set(ps.last()@, top, i, gval, x);
-                            let sn = bc_spec::eval::frame_op(ss, 0u8, nf);
+                            let sn = bc_spec::eval::frame_op(bc_spec::eval::FrameStack { s: ss }, 0u8, nf).s;
                             assert(sn == ss.drop_last().push(nf));
                             assert forall|j: int| 0 <= j < t.len() implies #[trigger] r_frame(t[j]@, sn[j]) by {
                                 if j < t.len() - 1 {

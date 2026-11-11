@@ -181,7 +181,7 @@ pub open spec fn saved_of(st: EState) -> Saved {
 pub open spec fn enter(f: Func, vals: Seq<ArgVal>, st: EState) -> EState {
     let st1 = push_autos(push_args(st, vals), f.autos);
     let st2 = with_flags(st1, st1.brk, false, zero_num());
-    with_call(st2, st2.calls.push(f.name), true, st2.ibase)
+    with_call(st2, names_push(st2.calls, f.name), true, st2.ibase)
 }
 
 pub open spec fn leave(f: Func, s: Saved, x: ER) -> ER {

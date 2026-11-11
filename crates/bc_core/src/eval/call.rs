@@ -437,7 +437,7 @@ impl Evaluator {
         core::mem::swap(&mut self.return_value, &mut ret);
         self.invocation_ibase = saved_inv;
         let ghost st1 = {
-            let calls = if st.calls.len() > 0 { st.calls.drop_last() } else { st.calls };
+            let calls = bc_spec::eval::names_pop(st.calls);
             let a = bc_spec::eval::with_call(st, calls, s.has_inv, s.inv_ibase);
             bc_spec::eval::with_flags(a, a.brk, s.ret, s.ret_val)
         };
@@ -445,7 +445,7 @@ impl Evaluator {
             if hyp {
                 if calls0.len() > 0 {
                     assert(self.call_stack@ =~= calls0.drop_last());
-                    assert forall|i: int| 0 <= i < self.call_stack@.len() implies #[trigger] text_view(self.call_stack@[i]) == st1.calls[i] by {
+                    assert forall|i: int| 0 <= i < self.call_stack@.len() implies #[trigger] text_view(self.call_stack@[i]) == st1.calls.s[i] by {
                         assert(self.call_stack@[i] == calls0[i]);
                     }
                 }

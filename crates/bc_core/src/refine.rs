@@ -231,7 +231,7 @@ pub open spec fn var_lookup(vars: Seq<VarBind>, name: Seq<u8>) -> Option<Seq<Num
     if vars.len() == 0 {
         None
     } else if vars[0].name == name {
-        Some(vars[0].stack)
+        Some(vars[0].stack.s)
     } else {
         var_lookup(vars.drop_first(), name)
     }
@@ -243,7 +243,7 @@ pub open spec fn arr_lookup(arrays: Seq<ArrBind>, name: Seq<u8>) -> Option<Seq<A
     if arrays.len() == 0 {
         None
     } else if arrays[0].name == name {
-        Some(arrays[0].stack)
+        Some(arrays[0].stack.s)
     } else {
         arr_lookup(arrays.drop_first(), name)
     }
@@ -537,14 +537,14 @@ pub proof fn lemma_elem_get(elems: Seq<Elem>, idx: u32)
 /// name starts with its global frame 0 (`var_update`).
 pub open spec fn upd_stack(found: Option<Seq<Num>>, op: u8, v: Num) -> Option<Seq<Num>> {
     match found {
-        Some(s) => Some(stack_op(s, op, v)),
-        None => if op == 2 { None } else { Some(stack_op(seq![zero_num()], op, v)) },
+        Some(s) => Some(stack_op(NumStack { s }, op, v).s),
+        None => if op == 2 { None } else { Some(stack_op(nstack_push(nstack_empty(), zero_num()), op, v).s) },
     }
 }
 
 pub proof fn lemma_var_lookup_push(acc: Seq<VarBind>, b: VarBind, k: Seq<u8>)
     ensures
-        var_lookup(acc.push(b), k) == if var_lookup(acc, k) is Some { var_lookup(acc, k) } else if b.name == k { Some(b.stack) } else { None },
+        var_lookup(acc.push(b), k) == if var_lookup(acc, k) is Some { var_lookup(acc, k) } else if b.name == k { Some(b.stack.s) } else { None },
     decreases acc.len(),
 {
     reveal_with_fuel(var_lookup, 2);
@@ -587,7 +587,7 @@ pub proof fn lemma_var_update(vars: Seq<VarBind>, nm: Seq<u8>, op: u8, v: Num, a
 {
     if vars.len() == 0 {
         if op != 2 {
-            lemma_var_lookup_push(acc, VarBind { name: nm, stack: stack_op(seq![zero_num()], op, v) }, k);
+            lemma_var_lookup_push(acc, VarBind { name: nm, stack: stack_op(nstack_push(nstack_empty(), zero_num()), op, v) }, k);
         }
     } else if vars[0].name == nm {
         let b = VarBind { name: nm, stack: stack_op(vars[0].stack, op, v) };
@@ -704,14 +704,14 @@ pub proof fn lemma_r_vars_update(m: Map<String, Vec<BCNum>>, m2: Map<String, Vec
 /// new name starts with its empty global frame (`arr_update`).
 pub open spec fn upd_frames(found: Option<Seq<ArrFrame>>, op: u8, v: ArrFrame) -> Option<Seq<ArrFrame>> {
     match found {
-        Some(s) => Some(frame_op(s, op, v)),
-        None => if op == 2 { None } else { Some(frame_op(seq![empty_frame()], op, v)) },
+        Some(s) => Some(frame_op(FrameStack { s }, op, v).s),
+        None => if op == 2 { None } else { Some(frame_op(fstack_push(fstack_empty(), empty_frame()), op, v).s) },
     }
 }
 
 pub proof fn lemma_arr_lookup_push(acc: Seq<ArrBind>, b: ArrBind, k: Seq<u8>)
     ensures
-        arr_lookup(acc.push(b), k) == if arr_lookup(acc, k) is Some { arr_lookup(acc, k) } else if b.name == k { Some(b.stack) } else { None },
+        arr_lookup(acc.push(b), k) == if arr_lookup(acc, k) is Some { arr_lookup(acc, k) } else if b.name == k { Some(b.stack.s) } else { None },
     decreases acc.len(),
 {
     reveal_with_fuel(arr_lookup, 2);
@@ -754,7 +754,7 @@ pub proof fn lemma_arr_update(arrays: Seq<ArrBind>, nm: Seq<u8>, op: u8, v: ArrF
 {
     if arrays.len() == 0 {
         if op != 2 {
-            lemma_arr_lookup_push(acc, ArrBind { name: nm, stack: frame_op(seq![empty_frame()], op, v) }, k);
+            lemma_arr_lookup_push(acc, ArrBind { name: nm, stack: frame_op(fstack_push(fstack_empty(), empty_frame()), op, v) }, k);
         }
     } else if arrays[0].name == nm {
         let b = ArrBind { name: nm, stack: frame_op(arrays[0].stack, op, v) };
@@ -1156,7 +1156,7 @@ pub proof fn lemma_leave_call_depth(st: EState, f: Func, s: Saved, d: u64)
     ensures
         leave_call(with_depth(st, d), f, s) == with_depth(leave_call(st, f, s), d),
 {
-    let calls = if st.calls.len() > 0 { st.calls.drop_last() } else { st.calls };
+    let calls = names_pop(st.calls);
     let st1 = with_call(st, calls, s.has_inv, s.inv_ibase);
     let st2 = with_flags(st1, st1.brk, s.ret, s.ret_val);
     let sd = with_depth(st, d);

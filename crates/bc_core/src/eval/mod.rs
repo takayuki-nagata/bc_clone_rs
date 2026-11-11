@@ -275,7 +275,7 @@ pub(crate) open spec fn r_state(e: Evaluator, st: EState) -> bool {
     &&& e.scale == st.scale && e.ibase == st.ibase && e.obase == st.obase
     &&& e.break_flag == st.brk && e.return_flag == st.ret && r_num(e.return_value, st.ret_val)
     &&& !e.quit_flag
-    &&& r_calls(e.call_stack@, st.calls)
+    &&& r_calls(e.call_stack@, st.calls.s)
     &&& e.eval_depth == st.depth && e.max_eval_depth == st.max_depth
     &&& match e.invocation_ibase {
         Some(b) => st.has_inv && b == st.inv_ibase,

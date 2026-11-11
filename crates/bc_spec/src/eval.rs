@@ -13,6 +13,8 @@ use crate::convert::*;
 use crate::num::*;
 use crate::output::*;
 use crate::parser::*;
+// The stack types are part of the state, so they are re-exported with it.
+pub use crate::persist::*;
 use crate::power::*;
 use vstd::contrib::exec_spec::*;
 use vstd::prelude::*;
@@ -23,7 +25,7 @@ exec_spec_verified! {
 
 pub struct VarBind {
     pub name: Seq<u8>,
-    pub stack: Seq<Num>,
+    pub stack: NumStack,
 }
 
 pub struct Elem {
@@ -38,7 +40,7 @@ pub struct ArrFrame {
 
 pub struct ArrBind {
     pub name: Seq<u8>,
-    pub stack: Seq<ArrFrame>,
+    pub stack: FrameStack,
 }
 
 /// A defined function, with the arena of the unit that defined it.
@@ -64,7 +66,7 @@ pub struct EState {
     pub ret: bool,
     pub ret_val: Num,
     /// Names of the executing functions, innermost last.
-    pub calls: Seq<Seq<u8>>,
+    pub calls: NameStack,
     pub depth: u64,
     pub max_depth: u64,
     /// `invocation_ibase`: `Some(inv_ibase)` inside a function.
@@ -128,7 +130,7 @@ pub open spec fn num_err_msg(e: NumErr) -> Seq<u8> {
 
 /// The name of the innermost executing function, or `(main)`.
 pub open spec fn current_func(st: EState) -> Seq<u8> {
-    if st.calls.len() > 0 { st.calls[st.calls.len() - 1] } else { seq![40u8, 109, 97, 105, 110, 41] }
+    if names_has(st.calls) { names_top(st.calls) } else { seq![40u8, 109, 97, 105, 110, 41] }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -191,7 +193,7 @@ pub open spec fn with_depth(st: EState, depth: u64) -> EState {
     EState { vars: st.vars, arrays: st.arrays, funcs: st.funcs, scale: st.scale, ibase: st.ibase, obase: st.obase, out: st.out, err: st.err, col: st.col, brk: st.brk, ret: st.ret, ret_val: st.ret_val, calls: st.calls, depth: depth, max_depth: st.max_depth, has_inv: st.has_inv, inv_ibase: st.inv_ibase }
 }
 
-pub open spec fn with_call(st: EState, calls: Seq<Seq<u8>>, has_inv: bool, inv_ibase: u32) -> EState {
+pub open spec fn with_call(st: EState, calls: NameStack, has_inv: bool, inv_ibase: u32) -> EState {
     EState { vars: st.vars, arrays: st.arrays, funcs: st.funcs, scale: st.scale, ibase: st.ibase, obase: st.obase, out: st.out, err: st.err, col: st.col, brk: st.brk, ret: st.ret, ret_val: st.ret_val, calls: calls, depth: st.depth, max_depth: st.max_depth, has_inv: has_inv, inv_ibase: inv_ibase }
 }
 
@@ -216,19 +218,18 @@ pub open spec fn var_get(vars: Seq<VarBind>, name: Seq<u8>) -> Num
 {
     if vars.len() == 0 { zero_num() }
     else if vars[0].name == name {
-        let s = vars[0].stack;
-        if s.len() > 0 { s[s.len() - 1] } else { zero_num() }
+        nstack_top(vars[0].stack)
     } else { var_get(vars.drop_first(), name) }
 }
 
 /// The new stack of a variable after `op` (0 set the top, 1 push, 2 pop) with `v`.
-pub open spec fn stack_op(s: Seq<Num>, op: u8, v: Num) -> Seq<Num> {
+pub open spec fn stack_op(s: NumStack, op: u8, v: Num) -> NumStack {
     if op == 0 {
-        if s.len() > 0 { s.drop_last().push(v) } else { s.push(v) }
+        if nstack_has(s) { nstack_push(nstack_pop(s), v) } else { nstack_push(s, v) }
     } else if op == 1 {
-        s.push(v)
+        nstack_push(s, v)
     } else {
-        if s.len() > 0 { s.drop_last() } else { s }
+        nstack_pop(s)
     }
 }
 
@@ -238,7 +239,7 @@ pub open spec fn var_update(vars: Seq<VarBind>, name: Seq<u8>, op: u8, v: Num, a
     decreases vars.len()
 {
     if vars.len() == 0 {
-        if op == 2 { acc } else { acc.push(VarBind { name: name, stack: stack_op(seq![zero_num()], op, v) }) }
+        if op == 2 { acc } else { acc.push(VarBind { name: name, stack: stack_op(nstack_push(nstack_empty(), zero_num()), op, v) }) }
     } else if vars[0].name == name {
         acc.push(VarBind { name: name, stack: stack_op(vars[0].stack, op, v) }).add(vars.drop_first())
     } else {
@@ -274,19 +275,18 @@ pub open spec fn arr_top(arrays: Seq<ArrBind>, name: Seq<u8>) -> ArrFrame
 {
     if arrays.len() == 0 { ArrFrame { elems: seq![] } }
     else if arrays[0].name == name {
-        let s = arrays[0].stack;
-        if s.len() > 0 { s[s.len() - 1] } else { ArrFrame { elems: seq![] } }
+        fstack_top(arrays[0].stack)
     } else { arr_top(arrays.drop_first(), name) }
 }
 
 /// The new stack of an array after `op` (0 set the top frame, 1 push, 2 pop) with `f`.
-pub open spec fn frame_op(s: Seq<ArrFrame>, op: u8, f: ArrFrame) -> Seq<ArrFrame> {
+pub open spec fn frame_op(s: FrameStack, op: u8, f: ArrFrame) -> FrameStack {
     if op == 0 {
-        if s.len() > 0 { s.drop_last().push(f) } else { s.push(f) }
+        if fstack_has(s) { fstack_push(fstack_pop(s), f) } else { fstack_push(s, f) }
     } else if op == 1 {
-        s.push(f)
+        fstack_push(s, f)
     } else {
-        if s.len() > 0 { s.drop_last() } else { s }
+        fstack_pop(s)
     }
 }
 
@@ -296,7 +296,7 @@ pub open spec fn arr_update(arrays: Seq<ArrBind>, name: Seq<u8>, op: u8, f: ArrF
     decreases arrays.len()
 {
     if arrays.len() == 0 {
-        if op == 2 { acc } else { acc.push(ArrBind { name: name, stack: frame_op(seq![empty_frame()], op, f) }) }
+        if op == 2 { acc } else { acc.push(ArrBind { name: name, stack: frame_op(fstack_push(fstack_empty(), empty_frame()), op, f) }) }
     } else if arrays[0].name == name {
         acc.push(ArrBind { name: name, stack: frame_op(arrays[0].stack, op, f) }).add(arrays.drop_first())
     } else {
@@ -767,8 +767,7 @@ pub struct Saved {
 /// `Evaluator::leave_call`: pops the call, restores the caller's return state and invocation
 /// `ibase`, and pops the `auto` frames and then the parameter frames.
 pub open spec fn leave_call(st: EState, f: Func, s: Saved) -> EState {
-    let calls = if st.calls.len() > 0 { st.calls.drop_last() } else { st.calls };
-    let st1 = with_call(st, calls, s.has_inv, s.inv_ibase);
+    let st1 = with_call(st, names_pop(st.calls), s.has_inv, s.inv_ibase);
     let st2 = with_flags(st1, st1.brk, s.ret, s.ret_val);
     pop_frames(pop_frames(st2, f.autos), f.params)
 }
@@ -806,7 +805,7 @@ pub open spec fn run_call(f: Func, vals: Seq<ArgVal>, st: EState, fuel: u64) -> 
         let s = Saved { ret: st.ret, ret_val: st.ret_val, has_inv: st.has_inv, inv_ibase: st.inv_ibase };
         let st1 = push_autos(push_args(st, vals), f.autos);
         let st2 = with_flags(st1, st1.brk, false, zero_num());
-        let st3 = with_call(st2, st2.calls.push(f.name), true, st2.ibase);
+        let st3 = with_call(st2, names_push(st2.calls, f.name), true, st2.ibase);
         let r = exec_body(f.nodes, f.body, st3, (fuel - 1) as u64);
         if !r.ok {
             ER { ok: false, err: in_function(r.err, f.name), st: leave_call(r.st, f, s), val: zero_num() }

@@ -330,13 +330,13 @@ impl Evaluator {
         let ghost calls1 = self.call_stack@;
         self.call_stack.push(name.clone());
         let ghost s2 = bc_spec::eval::with_flags(s1, s1.brk, false, bc_spec::eval::zero_num());
-        let ghost s3 = bc_spec::eval::with_call(s2, s2.calls.push(gf.name), true, s2.ibase);
+        let ghost s3 = bc_spec::eval::with_call(s2, bc_spec::eval::names_push(s2.calls, gf.name), true, s2.ibase);
         proof {
             if hyp {
                 lemma_push_args_keeps(s0, acc);
                 lemma_push_autos_keeps(sp, gf.autos);
-                assert(r_calls(self.call_stack@, s3.calls)) by {
-                    assert forall|i: int| 0 <= i < self.call_stack@.len() implies #[trigger] text_view(self.call_stack@[i]) == s3.calls[i] by {
+                assert(r_calls(self.call_stack@, s3.calls.s)) by {
+                    assert forall|i: int| 0 <= i < self.call_stack@.len() implies #[trigger] text_view(self.call_stack@[i]) == s3.calls.s[i] by {
                         if i < calls1.len() {
                             assert(self.call_stack@[i] == calls1[i]);
                         }
