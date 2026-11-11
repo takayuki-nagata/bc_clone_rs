@@ -18,10 +18,6 @@ use super::*;
 #[cfg(verus_keep_ghost)]
 use bc_spec::den::*;
 
-#[allow(
-    clippy::single_match,
-    reason = "a match arm that only updates ghost state is empty outside Verus"
-)]
 mod quick;
 use quick::*;
 mod expr;
@@ -619,6 +615,7 @@ impl Evaluator {
 
     /// With the value of a sub-computation of the frame `fr`.
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
     fn ret_ok(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, fr: Frame, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -778,7 +775,7 @@ impl Evaluator {
                     step = Step::Ret(res);
                 },
                 Step::Ret(res) => {
-                    if frames.len() == 0 {
+                    if frames.is_empty() {
                         proof {
                             if hyp {
                                 assert(g.ks =~= Seq::<K>::empty());

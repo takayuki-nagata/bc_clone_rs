@@ -27,14 +27,6 @@ compile_error!("verify bc_core with `cargo verus verify -p bc_core --features ve
 #[cfg(test)]
 extern crate std;
 
-#[allow(
-    clippy::assign_op_pattern,
-    clippy::derivable_impls,
-    clippy::len_zero,
-    clippy::single_match,
-    clippy::too_many_arguments,
-    reason = "the code keeps the forms that the proofs reason about"
-)]
 pub mod driver;
 pub mod error;
 pub mod eval;

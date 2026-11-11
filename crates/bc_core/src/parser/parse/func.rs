@@ -312,6 +312,7 @@ impl Parser {
 
     /// Parses the rest of a function definition after its parameter list.
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     fn parse_function_body(&mut self, name: String, name_bytes: &[u8], params: Vec<Param>, Ghost(sname): Ghost<GBytes>, Ghost(sparams): Ghost<GParams>, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
@@ -388,6 +389,7 @@ impl Parser {
 
     /// Parses the statements of a function body, with `in_function` set and no enclosing loop.
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     fn parse_function_stmts(&mut self, name: String, params: Vec<Param>, autos: Vec<Param>, Ghost(sname): Ghost<GBytes>, Ghost(sparams): Ghost<GParams>, Ghost(sautos): Ghost<GParams>, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),

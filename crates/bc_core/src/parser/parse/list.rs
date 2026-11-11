@@ -246,6 +246,7 @@ proof fn lemma_prog_next(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, 
 impl Parser {
     /// Parses the program fully, returning Err on lexical/syntax error or `"quit"`.
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::single_match, reason = "the other arm only updates ghost state, so it is empty outside Verus")]
     pub(super) fn parse_program_ref(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<usize>, BcError>, Ghost<GResult>))
         requires
             r_pc(*old(self), toks, cfg, st),
@@ -378,7 +379,7 @@ impl Parser {
                 return (Err(x), Ghost(e));
             },
         }
-        if lst.len() == 0 {
+        if lst.is_empty() {
             let ghost g = pr_ok(e.st);
             proof {
                 assert forall|f: u64| #![trigger p_input_item(toks, cfg, st, f)] pdone(p_input_item(toks, cfg, st, f)) implies p_input_item(toks, cfg, st, f) == g by {

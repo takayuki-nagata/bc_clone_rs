@@ -17,26 +17,7 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 use crate::refine::text_view;
 
-#[allow(
-    clippy::len_zero,
-    clippy::manual_range_contains,
-    clippy::manual_unwrap_or,
-    clippy::manual_unwrap_or_default,
-    clippy::question_mark,
-    clippy::vec_init_then_push,
-    reason = "the code keeps the forms that the proofs reason about"
-)]
 mod lexer;
-#[allow(
-    clippy::len_zero,
-    clippy::match_like_matches_macro,
-    clippy::needless_late_init,
-    clippy::question_mark,
-    clippy::single_match,
-    clippy::too_many_arguments,
-    clippy::type_complexity,
-    reason = "the code keeps the forms that the proofs reason about"
-)]
 mod parse;
 #[cfg(test)]
 pub(crate) mod test_tree;

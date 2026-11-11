@@ -250,6 +250,7 @@ impl Evaluator {
 
     /// `-e`, `length(e)`, `sqrt(e)` and `scale(e)`.
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn quick_unary(&mut self, code: &Rc<Code>, n: usize, which: u8, e: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
@@ -281,6 +282,7 @@ impl Evaluator {
     }
 
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn quick_binary(&mut self, code: &Rc<Code>, n: usize, op: BinOp, l: usize, r: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (res: Result<BCNum, BcError>)
         requires
             old(self).inv(),
@@ -319,6 +321,7 @@ impl Evaluator {
     }
 
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn quick_rel(&mut self, code: &Rc<Code>, n: usize, op: RelOp, l: usize, r: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (res: Result<BCNum, BcError>)
         requires
             old(self).inv(),
@@ -358,6 +361,7 @@ impl Evaluator {
 
     /// `=` and `op=` to a target that is not a subscript (the specification's `assign_to`).
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn quick_assign(&mut self, code: &Rc<Code>, n: usize, op: AssignOp, t: usize, v: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<BCNum, BcError>)
         requires
             old(self).inv(),
@@ -471,6 +475,7 @@ impl Evaluator {
     }
 
     /// Executes the statement at node `n` (the specification's `exec_node`).
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn quick_stmt(&mut self, code: &Rc<Code>, n: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),
@@ -723,6 +728,7 @@ impl Evaluator {
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::allow(decreases_when_exec_allows_no_decreases_clause)]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[allow(clippy::single_match, reason = "the other arm only updates ghost state, so it is empty outside Verus")]
     fn quick_loop(&mut self, code: &Rc<Code>, c: usize, p: Option<usize>, s: usize, b: u32, Ghost(nodes): Ghost<SpecNodes>, Ghost(st): Ghost<SpecState>) -> (r: Result<(), BcError>)
         requires
             old(self).inv(),

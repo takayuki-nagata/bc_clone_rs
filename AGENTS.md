@@ -184,6 +184,9 @@ section of `docs/MATH_ERROR_BOUNDS.md` in sync.
   tests. Every remaining exception is an `#[allow(..., reason = "...")]` that names the invariant
   justifying it (the Verus-proved casts in `verified_kernels.rs`, `math.rs` and `mathlib/`). Do not replace an `unwrap` with a silent default (`unwrap_or(0)`):
   return an error or derive the value so that no default is needed.
+- Clippy lints the code inside `verus!` as well (a normal build erases only the specifications
+  and proofs). Allow a style lint on the function that needs it, with its reason (Ghost
+  arguments, a binding used only by the proof, no `let` chains in Verus), not on a module.
 - Front ends must not rely on unwinding: `catch_unwind` does not work under `panic = "abort"` or on
   `wasm32-unknown-unknown`.
 - Errors are typed: `BcError` (`Quit`, `Syntax`, `Runtime { kind: RuntimeError, func }`) in

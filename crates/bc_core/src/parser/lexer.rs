@@ -442,10 +442,7 @@ impl Lexer {
         ensures
             r == (if self.pos + offset < self.text@.len() { self.text@[self.pos + offset] } else { 0u8 }),
     {
-        match self.peek(offset) {
-            Some(c) => c,
-            None => 0,
-        }
+        self.peek(offset).unwrap_or_default()
     }
 
     /// Advances the position by one byte, if there is one.
@@ -868,6 +865,7 @@ impl Lexer {
     }
 
     /// Scans the next token from input.
+    #[allow(clippy::manual_range_contains, reason = "the proof reasons about the two comparisons directly")]
     fn scan_token(&mut self) -> (r: Result<Token, BcError>)
         requires
             old(self).text@.len() <= 1_000_000_000 ==> old(self).core(),
@@ -910,8 +908,7 @@ impl Lexer {
             if t.len() >= 2 { assert(t[1] == next); }
         }
         if c == b'\n' {
-            let mut value = Vec::new();
-            value.push(c);
+            let value = alloc::vec![c];
             self.advance();
             let tok = Token { token_type: TokenType::Newline, value, line: self.line };
             proof {
@@ -1001,7 +998,7 @@ impl Lexer {
                 Err(e) => old(self).rest().len() == 1 && r_lex_err(e, old(self).rest()[0]),
             },
     {
-        if self.buffer.len() > 0 {
+        if !self.buffer.is_empty() {
             let ghost b = self.buffered();
             let ghost sr = self.scan_rest();
             let tok = self.buffer.remove(0);
@@ -1058,7 +1055,7 @@ impl Lexer {
     {
         let ghost whole = self.rest();
         let mut at_end = false;
-        if self.buffer.len() > 0 {
+        if !self.buffer.is_empty() {
             at_end = matches!(self.buffer[self.buffer.len() - 1].token_type, TokenType::Eof);
             proof {
                 let b = self.buffered();
@@ -1082,10 +1079,7 @@ impl Lexer {
             decreases offset + 1 - self.buffer@.len()
         {
             let ghost before = *self;
-            let x = match self.scan_token() {
-                Ok(t) => t,
-                Err(e) => return Err(e),
-            };
+            let x = self.scan_token()?;
             let ghost scanned = *self;
             let is_eof = matches!(x.token_type, TokenType::Eof);
             self.buffer.push(x);

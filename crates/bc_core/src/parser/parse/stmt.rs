@@ -49,6 +49,7 @@ fn return_paren_text() -> (r: String)
 
 impl Parser {
     /// Adds a statement's node to the arena (the specification's `add_node`).
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     pub(super) fn add_stmt(&mut self, pn: PNode, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(s0): Ghost<GState>, Ghost(s): Ghost<GState>, Ghost(n): Ghost<GNode>, Ghost(h): Ghost<u64>) -> (idx: usize)
         requires
             r_pc(*old(self), toks, cfg, s),

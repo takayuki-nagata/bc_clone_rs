@@ -132,7 +132,8 @@ fn kind_eq(a: TokenType, b: TokenType) -> (r: bool)
     ensures
         r == (tok_of(a) == tok_of(b)),
 {
-    match (a, b) {
+    matches!(
+        (a, b),
         (TokenType::Eof, TokenType::Eof) | (TokenType::Newline, TokenType::Newline) | (TokenType::Semicolon, TokenType::Semicolon)
         | (TokenType::Comma, TokenType::Comma) | (TokenType::Lparen, TokenType::Lparen) | (TokenType::Rparen, TokenType::Rparen)
         | (TokenType::Lbracket, TokenType::Lbracket) | (TokenType::Rbracket, TokenType::Rbracket) | (TokenType::Lbrace, TokenType::Lbrace)
@@ -143,9 +144,8 @@ fn kind_eq(a: TokenType, b: TokenType) -> (r: bool)
         | (TokenType::Break, TokenType::Break) | (TokenType::Define, TokenType::Define) | (TokenType::Ibase, TokenType::Ibase)
         | (TokenType::If, TokenType::If) | (TokenType::For, TokenType::For) | (TokenType::Length, TokenType::Length)
         | (TokenType::Obase, TokenType::Obase) | (TokenType::Quit, TokenType::Quit) | (TokenType::Return, TokenType::Return)
-        | (TokenType::Scale, TokenType::Scale) | (TokenType::Sqrt, TokenType::Sqrt) | (TokenType::While, TokenType::While) => true,
-        _ => false,
-    }
+        | (TokenType::Scale, TokenType::Scale) | (TokenType::Sqrt, TokenType::Sqrt) | (TokenType::While, TokenType::While)
+    )
 }
 
 /// A token sequence as `tokenize` produces it.
@@ -584,9 +584,13 @@ proof fn lemma_tokenize_wf(t: Seq<u8>)
     }
 }
 
+/// A parsed unit: its statements (indices into the arena) or its error, the uses of extensions
+/// (line and name), and the arena.
+pub(crate) type ParsedUnit = (Result<Vec<usize>, BcError>, Vec<(usize, String)>, Code);
+
 /// Parses a unit of at most `BC_UNIT_MAX` bytes: the statements or the error, and the extension
 /// uses, are those of the specification's `parse_unit`, unless the specification runs out of fuel.
-pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: usize, Ghost(cfg): Ghost<GCfg>) -> (r: (Result<Vec<usize>, BcError>, Vec<(usize, String)>, Code))
+pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: usize, Ghost(cfg): Ghost<GCfg>) -> (r: ParsedUnit)
     requires
         unit@.len() <= 1_000_000_000,
         max_depth < usize::MAX - 2,

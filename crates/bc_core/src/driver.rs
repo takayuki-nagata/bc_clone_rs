@@ -494,6 +494,7 @@ impl Evaluator {
     /// `run_unit`: the refinement theorem of one unit, against the specification's `run_unit`.
     /// A nesting limit that leaves no room to count is not a limit at all, and is lowered to one
     /// that is still out of reach.
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     pub(crate) fn run_unit_ref(&mut self, unit: &[u8], source: &str, first_line: usize, policy: ExtensionPolicy, limit: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>, Ghost(u): Ghost<SpecUnit>) -> (r: UnitOutcome)
         requires
             old(self).inv(),
@@ -632,7 +633,7 @@ impl UnitAccumulator {
             line@.len() > 0 && old(self).next_ok(0) ==> acc_step(*old(self), *final(self), line@, r),
             forall|n: int| old(self).next_ok(n + 1) ==> final(self).next_ok(n),
     {
-        if self.buf.len() == 0 {
+        if self.buf.is_empty() {
             self.start_line = self.next_line;
         }
         let ghost before = self.buf@;
@@ -641,9 +642,9 @@ impl UnitAccumulator {
             if self.scanned > 0 { assert(self.buf@[self.scanned - 1] == before[self.scanned - 1]); }
             assert(self.buf@.subrange(0, self.scanned as int) =~= before.subrange(0, self.scanned as int));
         }
-        let ends_nl = line.len() > 0 && line[line.len() - 1] == b'\n';
+        let ends_nl = !line.is_empty() && line[line.len() - 1] == b'\n';
         if ends_nl && self.next_line < usize::MAX {
-            self.next_line = self.next_line + 1;
+            self.next_line += 1;
         }
         // Text beyond the limit is passed on as it is, and `run_unit` rejects it.
         if verified_unit_within_limit(self.buf.len()) {
@@ -716,7 +717,7 @@ impl UnitAccumulator {
         let mut out = Vec::new();
         core::mem::swap(&mut self.buf, &mut out);
         proof { assert(self.buf@.subrange(0, 0) =~= Seq::<u8>::empty()); }
-        if out.len() == 0 {
+        if out.is_empty() {
             None
         } else {
             Some((out, self.start_line))
@@ -911,7 +912,7 @@ impl UnitCursor {
                     forall|k: int| pos <= k < end - 1 ==> text@[k] != 10u8,
                 decreases text@.len() - end,
             {
-                end = end + 1;
+                end += 1;
             }
             let line = subslice(text, pos, end);
             let ghost b0 = self.acc.buf_view();
@@ -937,12 +938,9 @@ impl UnitCursor {
                 }
                 assert(a0.next_ok((text@.len() - end) + 1));
             }
-            match r {
-                Some(u) => {
-                    result = Some(u);
-                    found = true;
-                },
-                None => {},
+            if let Some(u) = r {
+                result = Some(u);
+                found = true;
             }
         }
         if !found {
@@ -1065,6 +1063,7 @@ impl Evaluator {
     }
 
     /// One step of the specification's `run_units` on the units of `text` not yet split off.
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     pub(crate) fn run_next_unit_ref(&mut self, text: &[u8], cur: &mut UnitCursor, source: &str, policy: ExtensionPolicy, limit: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>) -> (r: Option<UnitOutcome>)
         requires
             old(self).inv(),
@@ -1142,7 +1141,7 @@ impl Evaluator {
                         UnitOutcome::Completed => {},
                         UnitOutcome::Failed => {
                             if summary.errors < usize::MAX {
-                                summary.errors = summary.errors + 1;
+                                summary.errors += 1;
                             }
                         },
                         UnitOutcome::Quit => {

@@ -93,6 +93,7 @@ impl Evaluator {
     /// A form whose first sub-computation is node `child`.
     /// Evaluates `child` for the frame `f`: by the fast path when it can, else on a new frame.
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     pub(super) fn push_sub(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, f: Frame, child: usize, Ghost(k): Ghost<MK>, Ghost(g): Ghost<MG>, Ghost(parent): Ghost<MResult>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -133,6 +134,8 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn push_frame(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, f: Frame, child: usize, Ghost(k): Ghost<MK>, Ghost(g): Ghost<MG>, Ghost(parent): Ghost<MResult>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -171,6 +174,7 @@ impl Evaluator {
     /// One step of a form (the specification's `ev_node`).
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(30)]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn step_node(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -249,7 +253,9 @@ impl Evaluator {
 
     /// An assignment: its target, then its value.
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn step_assign(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, op: AssignOp, t: usize, v: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -378,7 +384,9 @@ impl Evaluator {
 
     /// `++`/`--`.
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn step_update(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, inc: bool, prefix: bool, t: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -610,6 +618,9 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_arrayidx(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, t: usize, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -637,6 +648,7 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     pub(super) fn ret_assignidx(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, t: usize, op: AssignOp, value: usize, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
@@ -674,7 +686,10 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_updateidx(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, t: usize, inc: bool, prefix: bool, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -712,6 +727,8 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_unary(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, which: u8, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -759,7 +776,9 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_binr(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: BinOp, a: BCNum, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -808,7 +827,9 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_relr(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, op: RelOp, a: BCNum, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -833,6 +854,8 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_store(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, place: Place, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -856,7 +879,9 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
     #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_opstore(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, place: Place, op: BinOp, a: BCNum, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),

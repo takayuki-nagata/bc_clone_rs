@@ -72,6 +72,8 @@ impl Evaluator {
 
     /// A form whose first sub-computation is the statement `child`.
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn push_sub_s(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, f: Frame, child: usize, Ghost(k): Ghost<MK>, Ghost(g): Ghost<MG>, Ghost(parent): Ghost<MResult>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -110,6 +112,7 @@ impl Evaluator {
     /// The statement at node `n` (the specification's `exec_node`).
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(30)]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn step_stmt(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -193,6 +196,7 @@ impl Evaluator {
     /// The statements of the block at node `n` from statement `i` on (the specification's
     /// `exec_list`).
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
     pub(super) fn list_next(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, i: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -236,6 +240,7 @@ impl Evaluator {
 
     /// One turn of a loop: the condition (the specification's `exec_loop`).
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     pub(super) fn loop_start(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, c: usize, p: Option<usize>, b: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -259,6 +264,8 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_exprstmt(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, e: usize, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -293,6 +300,8 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_return(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -315,6 +324,8 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_ifcond(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, b: usize, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -338,6 +349,7 @@ impl Evaluator {
     }
 
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     pub(super) fn ret_loopcond(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, c: usize, p: Option<usize>, b: usize, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),

@@ -41,6 +41,8 @@ impl Evaluator {
     /// A call (the specification's `ev_call`): the function, then its arguments.
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(30)]
+    #[allow(clippy::ptr_arg, reason = "the precondition states the call node as `PNode::Call(*name, *args)`")]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     pub(super) fn step_call(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, name: &String, args: &Vec<PArg>, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -126,6 +128,7 @@ impl Evaluator {
     /// then the call.
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(80)]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     fn args_next(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, fd: FunctionDef, i0: usize, vals0: Vec<(String, ArgValue)>, Ghost(gf): Ghost<SpecFunc>, Ghost(acc0): Ghost<SpecArgVals>, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -277,6 +280,8 @@ impl Evaluator {
     /// Enters the function with its arguments (the specification's `run_call`, up to its body).
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(40)]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     fn enter_call(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, fd: FunctionDef, vals: Vec<(String, ArgValue)>, Ghost(gf): Ghost<SpecFunc>, Ghost(acc): Ghost<SpecArgVals>, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -365,6 +370,7 @@ impl Evaluator {
     /// The body of the function at node `def` from statement `i` on (the specification's
     /// `exec_body`).
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
     pub(super) fn body_next(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, def: usize, i: usize, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -406,6 +412,9 @@ impl Evaluator {
     /// Leaves the function whose body gave the result `ret` (the specification's `leave`).
     #[verifier::exec_allows_no_decreases_clause]
     #[verifier::rlimit(30)]
+    #[allow(clippy::ptr_arg, reason = "every frame handler takes the machine's stack in the same form")]
+    #[allow(clippy::too_many_arguments, reason = "the caller's saved state, and the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
     pub(super) fn ret_call(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, caller: Rc<Code>, def: usize, name: String, saved_flag: bool, saved_inv: Option<usize>, saved_val: BCNum, ret: Result<BCNum, BcError>, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -479,6 +488,7 @@ impl Evaluator {
 
     /// With the value of a value argument (the frame `K::ArgVal`).
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::too_many_arguments, reason = "the fields of the frame, and the Ghost arguments of the refinement proof")]
     pub(super) fn ret_argval(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, fd: FunctionDef, n: usize, i: usize, vals: Vec<(String, ArgValue)>, v: BCNum, Ghost(pop): Ghost<MPop>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
@@ -529,7 +539,11 @@ impl Evaluator {
     /// A call of a `-l` function (no user function has the name): its arguments go on the stack.
     /// The specification does not model `-l`, so nothing relates these frames.
     #[verifier::exec_allows_no_decreases_clause]
-    fn math_start(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, name: &String, args: &Vec<PArg>, Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
+    #[allow(clippy::collapsible_if, reason = "Verus does not support `let` chains")]
+    #[allow(clippy::ptr_arg, reason = "the error clones the name as a `String`")]
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
+    #[cfg_attr(not(verus_keep_ghost), allow(unused_variables, reason = "used only by the proof, which a normal build erases"))]
+    fn math_start(&mut self, frames: &mut Vec<Frame>, code: &Rc<Code>, n: usize, name: &String, args: &[PArg], Ghost(g): Ghost<MG>, Ghost(cx): Ghost<MCx>) -> (r: (Step, Ghost<MG>))
         requires
             old(self).inv(),
             old(self).math_enabled,

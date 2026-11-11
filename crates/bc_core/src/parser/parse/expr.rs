@@ -49,6 +49,7 @@ fn infix_info(token_type: TokenType) -> (r: (i8, bool, i8))
 }
 
 /// The operator of a binary token.
+#[allow(clippy::len_zero, reason = "with `is_empty` here, `parse_primary` exceeds its rlimit")]
 fn bin_op(t: &Token) -> (r: BinOp)
     ensures
         bin_code(r) == binop_code(tok_view(*t)),
@@ -63,6 +64,7 @@ fn bin_op(t: &Token) -> (r: BinOp)
 }
 
 /// The operator of a relational token.
+#[allow(clippy::len_zero, reason = "with `is_empty` here, `parse_primary` exceeds its rlimit")]
 fn rel_op(t: &Token) -> (r: RelOp)
     ensures
         r_rel_code(r) == s_rel_code(tok_view(*t)),
@@ -84,6 +86,7 @@ fn assign_op(t: &Token) -> (r: AssignOp)
 }
 
 /// Whether an update token is `++`.
+#[allow(clippy::len_zero, reason = "with `is_empty` here, `parse_primary` exceeds its rlimit")]
 fn is_increment(t: &Token) -> (r: bool)
     ensures
         r == (tok_view(*t).text.len() > 0 && tok_view(*t).text[0] == 43u8),
@@ -122,6 +125,7 @@ proof fn lemma_rest_token(toks: Seq<SToken>, k: int, off: usize)
 
 impl Parser {
     /// Adds an expression's node to the arena (the specification's `add_node`).
+    #[allow(clippy::too_many_arguments, reason = "the Ghost arguments of the refinement proof")]
     fn add_expr(&mut self, pn: PNode, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(s0): Ghost<GState>, Ghost(s): Ghost<GState>, Ghost(n): Ghost<GNode>, Ghost(h): Ghost<u64>) -> (idx: usize)
         requires
             r_p(*old(self), toks, cfg, s),
@@ -1002,6 +1006,7 @@ impl Parser {
 
     /// Parses function call argument list; the height is that of the highest argument.
     #[verifier::exec_allows_no_decreases_clause]
+    #[allow(clippy::type_complexity, reason = "every parser function returns its result with the Ghost result of the specification")]
     fn parse_argument_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(Vec<PArg>, usize), BcError>, Ghost<GResult>))
         requires
             r_p(*old(self), toks, cfg, st),
@@ -1066,8 +1071,7 @@ impl Parser {
                 }
             }
             let ghost mut a = pr_ok(c);
-            let arg_h: usize;
-            if is_arr {
+            let arg_h: usize = if is_arr {
                 let ghost n = s_eat_name(toks, cfg, c);
                 let name = match self.eat_name(Ghost(toks), Ghost(cfg), Ghost(c)) {
                     Ok(x) => x,
@@ -1106,7 +1110,7 @@ impl Parser {
                 }
                 args.push(PArg::Array(name));
                 proof { assert(r_arg(args@.last(), Arg { is_array: is_arr, name: a.name, expr: a.node })); }
-                arg_h = 1;
+                1
             } else {
                 let (res, Ghost(v)) = self.parse_expr_precedence(0, Ghost(toks), Ghost(cfg), Ghost(c));
                 let (x, h) = match res {
@@ -1126,8 +1130,8 @@ impl Parser {
                 }
                 args.push(PArg::Expr(x));
                 proof { assert(r_arg(args@.last(), Arg { is_array: is_arr, name: a.name, expr: a.node })); }
-                arg_h = h;
-            }
+                h
+            };
             let ghost arg_s = Arg { is_array: is_arr, name: a.name, expr: a.node };
             let ghost a1 = a0.push(arg_s);
             let ghost h1 = max_u64(h0, a.h);
