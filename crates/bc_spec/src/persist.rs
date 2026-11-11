@@ -9,9 +9,12 @@
 //! shares their contents through `Rc`, so copying one is constant time. Their operations are
 //! `open spec fn`s whose compiled `exec_*` versions are written here by hand and verified with
 //! the contract that `exec_spec_verified!` expects (`res.deep_view() =~~= f(args.deep_view())`).
-//! The specification uses these types only through those operations.
+//! The specification uses these types only through those operations, except that it reads
+//! `Code::s` as a field: its compiled form is a slice of the shared vector, so the evaluator
+//! keeps its `Seq<Node>` parameters.
 
 use crate::eval::*;
+use crate::lexer::*;
 use crate::num::*;
 use crate::parser::*;
 use std::rc::Rc;
@@ -271,6 +274,100 @@ persistent_stack!(
     exec_names_top,
     exec_names_push,
     exec_names_pop
+);
+
+/// Adds to the stack type `$spec` of `persistent_stack!` the operation `$all` (all values,
+/// bottom first) and its compiled version `$xall`, for a stack used as a list that is built by
+/// pushing and read once at the end.
+macro_rules! stack_values {
+    ($spec:ident, $exec:ident, $elem:ty, $xelem:ty, $all:ident, $xall:ident) => {
+        verus! {
+
+        pub open spec fn $all(s: $spec) -> Seq<$elem> {
+            s.s
+        }
+
+        pub fn $xall(s: &$exec) -> (res: Vec<$xelem>)
+            ensures
+                res.deep_view() =~~= $all(s.deep_view()),
+        {
+            pnodes_to_vec(&s.top)
+        }
+
+        } // verus!
+    };
+}
+
+// The tokens of a unit as the lexer emits them (`lex_toks`).
+persistent_stack!(
+    TokStack,
+    ExecTokStack,
+    Token,
+    ExecToken,
+    &ExecToken,
+    Token {
+        kind: Tok::Eof,
+        text: Seq::empty(),
+        line: 0u64
+    },
+    ExecToken {
+        kind: ExecTok::Eof,
+        text: Vec::new(),
+        line: 0u64
+    },
+    toks_empty,
+    toks_has,
+    toks_top,
+    toks_push,
+    toks_pop,
+    exec_toks_empty,
+    exec_toks_has,
+    exec_toks_top,
+    exec_toks_push,
+    exec_toks_pop
+);
+stack_values!(
+    TokStack,
+    ExecTokStack,
+    Token,
+    ExecToken,
+    toks_all,
+    exec_toks_all
+);
+
+// The units of an input as they are split off (`split_units_into`).
+persistent_stack!(
+    UnitStack,
+    ExecUnitStack,
+    Unit,
+    ExecUnit,
+    &ExecUnit,
+    Unit {
+        text: Seq::empty(),
+        line: 0u64
+    },
+    ExecUnit {
+        text: Vec::new(),
+        line: 0u64
+    },
+    units_empty,
+    units_has,
+    units_top,
+    units_push,
+    units_pop,
+    exec_units_empty,
+    exec_units_has,
+    exec_units_top,
+    exec_units_push,
+    exec_units_pop
+);
+stack_values!(
+    UnitStack,
+    ExecUnitStack,
+    Unit,
+    ExecUnit,
+    units_all,
+    exec_units_all
 );
 
 verus! {

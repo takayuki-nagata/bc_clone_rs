@@ -13,6 +13,7 @@
 //! The lexer is a state machine that consumes one byte per step, so that every recursion goes
 //! through `drop_first` (see the crate documentation).
 
+use crate::persist::*;
 use vstd::contrib::exec_spec::*;
 use vstd::prelude::*;
 
@@ -62,7 +63,8 @@ pub struct BlockScan {
     pub in_string: bool,
 }
 
-/// `verified_repl_block_completeness`: brace depth outside comments and strings.
+/// `verified_repl_block_completeness`: brace depth outside comments and strings. (The compiled
+/// code copies a value bound by `let`, so the rest of `t` is not bound to a name.)
 pub open spec fn block_scan(t: Seq<u8>, st: BlockScan) -> BlockScan
     decreases t.len()
 {
@@ -70,35 +72,34 @@ pub open spec fn block_scan(t: Seq<u8>, st: BlockScan) -> BlockScan
         st
     } else {
         let c = t[0];
-        let r1 = t.drop_first();
         if st.in_comment {
             if c == 42u8 && t.len() >= 2 && t[1] == 47u8 {
-                block_scan(r1.drop_first(), BlockScan { count: st.count, in_comment: false, in_string: false })
+                block_scan(t.drop_first().drop_first(), BlockScan { count: st.count, in_comment: false, in_string: false })
             } else {
-                block_scan(r1, st)
+                block_scan(t.drop_first(), st)
             }
         } else if st.in_string {
             if c == 34u8 {
-                block_scan(r1, BlockScan { count: st.count, in_comment: false, in_string: false })
+                block_scan(t.drop_first(), BlockScan { count: st.count, in_comment: false, in_string: false })
             } else if c == 92u8 && t.len() >= 2 && t[1] == 10u8 {
-                block_scan(r1.drop_first(), st)
+                block_scan(t.drop_first().drop_first(), st)
             } else if c == 92u8 && t.len() >= 3 && t[1] == 13u8 && t[2] == 10u8 {
-                block_scan(r1.drop_first().drop_first(), st)
+                block_scan(t.drop_first().drop_first().drop_first(), st)
             } else {
-                block_scan(r1, st)
+                block_scan(t.drop_first(), st)
             }
         } else if c == 47u8 && t.len() >= 2 && t[1] == 42u8 {
-            block_scan(r1.drop_first(), BlockScan { count: st.count, in_comment: true, in_string: false })
+            block_scan(t.drop_first().drop_first(), BlockScan { count: st.count, in_comment: true, in_string: false })
         } else if c == 34u8 {
-            block_scan(r1, BlockScan { count: st.count, in_comment: false, in_string: true })
+            block_scan(t.drop_first(), BlockScan { count: st.count, in_comment: false, in_string: true })
         } else if c == 123u8 {
             let n = if st.count < 0x7fff_ffff_ffff_ffffi64 { (st.count + 1) as i64 } else { st.count };
-            block_scan(r1, BlockScan { count: n, in_comment: false, in_string: false })
+            block_scan(t.drop_first(), BlockScan { count: n, in_comment: false, in_string: false })
         } else if c == 125u8 {
             let n = if st.count > -0x7fff_ffff_ffff_ffffi64 { (st.count - 1) as i64 } else { st.count };
-            block_scan(r1, BlockScan { count: n, in_comment: false, in_string: false })
+            block_scan(t.drop_first(), BlockScan { count: n, in_comment: false, in_string: false })
         } else {
-            block_scan(r1, st)
+            block_scan(t.drop_first(), st)
         }
     }
 }
@@ -129,13 +130,13 @@ pub open spec fn take_line(t: Seq<u8>) -> (Seq<u8>, Seq<u8>)
     }
 }
 
-/// Splits the input into units after the units `out`, continuing the accumulator state
-/// `buf` (first line `start`) at line `next`.
-pub open spec fn split_units_from(t: Seq<u8>, buf: Seq<u8>, start: u64, next: u64, out: Seq<Unit>) -> Seq<Unit>
+/// `split_units_from` with the units kept in a `UnitStack`, which the compiled code shares
+/// instead of copying (`lemma_split_units_into`).
+pub open spec fn split_units_into(t: Seq<u8>, buf: Seq<u8>, start: u64, next: u64, out: UnitStack) -> UnitStack
     decreases t.len()
 {
     if t.len() == 0 {
-        if buf.len() == 0 { out } else { out.push(Unit { text: buf, line: start }) }
+        if buf.len() == 0 { out } else { units_push(out, Unit { text: buf, line: start }) }
     } else {
         let lr = take_line(t);
         if lr.1.len() < t.len() {
@@ -144,9 +145,9 @@ pub open spec fn split_units_from(t: Seq<u8>, buf: Seq<u8>, start: u64, next: u6
             let ends_nl = lr.0.len() > 0 && lr.0[lr.0.len() - 1] == 10u8;
             let next2 = if ends_nl && next < 0xffff_ffff_ffff_ffffu64 { (next + 1) as u64 } else { next };
             if unit_pending(b2) {
-                split_units_from(lr.1, b2, start2, next2, out)
+                split_units_into(lr.1, b2, start2, next2, out)
             } else {
-                split_units_from(lr.1, seq![], start2, next2, out.push(Unit { text: b2, line: start2 }))
+                split_units_into(lr.1, seq![], start2, next2, units_push(out, Unit { text: b2, line: start2 }))
             }
         } else {
             out
@@ -154,9 +155,10 @@ pub open spec fn split_units_from(t: Seq<u8>, buf: Seq<u8>, start: u64, next: u6
     }
 }
 
-/// The units of an input, in order.
+/// The units of an input, in order (`split_units_from(t, [], 1, 1, [])`, by
+/// `lemma_split_units`).
 pub open spec fn split_units(t: Seq<u8>) -> Seq<Unit> {
-    split_units_from(t, seq![], 1u64, 1u64, seq![])
+    units_all(split_units_into(t, seq![], 1u64, 1u64, units_empty()))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -366,6 +368,137 @@ pub open spec fn operator(t: Seq<u8>) -> (Tok, u8) {
     else { (Tok::Eof, 0u8) }
 }
 
+/// `lex` with the tokens kept in a `TokStack`, which the compiled code shares instead of copying
+/// (`lemma_lex_toks`).
+pub open spec fn lex_toks(t: Seq<u8>, st: LexState, out: TokStack) -> TokStack
+    decreases t.len(), mode_rank(st.mode)
+{
+    match st.mode {
+        Mode::Skip => {
+            if t.len() == 0 {
+                toks_push(out, tok(Tok::Eof, seq![], st.line))
+            } else {
+                let line = next_line(st.line, t[0]);
+                if st.skip > 1 {
+                    lex_toks(t.drop_first(), skipping(line, (st.skip - 1) as u8, st.to_comment), out)
+                } else if st.to_comment {
+                    lex_toks(t.drop_first(), LexState { mode: Mode::Comment, line: line, skip: 0u8, to_comment: false, buf: seq![], has_dot: false, start_line: 0u64 }, out)
+                } else {
+                    lex_toks(t.drop_first(), normal(line), out)
+                }
+            }
+        },
+        Mode::Comment => {
+            if t.len() == 0 {
+                toks_push(out, tok(Tok::LexError, syntax_error_msg(), st.line))
+            } else if t[0] == 42u8 && t.len() >= 2 && t[1] == 47u8 {
+                lex_toks(t.drop_first(), skipping(st.line, 1u8, false), out)
+            } else {
+                lex_toks(t.drop_first(), LexState { mode: Mode::Comment, line: next_line(st.line, t[0]), skip: 0u8, to_comment: false, buf: seq![], has_dot: false, start_line: 0u64 }, out)
+            }
+        },
+        Mode::Str => {
+            if t.len() == 0 {
+                toks_push(out, tok(Tok::LexError, illegal_msg(seq![34u8]), st.start_line))
+            } else if t[0] == 34u8 {
+                lex_toks(t.drop_first(), normal(st.line), toks_push(out, tok(Tok::Str, st.buf, st.line)))
+            } else {
+                lex_toks(t.drop_first(), LexState { mode: Mode::Str, line: next_line(st.line, t[0]), skip: 0u8, to_comment: false, buf: st.buf.push(t[0]), has_dot: false, start_line: st.start_line }, out)
+            }
+        },
+        Mode::Num => {
+            if t.len() > 0 && is_bc_digit(t[0]) {
+                lex_toks(t.drop_first(), LexState { mode: Mode::Num, line: st.line, skip: 0u8, to_comment: false, buf: st.buf.push(t[0]), has_dot: st.has_dot, start_line: 0u64 }, out)
+            } else if t.len() > 0 && t[0] == 46u8 && !st.has_dot {
+                lex_toks(t.drop_first(), LexState { mode: Mode::Num, line: st.line, skip: 0u8, to_comment: false, buf: st.buf.push(t[0]), has_dot: true, start_line: 0u64 }, out)
+            } else if t.len() >= 2 && t[0] == 92u8 && t[1] == 10u8 {
+                lex_toks(t.drop_first().drop_first(), LexState { mode: Mode::Num, line: next_line(st.line, 10u8), skip: 0u8, to_comment: false, buf: st.buf, has_dot: st.has_dot, start_line: 0u64 }, out)
+            } else if t.len() >= 3 && t[0] == 92u8 && t[1] == 13u8 && t[2] == 10u8 {
+                lex_toks(t.drop_first().drop_first().drop_first(), LexState { mode: Mode::Num, line: next_line(st.line, 10u8), skip: 0u8, to_comment: false, buf: st.buf, has_dot: st.has_dot, start_line: 0u64 }, out)
+            } else {
+                lex_toks(t, normal(st.line), toks_push(out, tok(Tok::Number, st.buf, st.line)))
+            }
+        },
+        Mode::Ident => {
+            if t.len() > 0 && is_ident_continue(t[0]) {
+                lex_toks(t.drop_first(), LexState { mode: Mode::Ident, line: st.line, skip: 0u8, to_comment: false, buf: st.buf.push(t[0]), has_dot: false, start_line: 0u64 }, out)
+            } else {
+                lex_toks(t, normal(st.line), toks_push(out, tok(keyword(st.buf), st.buf, st.line)))
+            }
+        },
+        Mode::Normal => {
+            if t.len() == 0 {
+                toks_push(out, tok(Tok::Eof, seq![], st.line))
+            } else {
+                let c = t[0];
+                let line = st.line;
+                if c == 32u8 || c == 9u8 || c == 13u8 {
+                    lex_toks(t.drop_first(), normal(line), out)
+                } else if c == 92u8 && t.len() >= 2 && t[1] == 10u8 {
+                    lex_toks(t.drop_first(), skipping(line, 1u8, false), out)
+                } else if c == 92u8 && t.len() >= 3 && t[1] == 13u8 && t[2] == 10u8 {
+                    lex_toks(t.drop_first(), skipping(line, 2u8, false), out)
+                } else if c == 47u8 && t.len() >= 2 && t[1] == 42u8 {
+                    lex_toks(t.drop_first(), skipping(line, 1u8, true), out)
+                } else if c == 10u8 {
+                    let l2 = next_line(line, c);
+                    lex_toks(t.drop_first(), normal(l2), toks_push(out, tok(Tok::Newline, seq![10u8], l2)))
+                } else if c == 34u8 {
+                    lex_toks(t.drop_first(), LexState { mode: Mode::Str, line: line, skip: 0u8, to_comment: false, buf: seq![], has_dot: false, start_line: line }, out)
+                } else if is_bc_digit(c) || (c == 46u8 && t.len() >= 2 && is_bc_digit(t[1])) {
+                    lex_toks(t.drop_first(), LexState { mode: Mode::Num, line: line, skip: 0u8, to_comment: false, buf: seq![c], has_dot: c == 46u8, start_line: 0u64 }, out)
+                } else if 97 <= c && c <= 122 {
+                    lex_toks(t.drop_first(), LexState { mode: Mode::Ident, line: line, skip: 0u8, to_comment: false, buf: seq![c], has_dot: false, start_line: 0u64 }, out)
+                } else {
+                    let op = operator(t);
+                    if op.1 == 0 {
+                        toks_push(out, tok(Tok::LexError, illegal_msg(t), line))
+                    } else if op.1 == 1 {
+                        lex_toks(t.drop_first(), normal(line), toks_push(out, tok(op.0, seq![c], line)))
+                    } else {
+                        lex_toks(t.drop_first(), skipping(line, 1u8, false), toks_push(out, tok(op.0, seq![c, t[1]], line)))
+                    }
+                }
+            }
+        },
+    }
+}
+
+/// The tokens of a unit (`lex(t, normal(1), [])`, by `lemma_tokenize`).
+pub open spec fn tokenize(t: Seq<u8>) -> Seq<Token> {
+    toks_all(lex_toks(t, normal(1u64), toks_empty()))
+}
+
+} // exec_spec_verified!
+
+// The reference definitions of splitting and lexing, which the proofs use; the compiled code
+// runs their twins `split_units_into` and `lex_toks`.
+
+/// Splits the input into units after the units `out`, continuing the accumulator state
+/// `buf` (first line `start`) at line `next`.
+pub open spec fn split_units_from(t: Seq<u8>, buf: Seq<u8>, start: u64, next: u64, out: Seq<Unit>) -> Seq<Unit>
+    decreases t.len()
+{
+    if t.len() == 0 {
+        if buf.len() == 0 { out } else { out.push(Unit { text: buf, line: start }) }
+    } else {
+        let lr = take_line(t);
+        if lr.1.len() < t.len() {
+            let start2 = if buf.len() == 0 { next } else { start };
+            let b2 = buf.add(lr.0);
+            let ends_nl = lr.0.len() > 0 && lr.0[lr.0.len() - 1] == 10u8;
+            let next2 = if ends_nl && next < 0xffff_ffff_ffff_ffffu64 { (next + 1) as u64 } else { next };
+            if unit_pending(b2) {
+                split_units_from(lr.1, b2, start2, next2, out)
+            } else {
+                split_units_from(lr.1, seq![], start2, next2, out.push(Unit { text: b2, line: start2 }))
+            }
+        } else {
+            out
+        }
+    }
+}
+
 /// The token sequence of `t`, after the tokens `out` and in state `st`; it ends with `Eof` or
 /// `LexError`.
 pub open spec fn lex(t: Seq<u8>, st: LexState, out: Seq<Token>) -> Seq<Token>
@@ -461,12 +594,5 @@ pub open spec fn lex(t: Seq<u8>, st: LexState, out: Seq<Token>) -> Seq<Token>
         },
     }
 }
-
-/// The tokens of a unit.
-pub open spec fn tokenize(t: Seq<u8>) -> Seq<Token> {
-    lex(t, normal(1u64), seq![])
-}
-
-} // exec_spec_verified!
 
 } // verus!

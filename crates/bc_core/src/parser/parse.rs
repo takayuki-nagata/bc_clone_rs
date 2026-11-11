@@ -571,6 +571,7 @@ proof fn lemma_tokenize_wf(t: Seq<u8>)
         toks_wf(tokenize(t)),
 {
     let r = tokenize(t);
+    bc_spec::lexer_lemmas::lemma_tokenize(t);
     lemma_lex_shape(t, normal(1u64), seq![]);
     lemma_lex_len(t, normal(1u64), seq![]);
     assert forall|i: int| 0 <= i < r.len() - 1 implies !(#[trigger] r[i].kind is Eof) && !(r[i].kind is LexError) by {

@@ -28,13 +28,15 @@
 //!   multiply digit sequences by repeated addition;
 //! - no recursive types: the syntax tree is an arena (`Seq<Node>` with `usize` children);
 //! - no `Map` fields: environments are association lists;
-//! - no typed `let`, no `&` expressions;
+//! - no typed `let`, no `&` expressions; and since the compiled code copies a value bound by
+//!   `let`, do not bind a view such as `t.drop_first()` in a function that recurses on it;
 //! - keep functions small: a large one can exceed the resource limit in its generated
 //!   equivalence proof, which `#[verifier::rlimit]` does not reach (split it, as `p_reg`);
 //! - the compiled code copies every field of a struct it builds, so a part of the state that
 //!   grows with the run uses a type of `persist.rs`, which the compiled code shares instead,
 //!   and only through that type's operations (its `exec_*` functions are written and
-//!   verified by hand there, with the contract the macro expects).
+//!   verified by hand there, with the contract the macro expects) or, for `Code`, its field
+//!   `s`, which the compiled code reads as a slice.
 //!
 //! Functions that are compiled with `exec_spec_unverified!` because their equivalence proof
 //! does not go through are listed here: (none yet).

@@ -879,6 +879,7 @@ impl UnitCursor {
             self.inv(t),
             self.rest(t) == split_units(t),
     {
+        bc_spec::lexer_lemmas::lemma_split_units(t);
         assert(t.skip(0) =~= t);
         assert(self.acc.buf_view() =~= Seq::<u8>::empty());
     }

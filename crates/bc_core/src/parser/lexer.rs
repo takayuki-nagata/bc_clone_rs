@@ -409,6 +409,7 @@ impl Lexer {
     {
         let r = Self { text: copy_bytes(text), pos: 0, line: 1, buffer: Vec::new() };
         proof {
+            bc_spec::lexer_lemmas::lemma_tokenize(text@);
             assert(r.left() =~= text@);
             assert(r.buffered() =~= Seq::<SToken>::empty());
             assert(r.buffered() + r.scan_rest() =~= r.scan_rest());
