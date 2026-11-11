@@ -794,7 +794,7 @@ impl Parser {
     }
 
     /// Parses a named expression, then a postfix `++`/`--` or an assignment that binds to it.
-    #[verifier::rlimit(60)]
+    #[verifier::rlimit(40)]
     #[verifier::exec_allows_no_decreases_clause]
     fn parse_named_tail(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<(usize, usize), BcError>, Ghost<GResult>))
         requires

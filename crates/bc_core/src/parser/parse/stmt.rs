@@ -172,7 +172,7 @@ impl Parser {
         }
     }
 
-    #[verifier::rlimit(100)]
+    #[verifier::rlimit(60)]
     #[verifier::exec_allows_no_decreases_clause]
     fn parse_statement_inner(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
@@ -446,7 +446,6 @@ impl Parser {
     }
 
     /// Parses the `for` statement.
-    #[verifier::rlimit(60)]
     #[verifier::exec_allows_no_decreases_clause]
     fn parse_for(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires
@@ -729,7 +728,6 @@ impl Parser {
     }
 
     /// Parses `return`, `return (e)`, or the GNU extension `return e`.
-    #[verifier::rlimit(60)]
     #[verifier::exec_allows_no_decreases_clause]
     fn parse_return(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<usize, BcError>, Ghost<GResult>))
         requires

@@ -110,6 +110,94 @@ proof fn lemma_sl_next(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, ac
     }
 }
 
+/// Every finishing fuel of `p_statement_list` from `st` gives `r`.
+spec fn sl_res(toks: Seq<SToken>, cfg: PCfg, st: PState, r: PR) -> bool {
+    forall|f: u64| #![trigger p_statement_list(toks, cfg, st, seq![], f)] pdone(p_statement_list(toks, cfg, st, seq![], f)) ==> p_statement_list(toks, cfg, st, seq![], f) == r
+}
+
+/// `p_statement_list` at `cur` skips newlines with result `sk`, then stops at the end or `}`.
+proof fn lemma_sl_skip(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>, sk: PR)
+    requires
+        sl_chain(toks, cfg, st, cur, acc),
+        forall|f: u64| #![trigger p_skip_newlines(toks, cur, f)] pdone(p_skip_newlines(toks, cur, f)) ==> p_skip_newlines(toks, cur, f) == sk,
+    ensures
+        !sk.ok ==> sl_res(toks, cfg, st, sk),
+        sk.ok && (cur_tok(toks, sk.st).kind is Eof || cur_tok(toks, sk.st).kind is Rbrace) ==> sl_res(toks, cfg, st, pr_list(sk.st, acc)),
+{
+    if !sk.ok {
+        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, cur, acc, k)] k > 0 && pdone(p_statement_list(toks, cfg, cur, acc, k)) implies p_statement_list(toks, cfg, cur, acc, k) == sk by {
+            assert(pdone(p_skip_newlines(toks, cur, (k - 1) as u64)));
+        }
+        lemma_sl_ret(toks, cfg, st, cur, acc, sk);
+    } else if cur_tok(toks, sk.st).kind is Eof || cur_tok(toks, sk.st).kind is Rbrace {
+        let g = pr_list(sk.st, acc);
+        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, cur, acc, k)] k > 0 && pdone(p_statement_list(toks, cfg, cur, acc, k)) implies p_statement_list(toks, cfg, cur, acc, k) == g by {
+            assert(pdone(p_skip_newlines(toks, cur, (k - 1) as u64)));
+        }
+        lemma_sl_ret(toks, cfg, st, cur, acc, g);
+    }
+}
+
+/// `p_statement_list` at `cur`, after skipping newlines with result `sk`, parses a statement with
+/// result `i`, then eats a `;` or a newline after it, stops, or reports a syntax error.
+proof fn lemma_sl_stmt(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>, sk: PR, i: PR)
+    requires
+        sl_chain(toks, cfg, st, cur, acc),
+        forall|f: u64| #![trigger p_skip_newlines(toks, cur, f)] pdone(p_skip_newlines(toks, cur, f)) ==> p_skip_newlines(toks, cur, f) == sk,
+        sk.ok,
+        !(cur_tok(toks, sk.st).kind is Eof || cur_tok(toks, sk.st).kind is Rbrace),
+        forall|f: u64| #![trigger p_statement(toks, cfg, sk.st, f)] pdone(p_statement(toks, cfg, sk.st, f)) ==> p_statement(toks, cfg, sk.st, f) == i,
+    ensures
+        !i.ok ==> sl_res(toks, cfg, st, i),
+        i.ok && (cur_tok(toks, i.st).kind is Rbrace || cur_tok(toks, i.st).kind is Eof) ==> sl_res(toks, cfg, st, pr_list(i.st, acc.push(i.node))),
+        i.ok && !(cur_tok(toks, i.st).kind is Rbrace || cur_tok(toks, i.st).kind is Eof || cur_tok(toks, i.st).kind is Semicolon || cur_tok(toks, i.st).kind is Newline)
+            ==> sl_res(toks, cfg, st, syntax_at(i.st, cur_tok(toks, i.st).line)),
+        i.ok && (cur_tok(toks, i.st).kind is Semicolon || cur_tok(toks, i.st).kind is Newline) ==> ({
+            let e = s_eat(toks, i.st, cur_tok(toks, i.st).kind);
+            &&& e.ok ==> sl_chain(toks, cfg, st, e.st, acc.push(i.node))
+            &&& !e.ok ==> sl_res(toks, cfg, st, e)
+        }),
+{
+    let a1 = acc.push(i.node);
+    let nk = cur_tok(toks, i.st).kind;
+    if !i.ok {
+        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, cur, acc, k)] k > 0 && pdone(p_statement_list(toks, cfg, cur, acc, k)) implies p_statement_list(toks, cfg, cur, acc, k) == i by {
+            assert(pdone(p_skip_newlines(toks, cur, (k - 1) as u64)));
+            assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
+        }
+        lemma_sl_ret(toks, cfg, st, cur, acc, i);
+    } else if nk is Rbrace || nk is Eof {
+        let g = pr_list(i.st, a1);
+        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, cur, acc, k)] k > 0 && pdone(p_statement_list(toks, cfg, cur, acc, k)) implies p_statement_list(toks, cfg, cur, acc, k) == g by {
+            assert(pdone(p_skip_newlines(toks, cur, (k - 1) as u64)));
+            assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
+        }
+        lemma_sl_ret(toks, cfg, st, cur, acc, g);
+    } else if !(nk is Semicolon || nk is Newline) {
+        let g = syntax_at(i.st, cur_tok(toks, i.st).line);
+        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, cur, acc, k)] k > 0 && pdone(p_statement_list(toks, cfg, cur, acc, k)) implies p_statement_list(toks, cfg, cur, acc, k) == g by {
+            assert(pdone(p_skip_newlines(toks, cur, (k - 1) as u64)));
+            assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
+        }
+        lemma_sl_ret(toks, cfg, st, cur, acc, g);
+    } else {
+        let e = s_eat(toks, i.st, nk);
+        if e.ok {
+            assert forall|k: u64| #![trigger p_statement_list(toks, cfg, cur, acc, k)] k > 0 && pdone(p_statement_list(toks, cfg, cur, acc, k)) implies p_statement_list(toks, cfg, cur, acc, k) == p_statement_list(toks, cfg, e.st, a1, (k - 1) as u64) by {
+                assert(pdone(p_skip_newlines(toks, cur, (k - 1) as u64)));
+                assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
+            }
+            lemma_sl_next(toks, cfg, st, cur, acc, e.st, a1);
+        } else {
+            assert forall|k: u64| #![trigger p_statement_list(toks, cfg, cur, acc, k)] k > 0 && pdone(p_statement_list(toks, cfg, cur, acc, k)) implies p_statement_list(toks, cfg, cur, acc, k) == e by {
+                assert(pdone(p_skip_newlines(toks, cur, (k - 1) as u64)));
+                assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
+            }
+            lemma_sl_ret(toks, cfg, st, cur, acc, e);
+        }
+    }
+}
+
 spec fn prog_chain(toks: Seq<SToken>, cfg: PCfg, st: PState, cur: PState, acc: Seq<usize>) -> bool {
     forall|f: u64| #![trigger p_program(toks, cfg, st, seq![], f)] pdone(p_program(toks, cfg, st, seq![], f)) ==>
         exists|g: u64| #![trigger p_program(toks, cfg, cur, acc, g)] p_program(toks, cfg, cur, acc, g) == p_program(toks, cfg, st, seq![], f)
@@ -315,7 +403,7 @@ impl Parser {
     }
 
     /// Parses a list of statements separated by semicolons.
-    #[verifier::rlimit(300)]
+    #[verifier::rlimit(20)]
     #[verifier::exec_allows_no_decreases_clause]
     fn parse_semicolon_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<usize>, BcError>, Ghost<GResult>))
         requires
@@ -426,7 +514,6 @@ impl Parser {
     }
 
     /// Parses a list of statements within a block (with newline and semicolon separations).
-    #[verifier::rlimit(300)]
     #[verifier::exec_allows_no_decreases_clause]
     pub(super) fn parse_statement_list(&mut self, Ghost(toks): Ghost<GToks>, Ghost(cfg): Ghost<GCfg>, Ghost(st): Ghost<GState>) -> (r: (Result<Vec<usize>, BcError>, Ghost<GResult>))
         requires
@@ -452,43 +539,22 @@ impl Parser {
         {
             let ghost (c, a0) = (cur, acc);
             let (res, Ghost(sk)) = self.skip_newlines(Ghost(toks), Ghost(cfg), Ghost(c));
+            proof { lemma_sl_skip(toks, cfg, st, c, a0, sk); }
             match res {
                 Ok(()) => {},
-                Err(y) => {
-                    proof {
-                        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == sk by {
-                            assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
-                        }
-                        lemma_sl_ret(toks, cfg, st, c, a0, sk);
-                    }
-                    return (Err(y), Ghost(sk));
-                },
+                Err(y) => return (Err(y), Ghost(sk)),
             }
             let k = self.current_token.token_type;
             if matches!(k, TokenType::Eof) || matches!(k, TokenType::Rbrace) {
                 let ghost g = pr_list(sk.st, a0);
-                proof {
-                    assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == g by {
-                        assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
-                    }
-                    lemma_sl_ret(toks, cfg, st, c, a0, g);
-                }
                 return (Ok(stmts), Ghost(g));
             }
             let ghost old_stmts = stmts@;
             let (res2, Ghost(i)) = self.parse_statement(Ghost(toks), Ghost(cfg), Ghost(sk.st));
+            proof { lemma_sl_stmt(toks, cfg, st, c, a0, sk, i); }
             let x = match res2 {
                 Ok(v) => v,
-                Err(y) => {
-                    proof {
-                        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == i by {
-                            assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
-                            assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
-                        }
-                        lemma_sl_ret(toks, cfg, st, c, a0, i);
-                    }
-                    return (Err(y), Ghost(i));
-                },
+                Err(y) => return (Err(y), Ghost(i)),
             };
             let ghost a1 = a0.push(i.node);
             stmts.push(x);
@@ -497,49 +563,21 @@ impl Parser {
             let ghost line = cur_tok(toks, i.st).line;
             if matches!(nk, TokenType::Rbrace) || matches!(nk, TokenType::Eof) {
                 let ghost g = pr_list(i.st, a1);
-                proof {
-                    assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == g by {
-                        assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
-                        assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
-                    }
-                    lemma_sl_ret(toks, cfg, st, c, a0, g);
-                }
                 return (Ok(stmts), Ghost(g));
             }
             if !matches!(nk, TokenType::Semicolon) && !matches!(nk, TokenType::Newline) {
                 let ghost g = syntax_at(i.st, line);
-                proof {
-                    assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == g by {
-                        assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
-                        assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
-                    }
-                    lemma_sl_ret(toks, cfg, st, c, a0, g);
-                }
                 return (Err(BcError::Syntax { line: self.current_token.line, message: syntax_error_text() }), Ghost(g));
             }
             let ghost e = s_eat(toks, i.st, tok_of(nk));
             match self.eat(nk, Ghost(toks), Ghost(cfg), Ghost(i.st)) {
                 Ok(()) => {
                     proof {
-                        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == p_statement_list(toks, cfg, e.st, a1, (k - 1) as u64) by {
-                            assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
-                            assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
-                        }
-                        lemma_sl_next(toks, cfg, st, c, a0, e.st, a1);
                         cur = e.st;
                         acc = a1;
                     }
                 },
-                Err(y) => {
-                    proof {
-                        assert forall|k: u64| #![trigger p_statement_list(toks, cfg, c, a0, k)] k > 0 && pdone(p_statement_list(toks, cfg, c, a0, k)) implies p_statement_list(toks, cfg, c, a0, k) == e by {
-                            assert(pdone(p_skip_newlines(toks, c, (k - 1) as u64)));
-                            assert(pdone(p_statement(toks, cfg, sk.st, (k - 1) as u64)));
-                        }
-                        lemma_sl_ret(toks, cfg, st, c, a0, e);
-                    }
-                    return (Err(y), Ghost(e));
-                },
+                Err(y) => return (Err(y), Ghost(e)),
             }
         }
     }
