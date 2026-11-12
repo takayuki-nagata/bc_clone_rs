@@ -14,3 +14,6 @@ M5Stamp C3 / ESP32-C3 (requires `pip install esptool pyserial`):
 
 Multi-line input (e.g. function definitions) is supported; a "... " prompt shows pending
 input. Input lines are limited to 1024 characters; Ctrl+C cancels the current input.
+
+The banner at start-up names the build, such as "bc_clone 0.5.0 (a916de2)": the version and
+the commit it was built from. Please quote it when you report a problem.

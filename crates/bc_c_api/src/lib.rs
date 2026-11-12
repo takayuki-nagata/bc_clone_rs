@@ -170,6 +170,13 @@ fn eval_into_evaluator(code: &[u8], ev: &mut Evaluator) -> BcStatus {
     }
 }
 
+/// Returns the version line of the build, such as `bc_clone 0.5.0 (a916de2)`, as a static
+/// NUL-terminated string that the caller must not modify or free.
+#[unsafe(no_mangle)]
+pub extern "C" fn bc_version() -> *const c_char {
+    bc_build_info::VERSION_LINE_NUL.as_ptr().cast()
+}
+
 /// Evaluates a bc expression or script string and writes the output into a buffer.
 ///
 /// # Safety
@@ -510,6 +517,13 @@ pub unsafe extern "C" fn bc_session_destroy(session: *mut BcSession) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_bc_version_is_the_version_line() {
+        let version = unsafe { CStr::from_ptr(bc_version()) };
+        assert_eq!(version.to_str(), Ok(bc_build_info::VERSION_LINE));
+        assert!(version.to_bytes().starts_with(b"bc_clone "));
+    }
 
     #[test]
     fn test_bc_eval_basic() {

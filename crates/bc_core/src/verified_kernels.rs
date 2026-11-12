@@ -90,6 +90,16 @@ macro_rules! dual_verified {
     };
 }
 
+verus! {
+
+/// `s` is the long option `--version`.
+pub open spec fn is_version_option(s: Seq<u8>) -> bool {
+    s.len() == 9 && s[0] == 45 && s[1] == 45 && s[2] == 118 && s[3] == 101 && s[4] == 114
+        && s[5] == 115 && s[6] == 105 && s[7] == 111 && s[8] == 110
+}
+
+} // verus!
+
 dual_verified! {
     pub const MAX_VERIFIED_SCALE: usize = 1_000_000_000;
     // `BC_SCALE_MAX` (`docs/COMPATIBILITY.md` §2): every `BCNum` scale stays within this bound,
@@ -116,6 +126,13 @@ dual_verified! {
     pub const CLI_ARG_OPT_W: u8 = 5;
     pub const CLI_ARG_END_OF_OPTIONS: u8 = 6;
     pub const CLI_ARG_OPT_CLUSTER: u8 = 7;
+    pub const CLI_ARG_OPT_VERSION: u8 = 8;
+    pub const CLI_PARSE_RUN: u8 = 0;
+    pub const CLI_PARSE_ERROR: u8 = 1;
+    pub const CLI_PARSE_VERSION: u8 = 2;
+    pub const CLI_POLICY_ALLOW: u8 = 0;
+    pub const CLI_POLICY_WARN: u8 = 1;
+    pub const CLI_POLICY_REJECT: u8 = 2;
     pub const REPL_ACTION_NONE: u8 = 0;
     pub const REPL_ACTION_EVAL_LINE: u8 = 1;
     pub const REPL_ACTION_BACKSPACE: u8 = 2;
@@ -828,7 +845,8 @@ dual_verified! {
     /// - `CLI_ARG_FILE` (`3`): a file operand. After `--` (`options_ended`) every argument is
     ///   an operand; so are `-` and the empty string (Guideline 13 leaves `-` to the utility).
     /// - `CLI_ARG_END_OF_OPTIONS` (`6`): `"--"`, which ends the options (Guideline 10)
-    /// - `CLI_ARG_OPT_INVALID` (`2`): a long option `--name`, which `bc_clone` does not support
+    /// - `CLI_ARG_OPT_VERSION` (`8`): `"--version"`, the only long option `bc_clone` supports
+    /// - `CLI_ARG_OPT_INVALID` (`2`): any other long option `--name`
     /// - `CLI_ARG_OPT_CLUSTER` (`7`): `-` followed by one or more option letters, possibly
     ///   grouped (`-ls`, Guideline 5); each letter is classified by
     ///   `verified_cli_classify_option_char`
@@ -837,7 +855,9 @@ dual_verified! {
             (options_ended || bytes@.len() < 2 || bytes@[0] != 45) <==> res == CLI_ARG_FILE,
             (!options_ended && bytes@.len() == 2 && bytes@[0] == 45 && bytes@[1] == 45)
                 <==> res == CLI_ARG_END_OF_OPTIONS,
-            (!options_ended && bytes@.len() > 2 && bytes@[0] == 45 && bytes@[1] == 45)
+            (!options_ended && is_version_option(bytes@)) <==> res == CLI_ARG_OPT_VERSION,
+            (!options_ended && bytes@.len() > 2 && bytes@[0] == 45 && bytes@[1] == 45
+                && !is_version_option(bytes@))
                 <==> res == CLI_ARG_OPT_INVALID,
             (!options_ended && bytes@.len() >= 2 && bytes@[0] == 45 && bytes@[1] != 45)
                 <==> res == CLI_ARG_OPT_CLUSTER,
@@ -849,6 +869,16 @@ dual_verified! {
         } else if bytes[1] == 45 {
             if len == 2 {
                 CLI_ARG_END_OF_OPTIONS
+            } else if len == 9
+                && bytes[2] == 118
+                && bytes[3] == 101
+                && bytes[4] == 114
+                && bytes[5] == 115
+                && bytes[6] == 105
+                && bytes[7] == 111
+                && bytes[8] == 110
+            {
+                CLI_ARG_OPT_VERSION
             } else {
                 CLI_ARG_OPT_INVALID
             }
@@ -859,13 +889,15 @@ dual_verified! {
 
     /// Verified classification of one option letter inside a `CLI_ARG_OPT_CLUSTER` argument:
     /// `CLI_ARG_OPT_L` for `l`, `CLI_ARG_OPT_S` for `s` (reject extensions), `CLI_ARG_OPT_W`
-    /// for `w` (warn about extensions), and `CLI_ARG_OPT_INVALID` for any other character.
+    /// for `w` (warn about extensions), `CLI_ARG_OPT_VERSION` for `v` (display the version),
+    /// and `CLI_ARG_OPT_INVALID` for any other character.
     pub fn verified_cli_classify_option_char(c: u32) -> (res: u8)
         ensures [
             c == 108 <==> res == CLI_ARG_OPT_L,
             c == 115 <==> res == CLI_ARG_OPT_S,
             c == 119 <==> res == CLI_ARG_OPT_W,
-            (c != 108 && c != 115 && c != 119) <==> res == CLI_ARG_OPT_INVALID,
+            c == 118 <==> res == CLI_ARG_OPT_VERSION,
+            (c != 108 && c != 115 && c != 119 && c != 118) <==> res == CLI_ARG_OPT_INVALID,
         ]
     {
         if c == 108 {
@@ -874,6 +906,8 @@ dual_verified! {
             CLI_ARG_OPT_S
         } else if c == 119 {
             CLI_ARG_OPT_W
+        } else if c == 118 {
+            CLI_ARG_OPT_VERSION
         } else {
             CLI_ARG_OPT_INVALID
         }
@@ -978,6 +1012,85 @@ pub(crate) fn verified_repl_block_scan(text: &[u8], start: usize, state: (i32, b
         assert(text@.skip(i as int).len() == 0);
     }
     (count, in_comment, in_string)
+}
+
+/// The options of a `bc_clone` command line, read from position `i` of `kinds` in the state
+/// (`math`, `policy`): the result of `verified_cli_parse_options`.
+///
+/// The options take effect from left to right. The first `CLI_ARG_OPT_INVALID` or
+/// `CLI_ARG_OPT_VERSION` ends the reading, with `CLI_PARSE_ERROR` or `CLI_PARSE_VERSION` and
+/// its position, so an invalid option before `-v` is reported and the arguments after `-v` are
+/// not read. Otherwise the result is `CLI_PARSE_RUN` at `kinds.len()`. `-l` enables the math
+/// library, `-s` rejects the extensions, and `-w` warns about them unless `-s` was given; files
+/// and `--` change nothing.
+pub open spec fn cli_parse(kinds: Seq<u8>, i: int, math: bool, policy: u8) -> (u8, int, bool, u8)
+    decreases kinds.len() - i,
+{
+    if i < 0 || i >= kinds.len() {
+        (CLI_PARSE_RUN, kinds.len() as int, math, policy)
+    } else {
+        let k = kinds[i];
+        if k == CLI_ARG_OPT_INVALID {
+            (CLI_PARSE_ERROR, i, math, policy)
+        } else if k == CLI_ARG_OPT_VERSION {
+            (CLI_PARSE_VERSION, i, math, policy)
+        } else if k == CLI_ARG_OPT_L {
+            cli_parse(kinds, i + 1, true, policy)
+        } else if k == CLI_ARG_OPT_S {
+            cli_parse(kinds, i + 1, math, CLI_POLICY_REJECT)
+        } else if k == CLI_ARG_OPT_W {
+            cli_parse(kinds, i + 1, math, if policy == CLI_POLICY_ALLOW { CLI_POLICY_WARN } else { policy })
+        } else {
+            cli_parse(kinds, i + 1, math, policy)
+        }
+    }
+}
+
+/// Verified reading of the options of a `bc_clone` command line (`crates/bc_cli/src/main.rs:run_app`).
+///
+/// `kinds` has one entry per option letter of a `CLI_ARG_OPT_CLUSTER` argument (as classified
+/// by `verified_cli_classify_option_char`), and the class of every other argument (as
+/// classified by `verified_cli_classify_arg`). Returns `(outcome, position, math_enabled,
+/// policy)`, which is `cli_parse` from the start in the default state: `CLI_PARSE_RUN` at
+/// `kinds.len()`, or `CLI_PARSE_ERROR` / `CLI_PARSE_VERSION` at the entry that ended the reading.
+pub fn verified_cli_parse_options(kinds: &[u8]) -> (res: (u8, usize, bool, u8))
+    ensures
+        (res.0, res.1 as int, res.2, res.3) == cli_parse(kinds@, 0, false, CLI_POLICY_ALLOW),
+        res.1 <= kinds@.len(),
+        res.0 != CLI_PARSE_RUN ==> res.1 < kinds@.len(),
+{
+    let len: usize = kinds.len();
+    let mut math: bool = false;
+    let mut policy: u8 = CLI_POLICY_ALLOW;
+    let mut outcome: u8 = CLI_PARSE_RUN;
+    let mut i: usize = 0;
+    while outcome == CLI_PARSE_RUN && i < len
+        invariant
+            0 <= i <= len,
+            len == kinds@.len(),
+            outcome == CLI_PARSE_RUN ==>
+                cli_parse(kinds@, i as int, math, policy) == cli_parse(kinds@, 0, false, CLI_POLICY_ALLOW),
+            outcome != CLI_PARSE_RUN ==> i < len
+                && (outcome, i as int, math, policy) == cli_parse(kinds@, 0, false, CLI_POLICY_ALLOW),
+        decreases len - i + (if outcome == CLI_PARSE_RUN { 1int } else { 0int }),
+    {
+        let k = kinds[i];
+        if k == CLI_ARG_OPT_INVALID {
+            outcome = CLI_PARSE_ERROR;
+        } else if k == CLI_ARG_OPT_VERSION {
+            outcome = CLI_PARSE_VERSION;
+        } else {
+            if k == CLI_ARG_OPT_L {
+                math = true;
+            } else if k == CLI_ARG_OPT_S {
+                policy = CLI_POLICY_REJECT;
+            } else if k == CLI_ARG_OPT_W && policy == CLI_POLICY_ALLOW {
+                policy = CLI_POLICY_WARN;
+            }
+            i += 1;
+        }
+    }
+    (outcome, i, math, policy)
 }
 
 } // verus!

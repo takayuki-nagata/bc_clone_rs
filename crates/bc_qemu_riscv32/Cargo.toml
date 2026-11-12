@@ -16,6 +16,7 @@ m5stamp-probe = []
 
 [dependencies]
 bc_core = { path = "../bc_core" }
+bc_build_info = { path = "../bc_build_info" }
 riscv = "0.16"
 riscv-rt = "0.18"
 critical-section = { version = "1.2", features = ["restore-state-none"] }

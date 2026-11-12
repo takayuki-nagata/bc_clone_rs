@@ -36,6 +36,10 @@ themselves are not proved. AGENTS.md lists what the proofs assume.
   number to decimal text (`length(2^3000000)`: five times as fast).
 
 ### Verification
+- `bc_clone` reads its options with the verified kernel `verified_cli_parse_options`, which is
+  proved equal to a recursive specification of the rules (left to right, the first invalid
+  option or `-v` ends the reading, `-s` wins over `-w`). It replaces the Verus design model of
+  the option parsing, which production did not call, and with it `verus_proofs.rs`.
 - The serial REPLs of Zephyr and the M5Stamp C3 choose their line-editing action with the
   verified kernel `verified_zephyr_repl_action`, which proves that a backspace is chosen only for
   a non-empty line and a character is appended only below the line limit. The Verus design models of the C-FFI copy (covered by the
@@ -146,6 +150,15 @@ themselves are not proved. AGENTS.md lists what the proofs assume.
 - Options follow the XBD 12.2 Utility Syntax Guidelines, as POSIX requires: options may be grouped
   (`-lw`), `--` ends the options, and `-` is a file operand. Long options are reported as
   `bc: unrecognized option '--name'`.
+- `-v` and `--version` print `bc_clone VERSION (COMMIT)`, such as `bc_clone 0.5.0 (a916de2)`,
+  and exit with status 0 without reading any input. `COMMIT` is the first 7 digits of the git
+  commit of the build, with `-dirty` if a tracked file differed from it (best effort: an edit is
+  seen once it reaches git's index), or `unknown` without git
+  (`BC_CLONE_GIT_COMMIT` sets it). The new crate `bc_build_info` records them; the C API
+  (`bc_version()`), the Wasm module (`version()`, shown on the web page) and the start-up banners
+  of Zephyr, the M5Stamp C3 and the bare-metal QEMU build show the same line, and the release
+  workflow checks that the binaries and the QEMU packages name the tag's version
+  (`scripts/check_version_line.sh`).
 
 ### API changes (`bc_core`)
 - `BinOp::from_symbol` and `AssignOp::from_symbol` are removed, and `RelOp::from_symbol` exists only

@@ -132,6 +132,7 @@ fn run_self_tests() -> bool {
 
     println!("\n=================================================");
     println!("  bc_clone (bc_core) on M5Stamp C3 (ESP32-C3)    ");
+    println!("  {}", bc_build_info::VERSION_LINE);
     println!("=================================================");
     println!("[ESP32-C3] Initialized successfully @ 160MHz.");
     println!("[ESP32-C3] 128KB SRAM Heap allocated for bc_core.\n");
@@ -277,6 +278,7 @@ fn main() -> ! {
 
     // 2. Start Interactive REPL CLI
     println!("Entering bc_core Interactive REPL mode...");
+    println!("{}", bc_build_info::VERSION_LINE);
     println!("Type bc expressions (e.g. 2^64, scale=10; 4*a(1), define f(x)...)");
     print!("bc> ");
 

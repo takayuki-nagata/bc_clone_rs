@@ -49,8 +49,6 @@ mod trusted_math;
 #[cfg(verus_keep_ghost)]
 mod trusted_std;
 pub mod verified_kernels;
-#[cfg(verus_keep_ghost)]
-pub mod verus_proofs;
 
 pub use driver::{RunSummary, STDIN_SOURCE, SourceUnits, UnitAccumulator, UnitOutcome};
 pub use error::{BcError, RuntimeError};

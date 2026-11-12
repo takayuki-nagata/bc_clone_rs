@@ -456,6 +456,41 @@ fn test_clone_cli_invalid_option() {
     assert!(stderr.contains("invalid option"));
 }
 
+/// `-v` and `--version` print `bc_clone VERSION (COMMIT)` and exit with status 0 without
+/// reading standard input. GNU bc prints another text, so this is not a differential test.
+#[test]
+fn test_clone_cli_version() {
+    let bin_path = env!("CARGO_BIN_EXE_bc_clone");
+    for args in [&["-v"][..], &["--version"], &["-l", "-v", "missing.bc"]] {
+        let (code, stdout, stderr) = run_command(bin_path, args, "1\n");
+        assert_eq!((code, stderr.as_str()), (0, ""), "{args:?}");
+        let line = stdout
+            .strip_suffix('\n')
+            .and_then(|l| l.strip_prefix("bc_clone "))
+            .unwrap_or_else(|| panic!("{stdout:?}"));
+        let (version, commit) = line
+            .split_once(" (")
+            .unwrap_or_else(|| panic!("{stdout:?}"));
+        assert_eq!(version, env!("CARGO_PKG_VERSION"));
+        let commit = commit
+            .strip_suffix(')')
+            .unwrap_or_else(|| panic!("{stdout:?}"));
+        let hash = commit.strip_suffix("-dirty").unwrap_or(commit);
+        assert!(
+            commit == "unknown"
+                || option_env!("BC_CLONE_GIT_COMMIT").is_some()
+                || (hash.len() == 7
+                    && hash
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))),
+            "{stdout:?}"
+        );
+    }
+    let (code, stdout, stderr) = run_command(bin_path, &["--version=1"], "");
+    assert_eq!((code, stdout.as_str()), (1, ""));
+    assert!(stderr.contains("unrecognized option '--version=1'"));
+}
+
 #[test]
 fn test_clone_cli_files() {
     let temp_dir = std::env::temp_dir();

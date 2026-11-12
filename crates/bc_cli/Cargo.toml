@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 bc_core = { path = "../bc_core" }
+bc_build_info = { path = "../bc_build_info" }
 ctrlc = "3.4"
 
 [dev-dependencies]

@@ -72,6 +72,12 @@ pub fn eval_bc(code: &str, math_enabled: bool, default_scale: u32) -> String {
     out_buf.0.borrow().clone()
 }
 
+/// The version line of the build, such as `bc_clone 0.5.0 (a916de2)`.
+#[wasm_bindgen]
+pub fn version() -> String {
+    String::from(bc_build_info::VERSION_LINE)
+}
+
 /// Persistent Evaluator session holding state across interactive commands.
 #[wasm_bindgen]
 pub struct BcSession {
@@ -158,6 +164,12 @@ impl BcSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_version_is_the_version_line() {
+        assert_eq!(version(), bc_build_info::VERSION_LINE);
+        assert!(version().starts_with("bc_clone "));
+    }
 
     #[test]
     fn test_eval_bc_basic_and_mathlib() {

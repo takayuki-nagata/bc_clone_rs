@@ -303,6 +303,7 @@ pub fn run_single_test(tc: &TestCase) -> bool {
 pub fn run_test_suite(cases: &[TestCase]) -> bool {
     zephyr_println!("\n=================================================");
     zephyr_println!("  bc_clone (bc_core) on Zephyr RTOS              ");
+    zephyr_println!("  {}", bc_build_info::VERSION_LINE);
     zephyr_println!("=================================================");
     zephyr_println!("[Zephyr Kernel] Initialized successfully. Starting bc_core test suite...\n");
 
@@ -361,6 +362,8 @@ pub fn run_repl_with<G, P, S, W>(
     W: FnMut(u32),
 {
     print_str("\nEntering bc_core Interactive REPL mode (Zephyr RTOS)...\n");
+    print_str(bc_build_info::VERSION_LINE);
+    print_str("\n");
     print_str("Type bc expressions (e.g. 2^64, scale=10; 4*a(1), define f(x)...)\n");
     print_str("bc> ");
 
@@ -693,6 +696,11 @@ mod tests {
 
         assert!(output_str.borrow().contains("^C\r\nbc> "));
         assert!(output_str.borrow().contains("21"));
+        assert!(
+            output_str
+                .borrow()
+                .contains(&format!("{}\n", bc_build_info::VERSION_LINE))
+        );
     }
 
     #[test]

@@ -7,12 +7,14 @@ members = [
     "crates/bc_c_api",
     "crates/bc_zephyr",
     "crates/bc_spec",
+    "crates/bc_build_info",
 ]
 default-members = [
     "crates/bc_core",
     "crates/bc_cli",
     "crates/bc_c_api",
     "crates/bc_zephyr",
+    "crates/bc_build_info",
 ]
 exclude = [
     "examples/m5stamp_c3",

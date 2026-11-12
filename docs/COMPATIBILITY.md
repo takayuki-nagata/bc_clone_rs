@@ -31,7 +31,7 @@ against an expected output written by hand (not against GNU `bc`).
 ### 1.1 Invocation
 | Requirement | Notes |
 |---|---|
-| `bc [-l] [file ...]` | Files are read in order, then standard input. `bc_clone` also accepts `-s` and `-w` (§4). Options follow the XBD 12.2 Utility Syntax Guidelines that POSIX requires: they may be grouped (`-ls`), `--` ends them, and `-` is an operand (a file named `-`). A long option (`--name`) is an error |
+| `bc [-l] [file ...]` | Files are read in order, then standard input. `bc_clone` also accepts `-s`, `-w` and `-v`/`--version` (§4). Options follow the XBD 12.2 Utility Syntax Guidelines that POSIX requires: they may be grouped (`-ls`), `--` ends them, and `-` is an operand (a file named `-`). A long option (`--name`) other than `--version` is an error |
 | `-l` defines `s c a l e j` and sets `scale` to 20 | |
 | An unreadable file operand produces a diagnostic (`bc: cannot open file <f>`) and terminates bc with status 1 without processing anything further | Operands before it have already been processed, as in GNU |
 | Standard error is used only for diagnostics | |
@@ -145,7 +145,7 @@ process may abort, as GNU `bc` does.
   (`illegal character: \377`, §3.2) and processing continues with the next input unit.
 - **Exit status**: 0 when all input was processed without any error. 1 when any syntax or runtime
   error occurred (processing still continues to the end), when an option is invalid, or when a file
-  cannot be opened. Warnings do not change the exit status.
+  cannot be opened. Warnings do not change the exit status. `-v` exits with status 0 (§4).
 
 ### 3.2 Diagnostic formats
 | Kind | Format |
@@ -230,6 +230,24 @@ error). If both are given, `-s` wins. Embedders select the same behavior with
 | `return` with an expression that is not in parentheses — `return expression requires parenthesis` | `return x + 1` |
 | A function body that does not begin with a newline after `{` — `End of line required` | `define f(x) { return (x) }` |
 
+### Command-line option `-v` / `--version`
+`bc_clone -v` (or `--version`) writes one line to standard output and exits with status 0 (1 if
+the line cannot be written) without reading any file or standard input:
+
+```
+bc_clone 0.4.0 (e574d44)
+```
+
+The part in parentheses is the commit the program was built from (its first 7 hexadecimal
+digits), followed by `-dirty` if a tracked file differed from that commit, or `unknown` when the
+build had no git repository (it can be set with the environment variable `BC_CLONE_GIT_COMMIT` at
+build time). `-dirty` is best effort: it is updated when the git index changes, so an edit that
+has not been staged is not seen. Unlike GNU `bc`, an abbreviation such as `--vers` is an error. The options are
+read from left to right, as GNU `bc` does: an invalid option before `-v` is reported (status 1),
+and nothing after `-v` is read. After `--`, `-v` is a file operand. `-s` rejects extensions of
+the language only, not this option. The C API (`bc_version()`), the Wasm module (`version()`)
+and the start-up banners of the embedded targets show the same line.
+
 ### Not supported in v0.4.0
 These GNU `bc` extensions are a syntax error in every mode: `else`, `print`, `continue`, `halt`,
 `limits`, `warranty`, `read()`, `&&`, `||`, `!`, `#` comments, relational operators inside larger
@@ -254,4 +272,5 @@ multi-letter identifiers.
 | Diagnostics | Include `adr=N` | No address |
 | Recovery after a syntax error | yacc error recovery; may report several errors per line and sometimes also discard the following line | One diagnostic, then the rest of the input unit is discarded (§3.1) |
 | Unsupported extensions | — | §4 "Not supported" |
-| Command-line options | `-h -i -l -q -s -v -w` and long forms; options can be grouped | Only `-l`, `-s`, `-w` (groupable); any other option, including every long option, is an error (status 1) |
+| Command-line options | `-h -i -l -q -s -v -w` and long forms; options can be grouped | Only `-l`, `-s`, `-w`, `-v` (groupable) and `--version`; any other option, including every other long option, is an error (status 1) |
+| `-v` output | GNU's version and copyright notice | `bc_clone VERSION (COMMIT)` (§4) |

@@ -9,3 +9,6 @@ interactive bc REPL over the USB serial console. The math library (-l) is enable
 
 Requirements: espflash (`cargo install espflash`), python3 with pyserial.
 Input lines are limited to 1024 characters; Ctrl+C cancels the current input.
+
+The banner at start-up names the build, such as "bc_clone 0.5.0 (a916de2)": the version and
+the commit it was built from. Please quote it when you report a problem.

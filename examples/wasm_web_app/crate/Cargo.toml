@@ -15,6 +15,7 @@ stack-probe = []
 [dependencies]
 wasm-bindgen = "0.2"
 bc_core = { path = "../../../crates/bc_core" }
+bc_build_info = { path = "../../../crates/bc_build_info" }
 
 [profile.release]
 opt-level = "s"

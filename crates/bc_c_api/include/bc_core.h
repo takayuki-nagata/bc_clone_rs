@@ -36,6 +36,15 @@ typedef enum {
 typedef void (*bc_output_cb_t)(const char *str, void *user_data);
 
 /**
+ * Returns the version of the library and the commit it was built from, such as
+ * "bc_clone 0.5.0 (a916de2)"; the commit is followed by "-dirty" if the sources differed from
+ * it, and is "unknown" if it could not be determined.
+ *
+ * @return A static null-terminated string; do not modify or free it.
+ */
+const char *bc_version(void);
+
+/**
  * Evaluates a bc expression or script string and writes the output into a buffer.
  *
  * Like the bc command, evaluation continues after an error with the next input unit (a line,

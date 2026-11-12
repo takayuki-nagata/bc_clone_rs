@@ -18,18 +18,23 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: bc_clone-linux-x86_64
             asset_name: bc_clone-linux-x86_64
+            runs_on_host: true
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: bc_clone-macos-x86_64
             asset_name: bc_clone-macos-x86_64
+            # Built on an Apple Silicon runner, so it is not run there.
+            runs_on_host: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: bc_clone-macos-aarch64
             asset_name: bc_clone-macos-aarch64
+            runs_on_host: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: bc_clone-windows-x86_64.exe
             asset_name: bc_clone-windows-x86_64.exe
+            runs_on_host: true
 
     steps:
       - name: Checkout Source Code
@@ -45,6 +50,15 @@ jobs:
 
       - name: Build Binary
         run: cargo build --release --target ${{ matrix.target }}
+
+      # The binary must name the tag's version and a clean commit; this catches a version that
+      # was not updated and a build that could not read the commit.
+      - name: Check the Version Line
+        if: matrix.runs_on_host
+        shell: bash
+        run: |
+          target/${{ matrix.target }}/release/bc_clone --version | tee version.txt
+          bash scripts/check_version_line.sh "${{ github.ref_name }}" version.txt
 
       - name: Package Binary (Linux/macOS)
         if: matrix.os != 'windows-latest'
@@ -92,10 +106,13 @@ jobs:
         run: bash scripts/package_release.sh "${{ github.ref_name }}" dist wasm m5stamp qemu
 
       - name: Smoke-Test the Packaged QEMU Binaries
+        shell: bash
         run: |
           mkdir smoke && tar -C smoke -xzf dist/*-qemu-riscv32-baremetal.tar.gz
-          smoke/*/run.sh imac
-          smoke/*/run.sh imc
+          for variant in imac imc; do
+            smoke/*/run.sh "${variant}" | tee "qemu-${variant}.txt"
+            bash scripts/check_version_line.sh "${{ github.ref_name }}" "qemu-${variant}.txt"
+          done
 
       - name: Upload Packages to Release
         uses: softprops/action-gh-release@v3
@@ -130,9 +147,11 @@ jobs:
         run: bash scripts/package_release.sh "${{ github.ref_name }}" dist zephyr
 
       - name: Smoke-Test the Packaged QEMU Self-Test
+        shell: bash
         run: |
           mkdir smoke && tar -C smoke -xzf dist/*-zephyr.tar.gz
-          timeout 120 smoke/*/run-qemu-selftest.sh
+          timeout 120 smoke/*/run-qemu-selftest.sh | tee zephyr.txt
+          bash scripts/check_version_line.sh "${{ github.ref_name }}" zephyr.txt
 
       - name: Upload Packages to Release
         uses: softprops/action-gh-release@v3

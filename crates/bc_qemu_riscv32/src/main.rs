@@ -158,6 +158,7 @@ fn main() -> ! {
     run_probe(&mut uart);
     let _ = writeln!(uart, "=================================================");
     let _ = writeln!(uart, " bc_clone RISC-V 32 Baremetal Test Suite on QEMU ");
+    let _ = writeln!(uart, " {}", bc_build_info::VERSION_LINE);
     let _ = writeln!(uart, "=================================================");
 
     let mut all_passed = true;

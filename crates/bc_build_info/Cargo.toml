@@ -1,0 +1,9 @@
+[package]
+name = "bc_build_info"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Version and commit of the bc_clone build, shared by every front end"
+build = "build.rs"
+
+[dependencies]

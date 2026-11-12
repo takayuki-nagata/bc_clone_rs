@@ -11,3 +11,7 @@ Contents:
   pkg/   the WebAssembly module and its JavaScript bindings (wasm-bindgen, --target web)
 
 Any static web server works; serve this directory and open /www/.
+
+The footer of the page names the build, such as "bc_clone 0.5.0 (a916de2)": the version and
+the commit it was built from (`version()` of the module). Please quote it when you report a
+problem.

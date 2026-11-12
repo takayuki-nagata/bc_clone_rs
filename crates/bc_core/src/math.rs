@@ -1355,6 +1355,26 @@ mod tests {
             verified_cli_classify_arg(b"--x", false),
             CLI_ARG_OPT_INVALID
         );
+        assert_eq!(
+            verified_cli_classify_arg(b"--version", false),
+            CLI_ARG_OPT_VERSION
+        );
+        assert_eq!(verified_cli_classify_arg(b"--version", true), CLI_ARG_FILE);
+        for other in [
+            &b"--versio"[..],
+            b"--versionx",
+            b"--Version",
+            b"--version=1",
+            b"--wersion",
+            b"--vursion",
+            b"--vegsion",
+            b"--verrion",
+            b"--versaon",
+            b"--versiin",
+            b"--versioo",
+        ] {
+            assert_eq!(verified_cli_classify_arg(other, false), CLI_ARG_OPT_INVALID);
+        }
         assert_eq!(verified_cli_classify_arg(b"", false), CLI_ARG_FILE);
         assert_eq!(verified_cli_classify_arg(b"test.bc", false), CLI_ARG_FILE);
         assert_eq!(
@@ -1370,6 +1390,10 @@ mod tests {
             CLI_ARG_OPT_W
         );
         assert_eq!(
+            verified_cli_classify_option_char(u32::from('v')),
+            CLI_ARG_OPT_VERSION
+        );
+        assert_eq!(
             verified_cli_classify_option_char(u32::from('q')),
             CLI_ARG_OPT_INVALID
         );
@@ -1379,6 +1403,39 @@ mod tests {
         );
         assert_eq!(verified_cli_initial_scale(true), 20);
         assert_eq!(verified_cli_initial_scale(false), 0);
+
+        let (l, s, w, v) = (
+            CLI_ARG_OPT_L,
+            CLI_ARG_OPT_S,
+            CLI_ARG_OPT_W,
+            CLI_ARG_OPT_VERSION,
+        );
+        let (bad, file, end) = (CLI_ARG_OPT_INVALID, CLI_ARG_FILE, CLI_ARG_END_OF_OPTIONS);
+        let parse = verified_cli_parse_options;
+        assert_eq!(parse(&[]), (CLI_PARSE_RUN, 0, false, CLI_POLICY_ALLOW));
+        assert_eq!(
+            parse(&[file, l]),
+            (CLI_PARSE_RUN, 2, true, CLI_POLICY_ALLOW)
+        );
+        assert_eq!(parse(&[w]), (CLI_PARSE_RUN, 1, false, CLI_POLICY_WARN));
+        assert_eq!(parse(&[s, w]), (CLI_PARSE_RUN, 2, false, CLI_POLICY_REJECT));
+        assert_eq!(parse(&[w, s]), (CLI_PARSE_RUN, 2, false, CLI_POLICY_REJECT));
+        assert_eq!(
+            parse(&[end, file]),
+            (CLI_PARSE_RUN, 2, false, CLI_POLICY_ALLOW)
+        );
+        assert_eq!(
+            parse(&[l, bad, v]),
+            (CLI_PARSE_ERROR, 1, true, CLI_POLICY_ALLOW)
+        );
+        assert_eq!(
+            parse(&[s, v, bad]),
+            (CLI_PARSE_VERSION, 1, false, CLI_POLICY_REJECT)
+        );
+        assert_eq!(
+            parse(&[file, v]),
+            (CLI_PARSE_VERSION, 1, false, CLI_POLICY_ALLOW)
+        );
     }
 
     #[test]

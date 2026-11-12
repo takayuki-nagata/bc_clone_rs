@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-import init, { BcSession } from '../pkg/bc_wasm.js';
+import init, { BcSession, version } from '../pkg/bc_wasm.js';
 
 let session = null;
 const history = [];
@@ -55,6 +55,7 @@ async function initWasm() {
     engineStatus.textContent = 'Loading Wasm...';
     await init();
     session = new BcSession(true); // Math library enabled
+    document.getElementById('engine-version').textContent = version();
     engineStatus.textContent = 'Engine Ready (Client-Side)';
     engineStatus.classList.add('ready');
     commandInput.disabled = false;

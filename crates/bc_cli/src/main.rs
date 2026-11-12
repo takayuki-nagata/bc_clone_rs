@@ -12,9 +12,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(any(test, kani))]
 use bc_core::verified_kernels::verified_repl_block_completeness;
 use bc_core::verified_kernels::{
-    CLI_ARG_END_OF_OPTIONS, CLI_ARG_OPT_CLUSTER, CLI_ARG_OPT_INVALID, CLI_ARG_OPT_L, CLI_ARG_OPT_S,
-    CLI_ARG_OPT_W, verified_cli_classify_arg, verified_cli_classify_option_char,
-    verified_cli_initial_scale,
+    CLI_ARG_END_OF_OPTIONS, CLI_ARG_FILE, CLI_ARG_OPT_CLUSTER, CLI_PARSE_ERROR, CLI_PARSE_VERSION,
+    CLI_POLICY_REJECT, CLI_POLICY_WARN, verified_cli_classify_arg,
+    verified_cli_classify_option_char, verified_cli_initial_scale, verified_cli_parse_options,
 };
 use bc_core::{
     BcWriter, DEFAULT_MAX_DEPTH, Evaluator, ExtensionPolicy, RunSummary, STDIN_SOURCE, SourceUnits,
@@ -224,6 +224,14 @@ pub fn run_interactive_loop<R: BufRead>(mut reader: R, evaluator: &mut Evaluator
     summary
 }
 
+/// Where an entry of the classified command line came from (`run_app`).
+enum ArgSource<'a> {
+    /// An option letter of a group such as `-ls`.
+    Letter(char),
+    /// A whole argument: a file, `--`, or a long option.
+    Arg(&'a String),
+}
+
 /// Main application entry point, extracted for testing. Returns the process exit status:
 /// 0 if all input was processed without error, 1 otherwise (`docs/COMPATIBILITY.md` §3.1).
 pub fn run_app<R, W, E>(
@@ -238,40 +246,63 @@ where
     W: std::io::Write + Send + 'static,
     E: std::io::Write + Send + 'static,
 {
-    let mut math_enabled = false;
-    let mut extension_policy = ExtensionPolicy::Allow;
-    let mut files = Vec::new();
-
+    // Classify the arguments: one entry of `kinds` per option letter and per other argument,
+    // with the text it came from in `sources` for the diagnostics and the file names. The
+    // verified `verified_cli_parse_options` then reads the options from left to right.
+    let mut kinds = Vec::new();
+    let mut sources = Vec::new();
     let mut options_ended = false;
     for arg in args.iter().skip(1) {
         let kind = verified_cli_classify_arg(arg.as_bytes(), options_ended);
-        if kind == CLI_ARG_END_OF_OPTIONS {
-            options_ended = true;
-        } else if kind == CLI_ARG_OPT_INVALID {
-            let mut err_writer = stderr_writer;
-            let _ = writeln!(err_writer, "bc: unrecognized option '{}'", arg);
-            return 1;
-        } else if kind == CLI_ARG_OPT_CLUSTER {
+        if kind == CLI_ARG_OPT_CLUSTER {
             for c in arg.chars().skip(1) {
-                let letter = verified_cli_classify_option_char(u32::from(c));
-                if letter == CLI_ARG_OPT_L {
-                    math_enabled = true;
-                } else if letter == CLI_ARG_OPT_S {
-                    extension_policy = ExtensionPolicy::Reject;
-                } else if letter == CLI_ARG_OPT_W {
-                    if extension_policy == ExtensionPolicy::Allow {
-                        extension_policy = ExtensionPolicy::Warn;
-                    }
-                } else {
-                    let mut err_writer = stderr_writer;
-                    let _ = writeln!(err_writer, "bc: invalid option -- '{}'", c);
-                    return 1;
-                }
+                kinds.push(verified_cli_classify_option_char(u32::from(c)));
+                sources.push(ArgSource::Letter(c));
             }
         } else {
-            files.push(arg.clone());
+            if kind == CLI_ARG_END_OF_OPTIONS {
+                options_ended = true;
+            }
+            kinds.push(kind);
+            sources.push(ArgSource::Arg(arg));
         }
     }
+    let (outcome, stop, math_enabled, policy) = verified_cli_parse_options(&kinds);
+    if outcome == CLI_PARSE_ERROR {
+        let mut err_writer = stderr_writer;
+        let _ = match sources.get(stop) {
+            Some(ArgSource::Letter(c)) => writeln!(err_writer, "bc: invalid option -- '{}'", c),
+            Some(ArgSource::Arg(arg)) => writeln!(err_writer, "bc: unrecognized option '{}'", arg),
+            None => Ok(()),
+        };
+        return 1;
+    }
+    if outcome == CLI_PARSE_VERSION {
+        let mut out_writer = stdout_writer;
+        return if writeln!(out_writer, "{}", bc_build_info::VERSION_LINE)
+            .and_then(|()| out_writer.flush())
+            .is_ok()
+        {
+            0
+        } else {
+            1
+        };
+    }
+    let extension_policy = if policy == CLI_POLICY_REJECT {
+        ExtensionPolicy::Reject
+    } else if policy == CLI_POLICY_WARN {
+        ExtensionPolicy::Warn
+    } else {
+        ExtensionPolicy::Allow
+    };
+    let files: Vec<&String> = kinds
+        .iter()
+        .zip(&sources)
+        .filter_map(|(&kind, source)| match source {
+            ArgSource::Arg(arg) if kind == CLI_ARG_FILE => Some(*arg),
+            _ => None,
+        })
+        .collect();
     let mut evaluator = create_evaluator(math_enabled, stdout_writer, stderr_writer);
     evaluator.max_depth = MAX_DEPTH.load(Ordering::SeqCst);
     evaluator.max_eval_depth = MAX_EVAL_DEPTH.load(Ordering::SeqCst);
@@ -281,7 +312,7 @@ where
     setup_ctrlc_handler();
 
     let mut errors = 0;
-    for filename in &files {
+    for filename in files {
         match std::fs::read(filename) {
             Ok(bytes) => {
                 let summary = run_non_interactive_block(bytes, filename, &mut evaluator);
@@ -956,6 +987,46 @@ mod tests {
                 "bc: unrecognized option '--mathlib'\n".to_string()
             )
         );
+
+        // `-v` and `--version` display the version and read nothing else: neither the files
+        // nor standard input. Options are read from left to right, so an invalid option before
+        // them is reported and anything after them is not read.
+        let version = (
+            0,
+            format!("{}\n", bc_build_info::VERSION_LINE),
+            String::new(),
+        );
+        for args in [
+            &["-v"][..],
+            &["--version"],
+            &["-lv"],
+            &["-s", "-v"],
+            &["-v", "-z"],
+            &["-v", "--mathlib"],
+            &[&file_name, "-v"],
+            &["-v", "/nonexistent/file.bc"],
+        ] {
+            assert_eq!(run(args, "1\n"), version, "{args:?}");
+        }
+        assert_eq!(
+            run(&["-zv"], "1\n"),
+            (1, String::new(), "bc: invalid option -- 'z'\n".to_string())
+        );
+        assert_eq!(
+            run(&["--versio", "-v"], ""),
+            (
+                1,
+                String::new(),
+                "bc: unrecognized option '--versio'\n".to_string()
+            )
+        );
+        // After "--", `-v` is a file operand.
+        assert_eq!(
+            run(&["--", "-v"], ""),
+            (1, String::new(), "bc: cannot open file -v\n".to_string())
+        );
+        // `-s` rejects extensions of the language, not this option.
+        assert_eq!(run(&["-sw", "--version"], ""), version);
         std::fs::remove_file(&file).unwrap();
     }
 
@@ -1191,6 +1262,16 @@ mod tests {
         assert!(BcWriter::write_bytes(&mut success, b" \xff").is_ok());
         assert!(success.flush().is_ok());
         assert_eq!(success.inner, b"hello \xff");
+    }
+
+    #[test]
+    fn test_version_that_cannot_be_written_exits_with_status_1() {
+        let args = ["bc".to_string(), "-v".to_string()];
+        assert_eq!(
+            run_app(&args, &b""[..], FailingFlushWriter, Vec::new(), false),
+            1
+        );
+        assert_eq!(run_app(&args, &b""[..], Vec::new(), Vec::new(), false), 0);
     }
 }
 

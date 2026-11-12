@@ -11,10 +11,9 @@ test_tool = "cargo"
 # differential tests and the POSIX suite in bc_clone, so every mutant runs the whole workspace.
 test_workspace = true
 
-# Proof-only files compiled only under `cargo kani` or `verus`.
+# Proof-only files compiled only under `cargo kani`.
 exclude_globs = [
     "crates/bc_core/src/kani_proofs.rs",
-    "crates/bc_core/src/verus_proofs.rs",
     # Property tests compiled only under `cfg(test)` (declared in `math.rs`, so cargo-mutants
     # does not see the attribute): their helpers are the reference, not the code under test.
     "crates/bc_core/src/math/proptests.rs",

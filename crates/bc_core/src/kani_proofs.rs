@@ -280,9 +280,9 @@ fn proof_verified_cli_kernels() {
     let init_scale = verified_cli_initial_scale(math_enabled);
     assert_eq!(init_scale, if math_enabled { 20 } else { 0 });
 
-    let buf: [u8; 6] = kani::any();
+    let buf: [u8; 10] = kani::any();
     let len: usize = kani::any();
-    kani::assume(len <= 6);
+    kani::assume(len <= 10);
     let slice = &buf[..len];
 
     let options_ended: bool = kani::any();
@@ -291,6 +291,8 @@ fn proof_verified_cli_kernels() {
         assert_eq!(kind, CLI_ARG_FILE);
     } else if len == 2 && slice[1] == b'-' {
         assert_eq!(kind, CLI_ARG_END_OF_OPTIONS);
+    } else if slice == b"--version" {
+        assert_eq!(kind, CLI_ARG_OPT_VERSION);
     } else if slice[1] == b'-' {
         assert_eq!(kind, CLI_ARG_OPT_INVALID);
     } else {
@@ -303,8 +305,48 @@ fn proof_verified_cli_kernels() {
         Some('l') => assert_eq!(letter, CLI_ARG_OPT_L),
         Some('s') => assert_eq!(letter, CLI_ARG_OPT_S),
         Some('w') => assert_eq!(letter, CLI_ARG_OPT_W),
+        Some('v') => assert_eq!(letter, CLI_ARG_OPT_VERSION),
         _ => assert_eq!(letter, CLI_ARG_OPT_INVALID),
     }
+}
+
+/// `verified_cli_parse_options` over symbolic command lines of up to 5 entries, against a
+/// direct statement of its rules: the first invalid option or `-v` ends the reading, `-l`
+/// enables the math library, `-s` wins over `-w`, and nothing else changes the state.
+#[kani::proof]
+#[kani::unwind(7)]
+fn proof_verified_cli_parse_options() {
+    let buf: [u8; 5] = kani::any();
+    let len: usize = kani::any();
+    kani::assume(len <= 5);
+    let kinds = &buf[..len];
+    let (outcome, stop, math, policy) = verified_cli_parse_options(kinds);
+
+    let first_stop = kinds
+        .iter()
+        .position(|&k| k == CLI_ARG_OPT_INVALID || k == CLI_ARG_OPT_VERSION);
+    let read = &kinds[..first_stop.unwrap_or(len)];
+    match first_stop {
+        None => assert!(outcome == CLI_PARSE_RUN && stop == len),
+        Some(i) => {
+            assert_eq!(stop, i);
+            let expected = if kinds[i] == CLI_ARG_OPT_INVALID {
+                CLI_PARSE_ERROR
+            } else {
+                CLI_PARSE_VERSION
+            };
+            assert_eq!(outcome, expected);
+        }
+    }
+    assert_eq!(math, read.contains(&CLI_ARG_OPT_L));
+    let expected_policy = if read.contains(&CLI_ARG_OPT_S) {
+        CLI_POLICY_REJECT
+    } else if read.contains(&CLI_ARG_OPT_W) {
+        CLI_POLICY_WARN
+    } else {
+        CLI_POLICY_ALLOW
+    };
+    assert_eq!(policy, expected_policy);
 }
 
 /// Bit-precise bounded model checking of `verified_repl_block_completeness` over arbitrary
