@@ -26,6 +26,7 @@ mod tests;
 mod trusted;
 
 pub use lexer::Lexer;
+pub(crate) use lexer::syntax_error_text;
 pub(crate) use parse::parse_unit_ref;
 pub use parse::{DEFAULT_MAX_DEPTH, NESTING_TOO_DEEP, Parser};
 pub(crate) use trusted::{ascii_string, share_code};

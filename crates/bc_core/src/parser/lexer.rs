@@ -77,7 +77,7 @@ pub open spec fn r_next(t: Token, old: Seq<SToken>, new: Seq<SToken>) -> bool {
 }
 
 /// The bytes of `syntax error`.
-pub(super) fn syntax_error_text() -> (r: String)
+pub(crate) fn syntax_error_text() -> (r: String)
     ensures
         text_view(r) == syntax_error_msg(),
 {

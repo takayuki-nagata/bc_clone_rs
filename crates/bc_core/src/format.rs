@@ -25,6 +25,7 @@ use crate::spec_num::*;
 use crate::verified_kernels::POSIX_WRAP_COL_LIMIT;
 use crate::verified_kernels::{BC_BASE_MAX, BC_SCALE_MAX};
 use crate::verified_kernels::{verified_multi_digit_obase_pad_zeros, verified_wrapped_stdout_step};
+#[cfg(test)]
 use alloc::string::String;
 use alloc::vec::Vec;
 #[cfg(verus_keep_ghost)]
@@ -583,18 +584,6 @@ impl BCNum {
 } // verus!
 
 impl BCNum {
-    /// Formats the value as a string in `obase`, as `print` writes it (without the newline
-    /// and the 70-column wrapping). An `obase` outside 2 to `BC_BASE_MAX` is `BaseOutOfRange`,
-    /// and a scale above `BC_SCALE_MAX` is `ScaleTooLarge`.
-    pub fn try_format_obase(&self, obase: usize) -> Result<String, RuntimeError> {
-        // The bytes of `format_bytes` are ASCII.
-        Ok(self
-            .checked_format_bytes(obase)?
-            .into_iter()
-            .map(char::from)
-            .collect())
-    }
-
     /// Formats the value as a string in `obase` (2 to `BC_BASE_MAX`).
     #[cfg(test)]
     pub fn format_obase(&self, obase: usize) -> String {

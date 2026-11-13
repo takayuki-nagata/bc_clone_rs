@@ -23,6 +23,7 @@ use crate::verified_kernels::{verified_repl_block_scan, verified_unit_within_lim
 use trusted::{append_bytes, subslice};
 
 mod trusted;
+mod unverified;
 use alloc::rc::Rc;
 #[cfg(verus_keep_ghost)]
 use bc_spec::eval::{EState, bytes_add, with_call, with_depth, with_err, with_flags};
@@ -483,17 +484,6 @@ impl Evaluator {
 verus! {
 
 impl Evaluator {
-    /// Parses and executes one input unit, reporting any error to `stderr_writer`.
-    ///
-    /// `source` names the input in syntax diagnostics (a file name, or [`STDIN_SOURCE`]) and
-    /// `first_line` is the line number of the unit's first line within that source.
-    #[verifier::external_body]
-    pub fn run_unit(&mut self, unit: &[u8], source: &str, first_line: usize) -> UnitOutcome {
-        let policy = self.extension_policy;
-        let max_depth = self.max_depth;
-        self.run_unit_ref(unit, source, first_line, policy, max_depth, Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary()))
-    }
-
     /// `run_unit`: the refinement theorem of one unit, against the specification's `run_unit`.
     /// A nesting limit that leaves no room to count is not a limit at all, and is lowered to one
     /// that is still out of reach.
@@ -617,13 +607,6 @@ impl UnitAccumulator {
         let r = Self { buf: Vec::new(), start_line: 1, next_line: 1, scanned: 0, scan: (0, false, false) };
         proof { assert(r.buf@.subrange(0, 0) =~= Seq::<u8>::empty()); }
         r
-    }
-
-    /// Appends one line (with its trailing newline, if any). Returns the completed unit and the
-    /// line number of its first line when the accumulated text forms a complete unit.
-    #[verifier::external_body]
-    pub fn push_line(&mut self, line: &[u8]) -> Option<(Vec<u8>, usize)> {
-        self.push_line_ref(line)
     }
 
     /// `push_line`: one step of the specification's `split_units_from`, for a line that is not
@@ -970,12 +953,6 @@ impl SourceUnits {
         self.cur.rest(self.text@)
     }
 
-    /// The units of `text`, which is bytes and need not be UTF-8.
-    #[verifier::external_body]
-    pub fn new(text: Vec<u8>) -> Self {
-        Self::new_ref(text)
-    }
-
     /// `new`, for a text that is not too long to count.
     pub(crate) fn new_ref(text: Vec<u8>) -> (r: Self)
         requires
@@ -1022,23 +999,6 @@ pub(crate) open spec fn r_step(r: Option<UnitOutcome>, e0: Evaluator, e: Evaluat
 }
 
 impl Evaluator {
-    /// Splits `text` into units and runs each one, continuing after errors until the end of
-    /// the text or `quit`. `text` is bytes and need not be UTF-8.
-    #[verifier::external_body]
-    pub fn run_source(&mut self, text: &[u8], source: &str) -> RunSummary {
-        self.run_source_ref(text, source, Ghost(arbitrary()), Ghost(arbitrary()))
-    }
-
-    /// Runs the next unit of `units`, or returns `None` after the last one. A front end that
-    /// calls this until `None` or [`UnitOutcome::Quit`] runs the text as [`Evaluator::run_source`]
-    /// does.
-    #[verifier::external_body]
-    pub fn run_next_unit(&mut self, units: &mut SourceUnits, source: &str) -> Option<UnitOutcome> {
-        let policy = self.extension_policy;
-        let limit = self.max_depth;
-        self.run_next_source_unit_ref(units, source, policy, limit, Ghost(arbitrary()), Ghost(arbitrary()))
-    }
-
     /// `run_next_unit`: one step of the specification's `run_units` on the units not yet run.
     pub(crate) fn run_next_source_unit_ref(&mut self, units: &mut SourceUnits, source: &str, policy: ExtensionPolicy, limit: usize, Ghost(opts): Ghost<SpecOptions>, Ghost(rs): Ghost<SpecRun>) -> (r: Option<UnitOutcome>)
         requires
@@ -1311,6 +1271,8 @@ proof fn lemma_run_units_stop(opts: Options, rs: RunState, src: Seq<u8>, us: Seq
 
 } // verus!
 
+verus! {
+
 impl Default for UnitAccumulator {
     fn default() -> Self {
         Self::new()
@@ -1329,15 +1291,7 @@ impl Clone for UnitAccumulator {
     }
 }
 
-impl core::fmt::Debug for UnitAccumulator {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("UnitAccumulator")
-            .field("buf", &self.buf)
-            .field("start_line", &self.start_line)
-            .field("next_line", &self.next_line)
-            .finish()
-    }
-}
+} // verus!
 
 #[cfg(test)]
 mod tests {
@@ -1444,6 +1398,18 @@ mod tests {
         for &text in SPLIT_CASES {
             assert_eq!(run_bytes(true, text), run_bytes(false, text), "{:?}", text);
         }
+    }
+
+    #[test]
+    fn accumulator_debug_shows_its_lines() {
+        let mut acc = UnitAccumulator::new();
+        assert_eq!(acc.push_line(b"{\n"), None);
+        let shown = alloc::format!("{:?}", acc);
+        assert!(shown.starts_with("UnitAccumulator {"), "{shown}");
+        assert!(
+            shown.contains("start_line: 1") && shown.contains("next_line: 2"),
+            "{shown}"
+        );
     }
 
     #[cfg(all(not(miri), target_pointer_width = "64"))]

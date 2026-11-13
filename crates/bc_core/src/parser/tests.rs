@@ -659,3 +659,13 @@ fn test_fallible_parser_and_lexer() {
         matches!(&stmts[6], Stmt::Block(v) if matches!(&v[0], Stmt::Expr(Expr::AssignOp(_, t, _)) if **t == Expr::RegisterAccess(Register::Scale)))
     );
 }
+
+#[test]
+fn parse_program_returns_the_statements_in_the_arena() {
+    let mut parser = Parser::try_new(Lexer::new(b"x = 1\nx\n")).unwrap();
+    let stmts = parser.try_parse_program().unwrap();
+    let code = parser.take_code();
+    assert_eq!(stmts.len(), 2);
+    assert!(stmts.iter().all(|&i| i < code.nodes.len()));
+    assert!(parser.take_code().nodes.is_empty());
+}

@@ -63,6 +63,7 @@ mod expr;
 mod func;
 mod list;
 mod stmt;
+mod unverified;
 
 /// Diagnostic for input nested deeper than the limit (`docs/COMPATIBILITY.md` §3.2).
 pub const NESTING_TOO_DEEP: &str = "nesting too deep";
@@ -552,15 +553,6 @@ spec fn r_lres(r: Result<Vec<usize>, BcError>, q: Parser, toks: Seq<SToken>, cfg
     }
 }
 
-impl Parser {
-    /// Parses the program fully, returning Err on lexical/syntax error or `"quit"`. The proved
-    /// theorem is that of `parse_program_ref` (connected to the specification in `run_unit`).
-    #[verifier::external_body]
-    /// Parses the program: the indices of its statements in the arena [`Parser::take_code`].
-    pub fn try_parse_program(&mut self) -> Result<Vec<usize>, BcError> {
-        self.parse_program_ref(Ghost(arbitrary()), Ghost(arbitrary()), Ghost(arbitrary())).0
-    }
-}
 
 
 /// The tokens of a unit within the limit are as the parser's proofs expect them.
@@ -642,42 +634,17 @@ pub(crate) fn parse_unit_ref(unit: &[u8], policy: ExtensionPolicy, max_depth: us
     (res, ext, code)
 }
 
-} // verus!
-
 impl Parser {
-    /// Creates a new Parser from the Lexer, returning Err on initial lexical error.
-    pub fn try_new(mut lexer: Lexer) -> Result<Self, BcError> {
-        let current_token = lexer.try_get_next_token()?;
-        Ok(Self {
-            lexer,
-            current_token,
-            loop_depth: 0,
-            in_function: false,
-            extension_policy: ExtensionPolicy::Allow,
-            extension_uses: Vec::new(),
-            depth: 0,
-            last_line: 1,
-            max_depth: DEFAULT_MAX_DEPTH,
-            nodes: Vec::new(),
-        })
+    /// The arena of the nodes parsed so far, which it leaves empty.
+    pub fn take_code(&mut self) -> Code {
+        let mut nodes = Vec::new();
+        core::mem::swap(&mut self.nodes, &mut nodes);
+        Code { nodes }
     }
 
     /// Sets the nesting limit (see [`DEFAULT_MAX_DEPTH`]).
-    /// The arena of the nodes parsed so far, which it leaves empty.
-    pub fn take_code(&mut self) -> Code {
-        Code {
-            nodes: core::mem::take(&mut self.nodes),
-        }
-    }
-
     pub fn set_max_depth(&mut self, max_depth: usize) {
         self.max_depth = max_depth;
-    }
-
-    /// Creates a new Parser from the Lexer.
-    #[cfg(test)]
-    pub fn new(lexer: Lexer) -> Self {
-        Self::try_new(lexer).unwrap_or_else(|e| panic!("{:?}", e))
     }
 
     /// Sets how uses of non-POSIX syntax are treated.
@@ -688,6 +655,18 @@ impl Parser {
     /// Returns and clears the recorded uses of non-POSIX syntax, as `(line, description)` with
     /// GNU bc's descriptions (e.g. `multiple letter name - abc`).
     pub fn take_extension_uses(&mut self) -> Vec<(usize, String)> {
-        core::mem::take(&mut self.extension_uses)
+        let mut uses = Vec::new();
+        core::mem::swap(&mut self.extension_uses, &mut uses);
+        uses
+    }
+}
+
+} // verus!
+
+impl Parser {
+    /// Creates a new Parser from the Lexer.
+    #[cfg(test)]
+    pub fn new(lexer: Lexer) -> Self {
+        Self::try_new(lexer).unwrap_or_else(|e| panic!("{:?}", e))
     }
 }

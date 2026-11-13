@@ -27,6 +27,7 @@ pub trait BcWriter: FmtWrite + Send {
     /// Writes bytes. A string literal is printed byte for byte, so the bytes need not be UTF-8.
     /// The default implementation passes them to `write_str`, replacing each invalid UTF-8
     /// sequence with U+FFFD; a writer to a byte stream overrides it to write them unchanged.
+    // coverage: miri(default_writer_keeps_text_and_replaces_invalid_utf8); why: string, fmt
     fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
         match core::str::from_utf8(b) {
             Ok(text) => self.write_str(text),
@@ -35,6 +36,7 @@ pub trait BcWriter: FmtWrite + Send {
     }
 
     /// Flushes any buffered content.
+    // coverage: miri(default_writer_keeps_text_and_replaces_invalid_utf8); why: fmt
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
     }
@@ -44,6 +46,7 @@ impl BcWriter for String {}
 
 impl WrappedStdout {
     /// Creates a new WrappedStdout writing to the given writer.
+    // coverage: miri(stream_wrappers_pass_exactly_their_bytes); why: dyn
     pub fn new(writer: Box<dyn BcWriter>) -> Self {
         Self { writer, col: 0 }
     }
@@ -51,6 +54,7 @@ impl WrappedStdout {
     /// Writes a string to the output stream with POSIX line wrapping: a backslash-newline
     /// before a character at column 68 or beyond (`format::wrap_output`, verified against the
     /// specification's `write_wrapped`).
+    // coverage: miri(front_end_methods_reach_the_writer); why: dyn
     pub fn write_str(&mut self, s: &str) -> core::fmt::Result {
         let (out, col) = wrap_output(self.col, s.as_bytes());
         self.col = col;
@@ -58,6 +62,7 @@ impl WrappedStdout {
     }
 
     /// Flushes the underlying writer.
+    // coverage: miri(front_end_methods_reach_the_writer); why: dyn
     pub fn flush(&mut self) -> core::fmt::Result {
         self.writer.flush()
     }
@@ -143,23 +148,27 @@ impl ErrWriter {
 
 impl ErrWriter {
     /// Creates the diagnostic stream writing to the given writer.
+    // coverage: miri(stream_wrappers_pass_exactly_their_bytes); why: dyn
     pub fn new(writer: Box<dyn BcWriter>) -> Self {
         Self { writer }
     }
 
     /// Flushes the underlying writer.
+    // coverage: miri(front_end_methods_reach_the_writer); why: dyn
     pub fn flush(&mut self) -> core::fmt::Result {
         self.writer.flush()
     }
 
     /// Writes formatted text, so that `writeln!(evaluator.stderr_writer, ...)` works without
     /// importing `fmt::Write`.
+    // coverage: miri(front_end_methods_reach_the_writer); why: fmt
     pub fn write_fmt(&mut self, args: core::fmt::Arguments<'_>) -> core::fmt::Result {
         FmtWrite::write_fmt(self, args)
     }
 }
 
 impl FmtWrite for ErrWriter {
+    // coverage: miri(front_end_methods_reach_the_writer); why: fmt
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.writer.write_str(s)
     }
@@ -223,5 +232,31 @@ mod tests {
         err.write_bytes(b"\n");
         err.flush_err();
         assert_eq!(seen(&rec), (b"a\xffb\n".to_vec(), 1));
+    }
+
+    #[test]
+    fn front_end_methods_reach_the_writer() {
+        let rec = Recorder::default();
+        let mut out = WrappedStdout::new(Box::new(rec.clone()));
+        let long = "7".repeat(80);
+        assert!(out.write_str(&long).is_ok());
+        assert!(out.flush().is_ok());
+        assert_eq!(seen(&rec), (wrap_output(0, long.as_bytes()).0, 1));
+
+        let rec = Recorder::default();
+        let mut err = ErrWriter::new(Box::new(rec.clone()));
+        assert!(err.write_fmt(format_args!("x={}", 1)).is_ok());
+        assert!(FmtWrite::write_str(&mut err, ";").is_ok());
+        assert!(err.flush().is_ok());
+        assert_eq!(seen(&rec), (b"x=1;".to_vec(), 1));
+    }
+
+    #[test]
+    fn default_writer_keeps_text_and_replaces_invalid_utf8() {
+        let mut s = String::new();
+        assert!(BcWriter::write_bytes(&mut s, "é1".as_bytes()).is_ok());
+        assert!(BcWriter::write_bytes(&mut s, b"\xff").is_ok());
+        assert!(BcWriter::flush(&mut s).is_ok());
+        assert_eq!(s, "é1\u{fffd}");
     }
 }

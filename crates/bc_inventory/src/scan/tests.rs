@@ -510,3 +510,37 @@ fn the_lists_of_crates_and_miri_packages_are_checked_against_the_repository() {
     );
     assert_eq!(check_lists(&Mem::new(&[])).len(), 2);
 }
+
+#[test]
+fn a_trait_method_may_be_named_by_its_type() {
+    let (s, _) = scan_one(
+        CORE,
+        &[(
+            "crates/bc_core/src/lib.rs",
+            r#"
+pub struct Acc;
+impl core::fmt::Debug for Acc {
+    // coverage: miri(t_debug); why: fmt
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { Ok(()) }
+}
+impl Acc {
+    // coverage: miri(t_debug); why: fmt
+    pub fn inherent(&self) {}
+}
+verus! {
+impl Clone for Acc {
+    fn clone(&self) -> Self { Acc }
+}
+}
+#[cfg(test)]
+mod tests {
+    #[test] fn t_debug() { let a = super::Acc; let _ = alloc::format!("{a:?}"); }
+}
+"#,
+        )],
+    );
+    assert!(item(&s, "Acc::fmt").targets_ok);
+    assert_eq!(item(&s, "Acc::fmt").alt.as_deref(), Some("Acc"));
+    assert!(!item(&s, "Acc::inherent").targets_ok);
+    assert_eq!(item(&s, "Acc::clone").alt.as_deref(), Some("Acc"));
+}

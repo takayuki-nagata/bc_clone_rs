@@ -48,6 +48,7 @@ mod trusted_bigint;
 mod trusted_math;
 #[cfg(verus_keep_ghost)]
 mod trusted_std;
+mod unverified;
 // Before `verified_kernels`, which uses its macro.
 #[macro_use]
 mod trusted_dual;

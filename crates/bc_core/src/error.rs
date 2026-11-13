@@ -5,7 +5,6 @@
 //! Diagnostic texts follow `docs/COMPATIBILITY.md` §3.2.
 
 use alloc::string::String;
-use core::fmt;
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
@@ -44,30 +43,6 @@ pub struct ExBcError(BcError);
 
 } // verus!
 
-impl fmt::Display for RuntimeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DivideByZero => f.write_str("Divide by zero"),
-            Self::NegativePowerOfZero => f.write_str("divide by zero"),
-            Self::ModuloByZero => f.write_str("Modulo by zero"),
-            Self::NegativeSqrt => f.write_str("Square root of a negative number"),
-            Self::UndefinedFunction(name) => write!(f, "Function {} not defined.", name),
-            Self::ParameterMismatch => f.write_str("Parameter number mismatch"),
-            Self::ParameterTypeMismatch(name) => {
-                write!(f, "Parameter type mismatch parameter {}.", name)
-            }
-            Self::ArraySubscriptOutOfBounds(name) => {
-                write!(f, "Array {} subscript out of bounds.", name)
-            }
-            Self::ExponentTooLarge => f.write_str("exponent too large in raise"),
-            Self::ScaleTooLarge => f.write_str("scale too large"),
-            Self::MathArgumentTooLarge => f.write_str("argument too large"),
-            Self::NestingTooDeep => f.write_str("nesting too deep"),
-            Self::BaseOutOfRange => f.write_str("base out of range"),
-        }
-    }
-}
-
 /// Any condition that stops the processing of an input unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BcError {
@@ -81,16 +56,6 @@ pub enum BcError {
         kind: RuntimeError,
         func: Option<String>,
     },
-}
-
-impl BcError {
-    /// Creates a generic `syntax error` diagnostic.
-    pub fn syntax(line: usize) -> Self {
-        Self::Syntax {
-            line,
-            message: String::from("syntax error"),
-        }
-    }
 }
 
 verus! {
@@ -112,28 +77,14 @@ impl BcError {
     }
 }
 
+impl BcError {
+    /// Creates a generic `syntax error` diagnostic.
+    pub fn syntax(line: usize) -> Self {
+        Self::Syntax { line, message: crate::parser::syntax_error_text() }
+    }
+}
+
 } // verus!
-
-impl From<RuntimeError> for BcError {
-    fn from(kind: RuntimeError) -> Self {
-        Self::Runtime { kind, func: None }
-    }
-}
-
-impl fmt::Display for BcError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Quit => f.write_str("quit"),
-            Self::Syntax { line, message, .. } => write!(f, "{}: {}", line, message),
-            Self::Runtime { kind, func } => write!(
-                f,
-                "Runtime error (func={}): {}",
-                func.as_deref().unwrap_or("(main)"),
-                kind
-            ),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

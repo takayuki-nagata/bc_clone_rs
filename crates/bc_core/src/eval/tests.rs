@@ -5,6 +5,7 @@ use crate::parser::Lexer;
 use crate::parser::Param;
 use crate::parser::Parser;
 use crate::parser::test_tree::{Expr, ExprOrArray, FunctionDef, Stmt};
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::ToString;
 use core::fmt::Write as FmtWrite;

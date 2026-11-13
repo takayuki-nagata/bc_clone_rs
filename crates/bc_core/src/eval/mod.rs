@@ -14,7 +14,6 @@
 //! - `call`: entering and leaving a function's scope;
 //! - `unit`: the statements of a unit and runtime diagnostics.
 
-use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -35,8 +34,8 @@ use crate::mathlib::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
 #[cfg(verus_keep_ghost)]
 use crate::mathlib::{lemma_math_ok, math_ok};
 use crate::parser::{
-    Arg as PArg, AssignOp, BinOp, Code, DEFAULT_MAX_DEPTH, ExtensionPolicy, FunctionDef,
-    Node as PNode, Param, Register, RelOp, share_code,
+    Arg as PArg, AssignOp, BinOp, Code, ExtensionPolicy, FunctionDef, Node as PNode, Param,
+    Register, RelOp, share_code,
 };
 #[cfg(verus_keep_ghost)]
 use crate::refine::*;
@@ -113,6 +112,7 @@ mod ops;
 mod tests;
 mod trusted_io;
 mod unit;
+mod unverified;
 
 pub use trusted_io::{BcWriter, ErrWriter, WrappedStdout};
 #[cfg(verus_keep_ghost)]
@@ -800,25 +800,3 @@ impl Evaluator {
 }
 
 } // verus!
-
-impl Evaluator {
-    /// Creates a new Evaluator with abstract BcWriter streams.
-    pub fn new(
-        math_enabled: bool,
-        stdout_writer: Box<dyn BcWriter>,
-        stderr_writer: Box<dyn BcWriter>,
-    ) -> Self {
-        // The streams and the nesting limit are outside `inv`; `with_streams` establishes it.
-        Self::with_streams(
-            math_enabled,
-            WrappedStdout::new(stdout_writer),
-            ErrWriter::new(stderr_writer),
-            DEFAULT_MAX_DEPTH,
-        )
-    }
-
-    /// The diagnostic stream, for a front end's own messages (e.g. a file that cannot be read).
-    pub fn stderr_writer(&mut self) -> &mut ErrWriter {
-        &mut self.stderr_writer
-    }
-}

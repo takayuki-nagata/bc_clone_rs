@@ -124,8 +124,13 @@ pub const CRATES: &[CrateSpec] = &[
 ];
 
 /// The reasons a function cannot be covered by a higher tier.
+///
+/// `boundary` is a public entry point of `bc_core` whose precondition (an invariant of a type
+/// whose fields are private to the crate) its unverified callers cannot state, so it calls the
+/// verified function with that precondition without proof (`AGENTS.md` argues each one).
+/// `trait` is an implementation of a standard trait whose vstd specification does not fit it.
 pub const WHY_WORDS: &[&str] = &[
-    "dyn", "fmt", "string", "ffi", "io", "signal", "hw", "bindgen", "build",
+    "dyn", "fmt", "string", "ffi", "io", "signal", "hw", "bindgen", "build", "boundary", "trait",
 ];
 
 /// Reads the files of the repository (or of a test fixture).
@@ -170,6 +175,9 @@ pub struct Item {
     pub name: String,
     /// The function's own name, which a test or harness must mention.
     pub simple: String,
+    /// For a method of a trait implementation (`Display::fmt`, `Clone::clone`), which is called
+    /// through the trait: the implementing type, whose mention also counts.
+    pub alt: Option<String>,
     /// `KIND_*`.
     pub kind: u8,
     pub tag: Tag,
@@ -566,6 +574,8 @@ struct Ctx<'a> {
     /// Directory of the files of child modules.
     child_dir: PathBuf,
     act: Active,
+    /// The implementing type, inside a trait implementation.
+    trait_ty: Option<String>,
 }
 
 impl Ctx<'_> {
@@ -635,6 +645,7 @@ fn scan_file(
         modpath,
         child_dir,
         act,
+        trait_ty: None,
     };
     scan_items(src, &parsed.items, &mut ctx, scan);
 }
@@ -669,6 +680,8 @@ fn scan_items(src: &dyn Source, items: &[syn::Item], ctx: &mut Ctx, scan: &mut S
             syn::Item::Impl(i) => {
                 let act = ctx.act.and(active(&attr_metas(&i.attrs)));
                 let ty = type_name(&i.self_ty);
+                let saved =
+                    std::mem::replace(&mut ctx.trait_ty, i.trait_.as_ref().map(|_| ty.clone()));
                 for it in &i.items {
                     if let syn::ImplItem::Fn(m) = it {
                         let metas = attr_metas(&m.attrs);
@@ -686,6 +699,7 @@ fn scan_items(src: &dyn Source, items: &[syn::Item], ctx: &mut Ctx, scan: &mut S
                         );
                     }
                 }
+                ctx.trait_ty = saved;
             }
             syn::Item::Trait(t) => {
                 let act = ctx.act.and(active(&attr_metas(&t.attrs)));
@@ -961,6 +975,7 @@ fn push_item(
         file: ctx.file.clone(),
         name: ctx.qualify(ty, name),
         simple: name.to_string(),
+        alt: ctx.trait_ty.clone(),
         kind,
         tag: find_tag(&ctx.lines, first, kw),
         body: b,
@@ -1201,10 +1216,11 @@ fn scan_verus(ts: &TokenStream, ctx: &mut Ctx, scan: &mut Scan, ty: Option<&str>
                     })
                     .unwrap_or_default();
                 if let Some(TokenTree::Group(g)) = toks.get(k) {
-                    let saved = ctx.act;
+                    let saved = (ctx.act, ctx.trait_ty.clone());
                     ctx.act = act;
+                    ctx.trait_ty = after_for.map(|_| name.clone());
                     scan_verus(&g.stream(), ctx, scan, Some(&name));
-                    ctx.act = saved;
+                    (ctx.act, ctx.trait_ty) = saved;
                 }
                 i = k + 1;
             }
@@ -1284,10 +1300,13 @@ fn scan_verus(ts: &TokenStream, ctx: &mut Ctx, scan: &mut Scan, ty: Option<&str>
 /// Sets `targets_ok` of every item: each harness, test, caller or integration test its tag
 /// names exists and covers it.
 pub fn resolve(scan: &mut Scan, src: &dyn Source) {
-    let mentions = |checks: &[Check], krate: usize, name: &str, simple: &str| {
+    let named = |body: &BTreeSet<String>, it: &Item| {
+        body.contains(&it.simple) || it.alt.as_ref().is_some_and(|a| body.contains(a))
+    };
+    let mentions = |checks: &[Check], name: &str, it: &Item| {
         checks
             .iter()
-            .any(|c| c.krate == krate && c.name == name && c.body.contains(simple))
+            .any(|c| c.krate == it.krate && c.name == name && named(&c.body, it))
     };
     // Direct targets first; `via` callers by fixpoint.
     let n = scan.items.len();
@@ -1302,7 +1321,7 @@ pub fn resolve(scan: &mut Scan, src: &dyn Source) {
             let it = &scan.items[idx];
             let good = !it.tag.targets.is_empty()
                 && it.tag.targets.iter().all(|t| match it.tag.kind {
-                    TAG_KANI => mentions(&scan.harnesses, it.krate, t, &it.simple),
+                    TAG_KANI => mentions(&scan.harnesses, t, it),
                     TAG_MIRI => match t.strip_prefix("via ") {
                         Some(caller) => (0..n).any(|c| {
                             let ci = &scan.items[c];
@@ -1310,9 +1329,9 @@ pub fn resolve(scan: &mut Scan, src: &dyn Source) {
                                 && ci.krate == it.krate
                                 && ci.tag.kind == TAG_MIRI
                                 && (ci.simple == caller.trim() || ci.name == caller.trim())
-                                && ci.body.contains(&it.simple)
+                                && named(&ci.body, it)
                         }),
-                        None => mentions(&scan.miri_tests, it.krate, t, &it.simple),
+                        None => mentions(&scan.miri_tests, t, it),
                     },
                     TAG_SHIM => src.exists(Path::new(t)),
                     _ => false,

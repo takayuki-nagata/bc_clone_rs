@@ -706,18 +706,6 @@ pub(crate) fn literal_digit_values(t: &[u8]) -> (r: (Vec<u8>, Vec<u8>))
 } // verus!
 
 impl BCNum {
-    /// Parses the text of a numeric constant (digits `0`-`9` and `A`-`Z`, at most one radix
-    /// point, backslash-newlines allowed) under `ibase` into a BCNum, as the evaluator reads a
-    /// constant (`literal_digit_values`, then `from_digit_values`). Lowercase letters are read
-    /// as uppercase; for other characters the result is unspecified. An `ibase` outside 2 to 16
-    /// is `BaseOutOfRange`, and a constant with more than `BC_SCALE_MAX` fraction digits is
-    /// `ScaleTooLarge`, rejected before any arithmetic, which keeps the scale invariant.
-    pub fn try_from_string(num_str: &str, ibase: usize) -> Result<Self, RuntimeError> {
-        let text = num_str.replace("\\\n", "").to_ascii_uppercase();
-        let (ds, fs) = literal_digit_values(text.as_bytes());
-        Self::from_digit_values_checked(&ds, &fs, ibase)
-    }
-
     /// Parses a numeric constant string under `ibase` into a BCNum.
     #[cfg(test)]
     pub fn from_string(num_str: &str, ibase: usize) -> Self {
