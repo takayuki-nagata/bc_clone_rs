@@ -836,6 +836,21 @@ impl Evaluator {
         r
     }
 
+    /// The `scale` register.
+    pub fn scale(&self) -> usize {
+        self.scale
+    }
+
+    /// The `ibase` register.
+    pub fn ibase(&self) -> usize {
+        self.ibase
+    }
+
+    /// The `obase` register.
+    pub fn obase(&self) -> usize {
+        self.obase
+    }
+
     /// Sets the `scale` register (e.g. a front end's default scale), clamped to `BC_SCALE_MAX`.
     pub fn set_scale(&mut self, scale: usize)
         ensures
@@ -931,21 +946,6 @@ impl Evaluator {
             ErrWriter::new(stderr_writer),
             DEFAULT_MAX_DEPTH,
         )
-    }
-
-    /// The `scale` register.
-    pub fn scale(&self) -> usize {
-        self.scale
-    }
-
-    /// The `ibase` register.
-    pub fn ibase(&self) -> usize {
-        self.ibase
-    }
-
-    /// The `obase` register.
-    pub fn obase(&self) -> usize {
-        self.obase
     }
 
     /// The diagnostic stream, for a front end's own messages (e.g. a file that cannot be read).

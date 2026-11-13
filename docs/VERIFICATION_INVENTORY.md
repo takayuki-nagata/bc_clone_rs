@@ -16,7 +16,7 @@ Every production function of the workspace and the examples belongs to one tier.
 
 | Crate | Role | Verus | Verus (partial) | assumed | Kani | Miri | shim | uncovered | proof/spec | bridge | assume/admit |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `bc_core` | engine | 266 | 80 | 54 | 0 | 0 | 0 | 38 | 365 | 17 | 0 |
+| `bc_core` | engine | 273 | 80 | 54 | 0 | 0 | 0 | 31 | 365 | 17 | 0 |
 | `bc_clone` | product | 0 | 0 | 0 | 0 | 0 | 0 | 16 | 0 | 0 | 0 |
 | `bc_c_api` | product | 0 | 0 | 0 | 0 | 0 | 0 | 24 | 0 | 0 | 0 |
 | `bc_zephyr` | product | 0 | 0 | 0 | 0 | 0 | 0 | 19 | 0 | 0 | 0 |
@@ -37,12 +37,9 @@ Every production function of the workspace and the examples belongs to one tier.
 | `driver::Evaluator::run_source` | `crates/bc_core/src/driver.rs` | uncovered |  |  |
 | `driver::Evaluator::run_unit` | `crates/bc_core/src/driver.rs` | uncovered |  |  |
 | `driver::SourceUnits::new` | `crates/bc_core/src/driver.rs` | uncovered |  |  |
-| `driver::UnitAccumulator::clear` | `crates/bc_core/src/driver.rs` | uncovered |  |  |
 | `driver::UnitAccumulator::clone` | `crates/bc_core/src/driver.rs` | uncovered |  |  |
 | `driver::UnitAccumulator::default` | `crates/bc_core/src/driver.rs` | uncovered |  |  |
-| `driver::UnitAccumulator::finish` | `crates/bc_core/src/driver.rs` | uncovered |  |  |
 | `driver::UnitAccumulator::fmt` | `crates/bc_core/src/driver.rs` | uncovered |  |  |
-| `driver::UnitAccumulator::is_pending` | `crates/bc_core/src/driver.rs` | uncovered |  |  |
 | `driver::UnitAccumulator::push_line` | `crates/bc_core/src/driver.rs` | uncovered |  |  |
 | `error::BcError::fmt` | `crates/bc_core/src/error.rs` | uncovered |  |  |
 | `error::BcError::from` | `crates/bc_core/src/error.rs` | uncovered |  |  |
@@ -54,17 +51,13 @@ Every production function of the workspace and the examples belongs to one tier.
 | `eval::ErrWriter::new` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
 | `eval::ErrWriter::write_fmt` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
 | `eval::ErrWriter::write_str` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::Evaluator::ibase` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
 | `eval::Evaluator::new` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::Evaluator::obase` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::Evaluator::scale` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
 | `eval::Evaluator::stderr_writer` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
 | `eval::WrappedStdout::flush` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
 | `eval::WrappedStdout::new` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
 | `eval::WrappedStdout::write_str` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
 | `format::BCNum::try_format_obase` | `crates/bc_core/src/format.rs` | uncovered |  |  |
 | `math::BCNum::try_from_string` | `crates/bc_core/src/math.rs` | uncovered |  |  |
-| `parser::lexer::unit_too_long` | `crates/bc_core/src/parser/lexer.rs` | uncovered |  |  |
 | `parser::parse::Parser::set_extension_policy` | `crates/bc_core/src/parser/parse.rs` | uncovered |  |  |
 | `parser::parse::Parser::set_max_depth` | `crates/bc_core/src/parser/parse.rs` | uncovered |  |  |
 | `parser::parse::Parser::take_code` | `crates/bc_core/src/parser/parse.rs` | uncovered |  |  |
@@ -318,12 +311,9 @@ Verified functions whose termination is not proved (`exec_allows_no_decreases_cl
 - `bc_core` `driver::Evaluator::run_source` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `driver::Evaluator::run_unit` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `driver::SourceUnits::new` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `driver::UnitAccumulator::clear` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `driver::UnitAccumulator::clone` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `driver::UnitAccumulator::default` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `driver::UnitAccumulator::finish` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `driver::UnitAccumulator::fmt` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `driver::UnitAccumulator::is_pending` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `driver::UnitAccumulator::push_line` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `driver::append_bytes` (`crates/bc_core/src/driver.rs`): an assumption outside a `trusted*` file
 - `bc_core` `driver::subslice` (`crates/bc_core/src/driver.rs`): an assumption outside a `trusted*` file
@@ -340,10 +330,7 @@ Verified functions whose termination is not proved (`exec_allows_no_decreases_cl
 - `bc_core` `eval::ErrWriter::write_bytes` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
 - `bc_core` `eval::ErrWriter::write_fmt` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `eval::ErrWriter::write_str` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::Evaluator::ibase` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `eval::Evaluator::new` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::Evaluator::obase` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::Evaluator::scale` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `eval::Evaluator::stderr_writer` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `eval::WrappedStdout` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
 - `bc_core` `eval::WrappedStdout::flush` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
@@ -357,7 +344,6 @@ Verified functions whose termination is not proved (`exec_allows_no_decreases_cl
 - `bc_core` `format::BCNum::try_format_obase` (`crates/bc_core/src/format.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `math::BCNum::try_from_string` (`crates/bc_core/src/math.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `parser::lexer::copy_bytes` (`crates/bc_core/src/parser/lexer.rs`): an assumption outside a `trusted*` file
-- `bc_core` `parser::lexer::unit_too_long` (`crates/bc_core/src/parser/lexer.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `parser::ascii_string` (`crates/bc_core/src/parser/mod.rs`): an assumption outside a `trusted*` file
 - `bc_core` `parser::share_code` (`crates/bc_core/src/parser/mod.rs`): an assumption outside a `trusted*` file
 - `bc_core` `parser::parse::Parser::set_extension_policy` (`crates/bc_core/src/parser/parse.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)

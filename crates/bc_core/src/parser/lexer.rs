@@ -9,7 +9,6 @@
 #[cfg(verus_keep_ghost)]
 use super::all_ascii;
 use super::{Token, TokenType, ascii_string};
-use crate::driver::UNIT_TOO_LONG;
 use crate::error::BcError;
 #[cfg(verus_keep_ghost)]
 use crate::refine::text_view;
@@ -86,11 +85,13 @@ pub(super) fn syntax_error_text() -> (r: String)
     ascii_string(bytes.as_slice())
 }
 
-/// The error of a unit over the limit. Not related to the specification's tokens: `run_unit`
-/// rejects such a unit before it reaches the lexer, and this keeps the public API total.
-#[verifier::external_body]
+/// The error of a unit over the limit (`input unit too long`). Not related to the
+/// specification's tokens: `run_unit` rejects such a unit before it reaches the lexer, and this
+/// keeps the public API total.
 fn unit_too_long() -> BcError {
-    BcError::Syntax { line: 1, message: String::from(UNIT_TOO_LONG) }
+    let bytes = [105u8, 110, 112, 117, 116, 32, 117, 110, 105, 116, 32, 116, 111, 111, 32, 108, 111, 110, 103];
+    proof { assert(bytes@ =~= bc_spec::top::unit_too_long_msg()); }
+    BcError::Syntax { line: 1, message: ascii_string(bytes.as_slice()) }
 }
 
 /// Appends the octal escape of a byte.

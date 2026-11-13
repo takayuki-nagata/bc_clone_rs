@@ -680,23 +680,27 @@ impl UnitAccumulator {
     }
 
     /// Returns the incomplete text left at end of input, if any, so that it can be reported.
-    #[verifier::external_body]
-    pub fn finish(&mut self) -> Option<(Vec<u8>, usize)> {
+    pub fn finish(&mut self) -> (r: Option<(Vec<u8>, usize)>)
+        ensures
+            final(self).inv(),
+    {
         self.take()
     }
 
     /// Whether lines of an incomplete unit are waiting for more input (e.g. an open `{`).
-    #[verifier::external_body]
     pub fn is_pending(&self) -> bool {
         !self.buf.is_empty()
     }
 
     /// Discards any partially accumulated unit (used after an interrupt).
-    #[verifier::external_body]
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self)
+        ensures
+            final(self).inv(),
+    {
         self.buf.clear();
         self.scanned = 0;
         self.scan = (0, false, false);
+        proof { assert(self.buf@.subrange(0, 0) =~= Seq::<u8>::empty()); }
     }
 
     fn take(&mut self) -> (r: Option<(Vec<u8>, usize)>)
