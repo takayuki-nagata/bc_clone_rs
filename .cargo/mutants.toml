@@ -24,6 +24,11 @@ exclude_globs = [
     # its `spec fn`s by Verus, and `cargo test` does not run it (spec_differential needs
     # BC_SPEC_ORACLE), so every mutant would be reported as missed.
     "crates/bc_spec/**",
+    # The verification inventory is a tool, not code under test, like the specification: its
+    # decisions are inside `verus!` (which cargo-mutants does not mutate) and proved equal to its
+    # rules, and its reader and writer are checked by their own fixture tests; running the whole
+    # workspace for each mutant of the reader would take hours.
+    "crates/bc_inventory/**",
 ]
 
 # Only mutants that are semantically equivalent or untestable on the host. Keep each pattern

@@ -48,6 +48,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bc_inventory"
+version = "0.4.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "vstd",
+]
+
+[[package]]
 name = "bc_qemu_riscv32"
 version = "0.4.0"
 dependencies = [

@@ -36,6 +36,12 @@ themselves are not proved. AGENTS.md lists what the proofs assume.
   number to decimal text (`length(2^3000000)`: five times as fast).
 
 ### Verification
+- `crates/bc_inventory` lists every production function of the workspace and the examples with
+  the tool that covers it (Verus, an assumption of Verus, Kani, Miri, or a branch-free shim run
+  by an integration test) in `docs/VERIFICATION_INVENTORY.md`, read from the function's
+  `// coverage:` comment. Its rules are written as Verus specifications, and its decisions are
+  proved to follow them. `cargo run -p bc_inventory -- --check` fails when the file is out of
+  date; the rules are reported, not yet enforced.
 - `bc_clone` reads its options with the verified kernel `verified_cli_parse_options`, which is
   proved equal to a recursive specification of the rules (left to right, the first invalid
   option or `-v` ends the reading, `-s` wins over `-w`). It replaces the Verus design model of

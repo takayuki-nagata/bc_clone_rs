@@ -40,7 +40,7 @@ jobs:
 
       - name: Run Clippy Linter
         run: |
-          cargo clippy --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --package bc_build_info --all-targets -- -D warnings
+          cargo clippy --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --package bc_build_info --package bc_inventory --all-targets -- -D warnings
           cargo clippy --manifest-path examples/wasm_web_app/crate/Cargo.toml --all-targets -- -D warnings
           cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings
           cargo clippy --package bc_qemu_riscv32 --target riscv32imc-unknown-none-elf -- -D warnings
@@ -48,6 +48,9 @@ jobs:
           cargo clippy --package bc_c_api --target riscv32imc-unknown-none-elf --no-default-features -- -D warnings
           cargo clippy --package bc_zephyr --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings
           cargo clippy --package bc_zephyr --target riscv32imc-unknown-none-elf --no-default-features -- -D warnings
+
+      - name: Check the Verification Inventory
+        run: cargo run -q -p bc_inventory -- --check
 
       - name: Verify no_std Compilation on RISC-V 32 and Wasm32
         run: |

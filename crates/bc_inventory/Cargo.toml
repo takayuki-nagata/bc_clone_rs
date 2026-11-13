@@ -1,0 +1,23 @@
+[package]
+name = "bc_inventory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Checks that every production function of bc_clone_rs is covered by Verus, Kani, Miri or a branch-free shim, and writes docs/VERIFICATION_INVENTORY.md"
+publish = false
+
+[dependencies]
+# Reads the sources. Line locations are needed to find the `// coverage:` comment of an item,
+# including items inside `verus!`, whose bodies are token streams.
+syn = { version = "2.0.119", features = ["full"] }
+proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
+quote = "1.0.45"
+# The rule layer (`src/rules.rs`) is verified with `cargo verus verify -p bc_inventory`. This is
+# a host tool, so it links vstd directly, as `bc_spec` does.
+vstd = "=0.0.0-2026-10-18-0147"
+
+[package.metadata.verus]
+verify = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_keep_ghost)'] }
