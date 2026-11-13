@@ -20,7 +20,7 @@ use vstd::prelude::*;
 verus! {
 
 /// Trusted: a `char` below 0x80 is one UTF-8 byte of the same value.
-// coverage: miri(wrappers_keep_their_contracts)
+// coverage: miri(parser::trusted::tests::wrappers_keep_their_contracts)
 #[verifier::external_body]
 pub(crate) fn ascii_string(b: &[u8]) -> (r: String)
     requires
@@ -32,7 +32,7 @@ pub(crate) fn ascii_string(b: &[u8]) -> (r: String)
 }
 
 /// Trusted: cloning an `Rc` shares the same value.
-// coverage: miri(wrappers_keep_their_contracts)
+// coverage: miri(parser::trusted::tests::wrappers_keep_their_contracts)
 #[verifier::external_body]
 pub(crate) fn share_code(c: &Rc<Code>) -> (r: Rc<Code>)
     ensures
@@ -42,7 +42,7 @@ pub(crate) fn share_code(c: &Rc<Code>) -> (r: Rc<Code>)
 }
 
 /// Trusted: `to_vec` copies the slice.
-// coverage: miri(wrappers_keep_their_contracts)
+// coverage: miri(parser::trusted::tests::wrappers_keep_their_contracts)
 #[verifier::external_body]
 pub(super) fn copy_bytes(text: &[u8]) -> (r: Vec<u8>)
     ensures

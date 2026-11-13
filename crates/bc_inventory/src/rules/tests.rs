@@ -190,3 +190,15 @@ fn violations_and_counts_cover_every_fact() {
     );
     assert_eq!(counts.iter().sum::<usize>(), facts.len());
 }
+
+#[test]
+fn a_tag_on_an_assumption_must_resolve() {
+    let mut f = fact("trusted_math.rs", ROLE_CORE, KIND_AXIOM, TAG_MIRI);
+    assert_eq!(v(&f), V_NONE);
+    f.targets_ok = false;
+    assert_eq!(v(&f), V_TARGETS);
+    assert_eq!(
+        v(&fact("trusted_math.rs", ROLE_CORE, KIND_AXIOM, TAG_NONE)),
+        V_NONE
+    );
+}

@@ -17,7 +17,8 @@
 //! - an item that Verus assumes (an axiom, an `assume_specification`, an `external_body`
 //!   function with a contract, an uninterpreted or opaque item, `dual_verified!`) is in a file
 //!   whose name starts with `trusted`, except in a tool crate; in a product crate, such a
-//!   function with a body is tied to a Kani harness or a Miri test that runs it;
+//!   function with a body is tied to a Kani harness or a Miri test that runs it, and any tag on
+//!   an assumption names targets that exist;
 //! - every other production function of a product crate is verified by Verus, or carries a tag
 //!   naming the Kani harness, the Miri tests or (for a shim) the integration test that covers
 //!   it, with the reasons it cannot be covered by a higher tier; a shim has no branches;
@@ -122,7 +123,8 @@ pub const V_WRAPPER_UNTESTED: u8 = 4;
 pub const V_CORE_PLACEMENT: u8 = 5;
 /// A Kani, Miri or shim tag without valid reasons (`why:`).
 pub const V_WHY: u8 = 6;
-/// A tag naming a harness, test or integration test that does not exist or does not cover the item.
+/// A tag naming a harness, test or integration test that does not exist, is ambiguous or does not
+/// cover the item.
 pub const V_TARGETS: u8 = 7;
 /// A shim with a branch.
 pub const V_SHIM_BRANCHES: u8 = 8;
@@ -232,6 +234,8 @@ pub open spec fn violation(file: Seq<u8>, role: u8, kind: u8, tag: u8, why_ok: b
         V_NONE
     } else if kind == KIND_EXT_BODY_SPEC && !((tag == TAG_KANI || tag == TAG_MIRI) && targets_ok) {
         V_WRAPPER_UNTESTED
+    } else if t == TIER_ASSUMED && tag != TAG_NONE && !targets_ok {
+        V_TARGETS
     } else if t == TIER_UNCOVERED {
         V_UNCOVERED
     } else if is_tagged_tier(t) && role == ROLE_CORE && file_class(file) == FILE_OTHER {
@@ -375,6 +379,8 @@ pub fn verified_violation(f: &Fact) -> (r: u8)
         V_NONE
     } else if f.kind == KIND_EXT_BODY_SPEC && !((f.tag == TAG_KANI || f.tag == TAG_MIRI) && f.targets_ok) {
         V_WRAPPER_UNTESTED
+    } else if t == TIER_ASSUMED && f.tag != TAG_NONE && !f.targets_ok {
+        V_TARGETS
     } else if t == TIER_UNCOVERED {
         V_UNCOVERED
     } else if tagged && f.role == ROLE_CORE && verified_file_class(f.file.as_slice()) == FILE_OTHER {

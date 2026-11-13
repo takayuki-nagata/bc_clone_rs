@@ -36,7 +36,7 @@ pub trait BcWriter: FmtWrite + Send {
     }
 
     /// Flushes any buffered content.
-    // coverage: miri(default_writer_keeps_text_and_replaces_invalid_utf8); why: fmt
+    // coverage: miri(default_writer_keeps_text_and_replaces_invalid_utf8); why: trait, fmt
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
     }

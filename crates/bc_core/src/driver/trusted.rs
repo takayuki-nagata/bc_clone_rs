@@ -12,7 +12,7 @@ use vstd::prelude::*;
 verus! {
 
 /// Trusted: `extend_from_slice` appends the slice.
-// coverage: miri(wrappers_keep_their_contracts)
+// coverage: miri(driver::trusted::tests::wrappers_keep_their_contracts)
 #[verifier::external_body]
 pub(super) fn append_bytes(buf: &mut Vec<u8>, line: &[u8])
     ensures
@@ -22,7 +22,7 @@ pub(super) fn append_bytes(buf: &mut Vec<u8>, line: &[u8])
 }
 
 /// Trusted: the subslice of `text` from `a` to `b`.
-// coverage: miri(wrappers_keep_their_contracts)
+// coverage: miri(driver::trusted::tests::wrappers_keep_their_contracts)
 #[verifier::external_body]
 pub(super) fn subslice(text: &[u8], a: usize, b: usize) -> (r: &[u8])
     requires

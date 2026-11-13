@@ -544,3 +544,36 @@ mod tests {
     assert!(!item(&s, "Acc::inherent").targets_ok);
     assert_eq!(item(&s, "Acc::clone").alt.as_deref(), Some("Acc"));
 }
+
+#[test]
+fn a_test_named_in_two_modules_must_be_qualified() {
+    let (s, _) = scan_one(
+        CORE,
+        &[(
+            "crates/bc_core/src/lib.rs",
+            r#"
+// coverage: miri(t); why: io
+pub fn bare() {}
+// coverage: miri(a::tests::t); why: io
+pub fn qualified() {}
+// coverage: miri(b::tests::t); why: io
+pub fn other() {}
+#[cfg(verus_keep_ghost)]
+verus! {
+#[verifier::external_type_specification]
+#[verifier::external_body]
+pub struct ExOpaque(Opaque);
+}
+mod a { #[cfg(test)] mod tests { #[test] fn t() { crate::bare(); crate::qualified(); } } }
+mod b { #[cfg(test)] mod tests { #[test] fn t() { crate::bare(); } } }
+"#,
+        )],
+    );
+    assert!(!item(&s, "bare").targets_ok, "ambiguous");
+    assert!(item(&s, "qualified").targets_ok);
+    assert!(
+        !item(&s, "other").targets_ok,
+        "b::tests::t does not call it"
+    );
+    assert_eq!(item(&s, "ExOpaque").kind, KIND_OPAQUE_TYPE);
+}

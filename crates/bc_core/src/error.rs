@@ -4,7 +4,11 @@
 //!
 //! Diagnostic texts follow `docs/COMPATIBILITY.md` §3.2.
 
+#[cfg(verus_keep_ghost)]
+use crate::refine::text_view;
 use alloc::string::String;
+#[cfg(verus_keep_ghost)]
+use bc_spec::lexer::syntax_error_msg;
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
@@ -79,7 +83,10 @@ impl BcError {
 
 impl BcError {
     /// Creates a generic `syntax error` diagnostic.
-    pub fn syntax(line: usize) -> Self {
+    pub fn syntax(line: usize) -> (r: Self)
+        ensures
+            r matches BcError::Syntax { line: l, message: m } && l == line && text_view(m) == syntax_error_msg(),
+    {
         Self::Syntax { line, message: crate::parser::syntax_error_text() }
     }
 }

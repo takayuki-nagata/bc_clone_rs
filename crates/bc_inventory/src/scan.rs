@@ -125,9 +125,11 @@ pub const CRATES: &[CrateSpec] = &[
 
 /// The reasons a function cannot be covered by a higher tier.
 ///
-/// `boundary` is a public entry point of `bc_core` whose precondition (an invariant of a type
-/// whose fields are private to the crate) its unverified callers cannot state, so it calls the
-/// verified function with that precondition without proof (`AGENTS.md` argues each one).
+/// `boundary` is a public entry point of `bc_core` for unverified callers: either its
+/// precondition (an invariant of a type whose fields are private to the crate) is one they
+/// cannot state, so it calls the verified function with that precondition without proof
+/// (`AGENTS.md` argues each one), or it lets them act outside the model (a writer lent for
+/// their own messages).
 /// `trait` is an implementation of a standard trait whose vstd specification does not fit it.
 pub const WHY_WORDS: &[&str] = &[
     "dyn", "fmt", "string", "ffi", "io", "signal", "hw", "bindgen", "build", "boundary", "trait",
@@ -196,6 +198,8 @@ pub struct Item {
 pub struct Check {
     pub krate: usize,
     pub name: String,
+    /// Its path within the crate (`parser::trusted::tests::name`).
+    pub path: String,
     pub body: BTreeSet<String>,
 }
 
@@ -903,6 +907,7 @@ fn macro_tests(ctx: &Ctx, scan: &mut Scan, act: Active, ts: &TokenStream) {
             idents(&body.unwrap_or_default(), &mut b);
             scan.miri_tests.push(Check {
                 krate: ctx.krate,
+                path: ctx.qualify(None, &name),
                 name,
                 body: b,
             });
@@ -935,6 +940,7 @@ fn outside_fn(
             scan.miri_tests.push(Check {
                 krate: ctx.krate,
                 name: name.to_string(),
+                path: ctx.qualify(None, name),
                 body: b,
             });
         }
@@ -947,6 +953,7 @@ fn outside_fn(
             scan.harnesses.push(Check {
                 krate: ctx.krate,
                 name: name.to_string(),
+                path: ctx.qualify(None, name),
                 body: b,
             });
         }
@@ -1235,10 +1242,11 @@ fn scan_verus(ts: &TokenStream, ctx: &mut Ctx, scan: &mut Scan, ty: Option<&str>
                 if !(act.prod || act.ghost) {
                     continue;
                 }
-                let kind = if has_attr(&metas, GHOST, "verifier::external_type_specification") {
-                    KIND_EXT_TYPE
-                } else if has_attr(&metas, GHOST, "verifier::external_body") {
+                // An opaque type is an assumption whether or not it is also a bridge.
+                let kind = if has_attr(&metas, GHOST, "verifier::external_body") {
                     KIND_OPAQUE_TYPE
+                } else if has_attr(&metas, GHOST, "verifier::external_type_specification") {
+                    KIND_EXT_TYPE
                 } else {
                     continue;
                 };
@@ -1303,10 +1311,21 @@ pub fn resolve(scan: &mut Scan, src: &dyn Source) {
     let named = |body: &BTreeSet<String>, it: &Item| {
         body.contains(&it.simple) || it.alt.as_ref().is_some_and(|a| body.contains(a))
     };
-    let mentions = |checks: &[Check], name: &str, it: &Item| {
-        checks
+    // A target is a test's path within the crate (or a suffix of it, `tests::name`), or its
+    // bare name if no other test of the crate has that name.
+    let mentions = |checks: &[Check], target: &str, it: &Item| {
+        let found: Vec<&Check> = checks
             .iter()
-            .any(|c| c.krate == it.krate && c.name == name && named(&c.body, it))
+            .filter(|c| {
+                c.krate == it.krate
+                    && if target.contains("::") {
+                        c.path == target || c.path.ends_with(&format!("::{target}"))
+                    } else {
+                        c.name == target
+                    }
+            })
+            .collect();
+        found.len() == 1 && named(&found[0].body, it)
     };
     // Direct targets first; `via` callers by fixpoint.
     let n = scan.items.len();

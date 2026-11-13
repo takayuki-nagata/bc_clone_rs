@@ -286,7 +286,7 @@ except the following, whose preconditions are argued here but not proved:
 | Differential tests | `crates/bc_cli/tests/integration_tests.rs` (helpers in `tests/common`), `scripts/run_gnu_reference_tests.sh` | stdout, diagnostics (GNU's text without `adr=N`), and exit status match GNU bc 1.08 (CI builds 1.08.2 with `scripts/install_gnu_bc.sh`), except for the documented differences. The math library is checked against GNU bc at `scale + 100`, truncated. |
 | POSIX conformance | `scripts/run_posix_compliance_tests.sh` | Expected outputs derived from POSIX.1-2024 (not from GNU bc). Each case runs in the default mode and with `-s`. `BC_BIN=bc` runs the same cases against GNU bc to sanity-check the expectations, and `BC_BIN=target/bc_spec_oracle` against the executable specification (its `-l` cases are skipped). |
 | Mutation testing | `cargo mutants` (`.cargo/mutants.toml`) | Diff-based in CI, split into shards (`--shard`). Some exclusions are broader than the equivalent mutants they target. |
-| Coverage tiers | `bc_inventory` — `cargo run -p bc_inventory -- --check` (pre-commit and CI) | Every production function of the workspace and the examples is listed in `docs/VERIFICATION_INVENTORY.md` with the tier that covers it: verified by Verus (partial correctness listed separately), assumed by Verus, Kani, Miri, or a branch-free shim run by an integration test, from the function's `// coverage:` tag; the check fails when the file is out of date. The rules (assumptions only in `trusted*` files, a tested trusted wrapper, a valid tag with reasons on every function outside Verus, no `assume`/`admit`, …) are `spec fn`s that the tool's decisions are proved to follow; whether a named test or harness covers a function is approximated by its mentioning the function's name. The rules are enforced for `bc_core`, `bc_spec` and `bc_inventory`; the front ends' violations are listed but not yet enforced ("Verification tiers" below) |
+| Coverage tiers | `bc_inventory` — `cargo run -p bc_inventory -- --check` (pre-commit and CI) | Every production function of the workspace and the examples is counted in `docs/VERIFICATION_INVENTORY.md` by the tier that covers it, and each one outside Verus is listed: verified by Verus (partial correctness listed separately), assumed by Verus, Kani, Miri, or a branch-free shim run by an integration test, from the function's `// coverage:` tag; the check fails when the file is out of date. The rules (assumptions only in `trusted*` files, a tested trusted wrapper, a valid tag with reasons on every function outside Verus, no `assume`/`admit`, …) are `spec fn`s that the tool's decisions are proved to follow; whether a named test or harness covers a function is approximated by its mentioning the function's name. The rules are enforced for `bc_core`, `bc_spec` and `bc_inventory`; the front ends' violations are listed but not yet enforced ("Verification tiers" below) |
 | Coverage | `cargo llvm-cov` | Line coverage gate of 97% in CI. Most uncovered lines are branches that the proofs or the design make unreachable (an arena index out of range or a node of the wrong kind on the machine, cases the fast path always takes, a parser error the driver never sees from execution), overflow guards of the `-l` functions, and test code; tests cannot reach them, and removing them would mean rewriting proved code. |
 
 The gaps listed above are known and remain open. Do not describe any layer as proving
@@ -366,13 +366,13 @@ cargo fmt --check && cargo clippy --package bc_core --package bc_clone --package
 - Give each agent the commit, the files and the question, since it starts without this context.
 
 ### Verification tiers (`bc_inventory`)
-Every production function belongs to exactly one tier; `docs/VERIFICATION_INVENTORY.md` lists
-them, and `cargo run -p bc_inventory -- --check` checks the rules below. Use the highest tier that
+Every production function belongs to exactly one tier; `docs/VERIFICATION_INVENTORY.md` counts
+them and lists each one outside Verus, and `cargo run -p bc_inventory -- --check` checks the rules below. Use the highest tier that
 can work, and lift a function to a higher one when you can:
 
 | Tier | Guarantee | Mark |
 |---|---|---|
-| Verus | The function meets its specification for all inputs (partial correctness for `exec_allows_no_decreases_clause`) | none: inside `verus!` or `dual_verified!`, no trusted attribute |
+| Verus | The function meets its contract for all inputs (partial correctness for `exec_allows_no_decreases_clause`); with no `ensures`, only that it cannot panic or overflow | none: inside `verus!` or `dual_verified!`, no trusted attribute |
 | assumed | Verus takes it as true | in a file whose name starts with `trusted`; a wrapper with a body names the test that runs it: `// coverage: miri(<test>)` |
 | Kani | No panic, overflow or failed assertion for the harness's symbolic inputs, within its bounds | `// coverage: kani(<harness>); why: <reasons>` |
 | Miri | No undefined behavior or leak on the paths the tests run; functional correctness as far as they assert | `// coverage: miri(<test>, …); why: <reasons>` (`via <caller>` for a function the tests reach only through a tagged caller) |
@@ -381,7 +381,8 @@ can work, and lift a function to a higher one when you can:
 - The comment goes on the line before the `fn` or just above the item's doc comment. The reasons
   say why a higher tier cannot work, from a fixed vocabulary: `dyn`, `fmt`, `string`, `ffi`,
   `io`, `signal`, `hw`, `bindgen`, `build`, `boundary` (a public entry point whose precondition,
-  the invariant of a type private to the crate, its callers cannot state) and `trait` (a
+  the invariant of a type private to the crate, its callers cannot state, or that lets them act
+  outside the model) and `trait` (a
   standard trait whose vstd specification does not fit).
 - A named test or harness must mention the function's name in its body (or, for a method of a
   trait implementation, the implementing type), and a Miri test must be one that
@@ -390,8 +391,18 @@ can work, and lift a function to a higher one when you can:
 - In `bc_core`, assumptions live only in `trusted*` files, and a function outside Verus only in
   `trusted*` or `unverified*` files (`driver/`, `eval/`, `parser/` and the crate root each have
   them). No crate calls `assume` or `admit`.
-- `--check` enforces the rules for `bc_core`, `bc_spec` and `bc_inventory`; the front ends'
+- The Verus tier means what the function's contract says; for a function with no `ensures`
+  (a setter, a `Clone`), only that it cannot panic or overflow and meets its callees'
+  preconditions. Give it an `ensures` when there is something to state.
+- `--check` enforces the rules for `bc_core`, `bc_spec` and `bc_inventory`: for `bc_core` all of
+  them, for the other two only the placement of assumptions, the ban on `assume`/`admit` and the
+  form of tags (their other functions are verification tools and only counted). The front ends'
   violations are listed in the inventory until each one is brought into the tiers.
+- The scanner does not see functions generated by a macro invocation (such as `bc_spec`'s
+  `persistent_stack!`); do not put production code, `external_body` or `assume` in a
+  `macro_rules!` body. A test named in a tag is matched by its path within the crate
+  (`parser::trusted::tests::name`, or a suffix of it) or by a bare name that no other test of
+  the crate has.
 - After changing code, run `cargo run -p bc_inventory` and commit the regenerated document.
 
 ### Process-global state in tests
