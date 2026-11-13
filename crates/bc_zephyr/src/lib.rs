@@ -655,7 +655,11 @@ mod tests {
 
         let long = "1".repeat(REPL_MAX_LINE + 50);
         let out = run_repl_script(&format!("{long}\r"));
-        let echoed = out.matches('1').count();
+        // The banner's version and commit may contain the digit too.
+        let echoed = out
+            .replacen(bc_build_info::VERSION_LINE, "", 1)
+            .matches('1')
+            .count();
         assert!(echoed <= 2 * REPL_MAX_LINE + 2, "echo is capped");
         assert!(out.contains(&"1".repeat(REPL_MAX_LINE)));
         assert!(!out.contains(&"1".repeat(REPL_MAX_LINE + 1)));
