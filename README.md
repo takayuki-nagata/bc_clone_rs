@@ -245,6 +245,7 @@ bash scripts/serve_wasm.sh
 - **Executable specification** (`bash scripts/build_spec_oracle.sh`, then `BC_SPEC_ORACLE=$PWD/target/bc_spec_oracle cargo test -p bc_clone --test spec_differential`): `crates/bc_spec` defines what `bc_clone` prints and returns for any input without `-l`. Verus proves that the compiled oracle equals the specification and that its arithmetic is exact; the differential tests compare `bc_clone` with it on random inputs. For the lexer and parser, which are not proved, this is evidence on the tested inputs only; the rest of the execution is proved to refine the specification (see Verus above).
 - **Kani** (`bash scripts/run_kani_verification.sh`): bounded model checking of the kernels over all bit patterns, of the C-FFI helper `write_c_string` (never writes beyond the caller's buffer, always NUL-terminates), and of the C-API NULL guards.
 - **Miri** (`bash scripts/run_miri_tests.sh`): runs the unit tests of every host crate under strict provenance and symbolic alignment checks, and the C API again under Tree Borrows.
+- **Verification inventory** (`cargo run -p bc_inventory -- --check`): `docs/VERIFICATION_INVENTORY.md` lists every production function with the tool that covers it: Verus, an assumption of Verus (kept in `trusted*` files), a Kani harness, Miri-run tests, or a branch-free shim run by an integration test. The check's rules are verified with Verus; it enforces them for the engine, and lists the front ends' remaining gaps.
 
 ### Coverage Measurement
 

@@ -31,10 +31,10 @@ use std::path::Path;
 /// Where the inventory is written, relative to the repository root.
 pub const OUTPUT: &str = "docs/VERIFICATION_INVENTORY.md";
 
-/// Whether the violations of each role (`ROLE_*`) make `--check` fail. Until the tiers are in
-/// place, the violations are only reported; the rules for the front ends become enforced as
-/// each one is brought into the tiers.
-const ENFORCED: [bool; 4] = [false, false, false, false];
+/// Whether the violations of each role (`ROLE_*`) make `--check` fail: the engine, the
+/// specification and this tool. The front ends' violations are reported, and become enforced
+/// once every front end is brought into the tiers.
+const ENFORCED: [bool; 4] = [true, false, true, true];
 
 /// Whether the violations of the crates of `role` make `--check` fail.
 pub fn enforced(role: u8) -> bool {

@@ -40,8 +40,16 @@ themselves are not proved. AGENTS.md lists what the proofs assume.
   the tool that covers it (Verus, an assumption of Verus, Kani, Miri, or a branch-free shim run
   by an integration test) in `docs/VERIFICATION_INVENTORY.md`, read from the function's
   `// coverage:` comment. Its rules are written as Verus specifications, and its decisions are
-  proved to follow them. `cargo run -p bc_inventory -- --check` fails when the file is out of
-  date; the rules are reported, not yet enforced.
+  proved to follow them. `cargo run -p bc_inventory -- --check` (pre-commit and CI) fails when
+  the file is out of date or bc_core, the specification or the tool breaks a rule; the front
+  ends' violations are listed, not yet enforced.
+- In bc_core, everything Verus assumes is in a file whose name starts with `trusted` and every
+  function Verus does not check is in a file whose name starts with `trusted` or `unverified`,
+  with the Miri-run test that exercises it. Fourteen small functions moved into Verus
+  (`Evaluator::scale`, `ibase` and `obase`; `UnitAccumulator::finish`, `is_pending`, `clear`,
+  `Default` and `Clone`; `BcError::syntax`; `Parser::take_code`, `set_max_depth`,
+  `set_extension_policy` and `take_extension_uses`; the lexer's `input unit too long` error),
+  and each trusted wrapper has a test of its contract.
 - `bc_clone` reads its options with the verified kernel `verified_cli_parse_options`, which is
   proved equal to a recursive specification of the rules (left to right, the first invalid
   option or `-v` ends the reading, `-s` wins over `-w`). It replaces the Verus design model of

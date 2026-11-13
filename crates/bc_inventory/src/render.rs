@@ -94,7 +94,8 @@ a function it cannot verify is covered by a Kani harness if possible, otherwise 
 that none of them can run is a branch-free shim, run by an integration test. A function outside Verus carries a \
 `// coverage:` comment naming what covers it and why a higher tier cannot (`why:` {}). The rules are `spec fn`s in \
 `crates/bc_inventory/src/rules.rs`, verified by Verus; tests, Kani harnesses, the executable specification and this \
-tool's reader and writer are verification tools and are only counted.\n",
+tool's reader and writer are verification tools and are only counted. `--check` enforces the rules for the engine, \
+the specification and this tool; the front ends' violations are listed below until each front end is brought into the tiers.\n",
         WHY_WORDS
             .iter()
             .map(|w| format!("`{w}`"))

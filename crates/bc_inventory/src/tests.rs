@@ -66,8 +66,28 @@ fn every_violation_has_a_message() {
 }
 
 #[test]
-fn the_products_are_not_enforced_yet() {
+fn the_engine_the_specification_and_the_tool_are_enforced() {
+    assert!(enforced(rules::ROLE_CORE));
+    assert!(enforced(rules::ROLE_SPEC));
+    assert!(enforced(rules::ROLE_TOOL));
     assert!(!enforced(rules::ROLE_PRODUCT));
+}
+
+#[test]
+fn the_repository_breaks_no_enforced_rule() {
+    let r = build(&scan::FsSource(repo()));
+    let broken: Vec<String> = enforced_violations(&r)
+        .iter()
+        .map(|&(i, v)| {
+            format!(
+                "{} {}: {}",
+                r.items[i].file,
+                r.items[i].name,
+                render::violation_text(v)
+            )
+        })
+        .collect();
+    assert!(broken.is_empty(), "{broken:#?}");
 }
 
 #[test]
