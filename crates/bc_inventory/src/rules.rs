@@ -118,7 +118,7 @@ pub const V_TAG_ON_VERIFIED: u8 = 2;
 pub const V_ASSUMED_OUTSIDE_TRUSTED: u8 = 3;
 /// A trusted wrapper of a product crate not tied to a Kani harness or Miri test that runs it.
 pub const V_WRAPPER_UNTESTED: u8 = 4;
-/// A function of `bc_core` outside Verus, in a file not named `unverified*`.
+/// A function of `bc_core` outside Verus, in a file named neither `trusted*` nor `unverified*`.
 pub const V_CORE_PLACEMENT: u8 = 5;
 /// A Kani, Miri or shim tag without valid reasons (`why:`).
 pub const V_WHY: u8 = 6;
@@ -234,7 +234,7 @@ pub open spec fn violation(file: Seq<u8>, role: u8, kind: u8, tag: u8, why_ok: b
         V_WRAPPER_UNTESTED
     } else if t == TIER_UNCOVERED {
         V_UNCOVERED
-    } else if is_tagged_tier(t) && role == ROLE_CORE && file_class(file) != FILE_UNVERIFIED {
+    } else if is_tagged_tier(t) && role == ROLE_CORE && file_class(file) == FILE_OTHER {
         V_CORE_PLACEMENT
     } else if is_tagged_tier(t) && !why_ok {
         V_WHY
@@ -377,7 +377,7 @@ pub fn verified_violation(f: &Fact) -> (r: u8)
         V_WRAPPER_UNTESTED
     } else if t == TIER_UNCOVERED {
         V_UNCOVERED
-    } else if tagged && f.role == ROLE_CORE && verified_file_class(f.file.as_slice()) != FILE_UNVERIFIED {
+    } else if tagged && f.role == ROLE_CORE && verified_file_class(f.file.as_slice()) == FILE_OTHER {
         V_CORE_PLACEMENT
     } else if tagged && !f.why_ok {
         V_WHY

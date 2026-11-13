@@ -25,7 +25,7 @@ Every production function of the workspace and the examples belongs to one tier.
 | `m5stamp_c3_bc` | product | 0 | 0 | 0 | 0 | 0 | 0 | 20 | 0 | 0 | 0 |
 | `bc_wasm` | product | 0 | 0 | 0 | 0 | 0 | 0 | 13 | 0 | 0 | 0 |
 | `bc_spec` | specification | 28 | 0 | 0 | 0 | 0 | 0 | 6 | 253 | 0 | 0 |
-| `bc_inventory` | tool | 6 | 0 | 0 | 0 | 0 | 0 | 43 | 12 | 0 | 0 |
+| `bc_inventory` | tool | 6 | 0 | 0 | 0 | 0 | 0 | 44 | 12 | 0 | 0 |
 
 ## Functions outside Verus
 
@@ -45,17 +45,17 @@ Every production function of the workspace and the examples belongs to one tier.
 | `error::BcError::from` | `crates/bc_core/src/error.rs` | uncovered |  |  |
 | `error::BcError::syntax` | `crates/bc_core/src/error.rs` | uncovered |  |  |
 | `error::RuntimeError::fmt` | `crates/bc_core/src/error.rs` | uncovered |  |  |
-| `eval::BcWriter::flush` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::BcWriter::write_bytes` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::ErrWriter::flush` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::ErrWriter::new` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::ErrWriter::write_fmt` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::ErrWriter::write_str` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
 | `eval::Evaluator::new` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
 | `eval::Evaluator::stderr_writer` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::WrappedStdout::flush` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::WrappedStdout::new` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
-| `eval::WrappedStdout::write_str` | `crates/bc_core/src/eval/mod.rs` | uncovered |  |  |
+| `eval::trusted_io::BcWriter::flush` | `crates/bc_core/src/eval/trusted_io.rs` | uncovered |  |  |
+| `eval::trusted_io::BcWriter::write_bytes` | `crates/bc_core/src/eval/trusted_io.rs` | uncovered |  |  |
+| `eval::trusted_io::ErrWriter::flush` | `crates/bc_core/src/eval/trusted_io.rs` | uncovered |  |  |
+| `eval::trusted_io::ErrWriter::new` | `crates/bc_core/src/eval/trusted_io.rs` | uncovered |  |  |
+| `eval::trusted_io::ErrWriter::write_fmt` | `crates/bc_core/src/eval/trusted_io.rs` | uncovered |  |  |
+| `eval::trusted_io::ErrWriter::write_str` | `crates/bc_core/src/eval/trusted_io.rs` | uncovered |  |  |
+| `eval::trusted_io::WrappedStdout::flush` | `crates/bc_core/src/eval/trusted_io.rs` | uncovered |  |  |
+| `eval::trusted_io::WrappedStdout::new` | `crates/bc_core/src/eval/trusted_io.rs` | uncovered |  |  |
+| `eval::trusted_io::WrappedStdout::write_str` | `crates/bc_core/src/eval/trusted_io.rs` | uncovered |  |  |
 | `format::BCNum::try_format_obase` | `crates/bc_core/src/format.rs` | uncovered |  |  |
 | `math::BCNum::try_from_string` | `crates/bc_core/src/math.rs` | uncovered |  |  |
 | `parser::parse::Parser::set_extension_policy` | `crates/bc_core/src/parser/parse.rs` | uncovered |  |  |
@@ -230,31 +230,33 @@ Every production function of the workspace and the examples belongs to one tier.
 
 | Crate | Item | File | Kind | Tested by |
 |---|---|---|---|---|
-| `bc_core` | `driver::append_bytes` | `crates/bc_core/src/driver.rs` | `external_body` with a contract |  |
-| `bc_core` | `driver::subslice` | `crates/bc_core/src/driver.rs` | `external_body` with a contract |  |
-| `bc_core` | `eval::ErrWriter` | `crates/bc_core/src/eval/mod.rs` | opaque type |  |
-| `bc_core` | `eval::ErrWriter::flush_err` | `crates/bc_core/src/eval/mod.rs` | `external_body` with a contract |  |
-| `bc_core` | `eval::ErrWriter::write_bytes` | `crates/bc_core/src/eval/mod.rs` | `external_body` with a contract |  |
-| `bc_core` | `eval::WrappedStdout` | `crates/bc_core/src/eval/mod.rs` | opaque type |  |
-| `bc_core` | `eval::WrappedStdout::flush_out` | `crates/bc_core/src/eval/mod.rs` | `external_body` with a contract |  |
-| `bc_core` | `eval::WrappedStdout::write_bytes` | `crates/bc_core/src/eval/mod.rs` | `external_body` with a contract |  |
-| `bc_core` | `eval::err_log` | `crates/bc_core/src/eval/mod.rs` | uninterpreted spec |  |
-| `bc_core` | `eval::out_col` | `crates/bc_core/src/eval/mod.rs` | uninterpreted spec |  |
-| `bc_core` | `eval::out_log` | `crates/bc_core/src/eval/mod.rs` | uninterpreted spec |  |
-| `bc_core` | `parser::lexer::copy_bytes` | `crates/bc_core/src/parser/lexer.rs` | `external_body` with a contract |  |
-| `bc_core` | `parser::ascii_string` | `crates/bc_core/src/parser/mod.rs` | `external_body` with a contract |  |
-| `bc_core` | `parser::share_code` | `crates/bc_core/src/parser/mod.rs` | `external_body` with a contract |  |
+| `bc_core` | `driver::trusted::append_bytes` | `crates/bc_core/src/driver/trusted.rs` | `external_body` with a contract | `wrappers_keep_their_contracts` |
+| `bc_core` | `driver::trusted::subslice` | `crates/bc_core/src/driver/trusted.rs` | `external_body` with a contract | `wrappers_keep_their_contracts` |
+| `bc_core` | `eval::trusted_io::ErrWriter` | `crates/bc_core/src/eval/trusted_io.rs` | opaque type |  |
+| `bc_core` | `eval::trusted_io::ErrWriter::flush_err` | `crates/bc_core/src/eval/trusted_io.rs` | `external_body` with a contract | `stream_wrappers_pass_exactly_their_bytes` |
+| `bc_core` | `eval::trusted_io::ErrWriter::write_bytes` | `crates/bc_core/src/eval/trusted_io.rs` | `external_body` with a contract | `stream_wrappers_pass_exactly_their_bytes` |
+| `bc_core` | `eval::trusted_io::WrappedStdout` | `crates/bc_core/src/eval/trusted_io.rs` | opaque type |  |
+| `bc_core` | `eval::trusted_io::WrappedStdout::flush_out` | `crates/bc_core/src/eval/trusted_io.rs` | `external_body` with a contract | `stream_wrappers_pass_exactly_their_bytes` |
+| `bc_core` | `eval::trusted_io::WrappedStdout::write_bytes` | `crates/bc_core/src/eval/trusted_io.rs` | `external_body` with a contract | `stream_wrappers_pass_exactly_their_bytes` |
+| `bc_core` | `eval::trusted_io::err_log` | `crates/bc_core/src/eval/trusted_io.rs` | uninterpreted spec |  |
+| `bc_core` | `eval::trusted_io::out_col` | `crates/bc_core/src/eval/trusted_io.rs` | uninterpreted spec |  |
+| `bc_core` | `eval::trusted_io::out_log` | `crates/bc_core/src/eval/trusted_io.rs` | uninterpreted spec |  |
+| `bc_core` | `parser::trusted::ascii_string` | `crates/bc_core/src/parser/trusted.rs` | `external_body` with a contract | `wrappers_keep_their_contracts` |
+| `bc_core` | `parser::trusted::copy_bytes` | `crates/bc_core/src/parser/trusted.rs` | `external_body` with a contract | `wrappers_keep_their_contracts` |
+| `bc_core` | `parser::trusted::share_code` | `crates/bc_core/src/parser/trusted.rs` | `external_body` with a contract | `wrappers_keep_their_contracts` |
 | `bc_core` | `trusted_bigint::axiom_bigint_size` | `crates/bc_core/src/trusted_bigint.rs` | axiom |  |
-| `bc_core` | `trusted_bigint::big_add` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract |  |
-| `bc_core` | `trusted_bigint::big_bits` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract |  |
-| `bc_core` | `trusted_bigint::big_clone` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract |  |
-| `bc_core` | `trusted_bigint::big_cmp` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract |  |
-| `bc_core` | `trusted_bigint::big_from_u64` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract |  |
-| `bc_core` | `trusted_bigint::big_mul` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract |  |
-| `bc_core` | `trusted_bigint::big_sub` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract |  |
-| `bc_core` | `trusted_bigint::big_tdiv_rem` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract |  |
-| `bc_core` | `trusted_bigint::big_to_i64` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract |  |
+| `bc_core` | `trusted_bigint::big_add` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract | `wrappers_match_integer_arithmetic` |
+| `bc_core` | `trusted_bigint::big_bits` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract | `bits_and_from_u64` |
+| `bc_core` | `trusted_bigint::big_clone` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract | `clone_and_to_i64` |
+| `bc_core` | `trusted_bigint::big_cmp` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract | `wrappers_match_integer_arithmetic` |
+| `bc_core` | `trusted_bigint::big_from_u64` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract | `bits_and_from_u64` |
+| `bc_core` | `trusted_bigint::big_mul` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract | `wrappers_match_integer_arithmetic` |
+| `bc_core` | `trusted_bigint::big_sub` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract | `wrappers_match_integer_arithmetic` |
+| `bc_core` | `trusted_bigint::big_tdiv_rem` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract | `wrappers_match_integer_arithmetic` |
+| `bc_core` | `trusted_bigint::big_to_i64` | `crates/bc_core/src/trusted_bigint.rs` | `external_body` with a contract | `clone_and_to_i64` |
 | `bc_core` | `trusted_bigint::big_view` | `crates/bc_core/src/trusted_bigint.rs` | uninterpreted spec |  |
+| `bc_core` | `trusted_dual::dual_verified` | `crates/bc_core/src/trusted_dual.rs` | `macro_rules!` |  |
+| `bc_core` | `trusted_dual::dual_verified` | `crates/bc_core/src/trusted_dual.rs` | `macro_rules!` |  |
 | `bc_core` | `trusted_math::atan_r` | `crates/bc_core/src/trusted_math.rs` | uninterpreted spec |  |
 | `bc_core` | `trusted_math::axiom_artanh_series` | `crates/bc_core/src/trusted_math.rs` | axiom |  |
 | `bc_core` | `trusted_math::axiom_atan_half` | `crates/bc_core/src/trusted_math.rs` | axiom |  |
@@ -282,8 +284,6 @@ Every production function of the workspace and the examples belongs to one tier.
 | `bc_core` | `trusted_std::<FunctionDefasClone>::clone` | `crates/bc_core/src/trusted_std.rs` | `assume_specification` |  |
 | `bc_core` | `trusted_std::axiom_string_obeys_cmp` | `crates/bc_core/src/trusted_std.rs` | axiom |  |
 | `bc_core` | `trusted_std::axiom_string_view_injective` | `crates/bc_core/src/trusted_std.rs` | axiom |  |
-| `bc_core` | `verified_kernels::dual_verified` | `crates/bc_core/src/verified_kernels.rs` | `macro_rules!` |  |
-| `bc_core` | `verified_kernels::dual_verified` | `crates/bc_core/src/verified_kernels.rs` | `macro_rules!` |  |
 
 ## Partial correctness
 
@@ -315,54 +315,29 @@ Verified functions whose termination is not proved (`exec_allows_no_decreases_cl
 - `bc_core` `driver::UnitAccumulator::default` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `driver::UnitAccumulator::fmt` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `driver::UnitAccumulator::push_line` (`crates/bc_core/src/driver.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `driver::append_bytes` (`crates/bc_core/src/driver.rs`): an assumption outside a `trusted*` file
-- `bc_core` `driver::subslice` (`crates/bc_core/src/driver.rs`): an assumption outside a `trusted*` file
 - `bc_core` `error::BcError::fmt` (`crates/bc_core/src/error.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `error::BcError::from` (`crates/bc_core/src/error.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `error::BcError::syntax` (`crates/bc_core/src/error.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `error::RuntimeError::fmt` (`crates/bc_core/src/error.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::BcWriter::flush` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::BcWriter::write_bytes` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::ErrWriter` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
-- `bc_core` `eval::ErrWriter::flush` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::ErrWriter::flush_err` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
-- `bc_core` `eval::ErrWriter::new` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::ErrWriter::write_bytes` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
-- `bc_core` `eval::ErrWriter::write_fmt` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::ErrWriter::write_str` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `eval::Evaluator::new` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `eval::Evaluator::stderr_writer` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::WrappedStdout` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
-- `bc_core` `eval::WrappedStdout::flush` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::WrappedStdout::flush_out` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
-- `bc_core` `eval::WrappedStdout::new` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::WrappedStdout::write_bytes` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
-- `bc_core` `eval::WrappedStdout::write_str` (`crates/bc_core/src/eval/mod.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `eval::err_log` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
-- `bc_core` `eval::out_col` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
-- `bc_core` `eval::out_log` (`crates/bc_core/src/eval/mod.rs`): an assumption outside a `trusted*` file
+- `bc_core` `eval::trusted_io::BcWriter::flush` (`crates/bc_core/src/eval/trusted_io.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
+- `bc_core` `eval::trusted_io::BcWriter::write_bytes` (`crates/bc_core/src/eval/trusted_io.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
+- `bc_core` `eval::trusted_io::ErrWriter::flush` (`crates/bc_core/src/eval/trusted_io.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
+- `bc_core` `eval::trusted_io::ErrWriter::new` (`crates/bc_core/src/eval/trusted_io.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
+- `bc_core` `eval::trusted_io::ErrWriter::write_fmt` (`crates/bc_core/src/eval/trusted_io.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
+- `bc_core` `eval::trusted_io::ErrWriter::write_str` (`crates/bc_core/src/eval/trusted_io.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
+- `bc_core` `eval::trusted_io::WrappedStdout::flush` (`crates/bc_core/src/eval/trusted_io.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
+- `bc_core` `eval::trusted_io::WrappedStdout::new` (`crates/bc_core/src/eval/trusted_io.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
+- `bc_core` `eval::trusted_io::WrappedStdout::write_str` (`crates/bc_core/src/eval/trusted_io.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `format::BCNum::try_format_obase` (`crates/bc_core/src/format.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `math::BCNum::try_from_string` (`crates/bc_core/src/math.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `parser::lexer::copy_bytes` (`crates/bc_core/src/parser/lexer.rs`): an assumption outside a `trusted*` file
-- `bc_core` `parser::ascii_string` (`crates/bc_core/src/parser/mod.rs`): an assumption outside a `trusted*` file
-- `bc_core` `parser::share_code` (`crates/bc_core/src/parser/mod.rs`): an assumption outside a `trusted*` file
 - `bc_core` `parser::parse::Parser::set_extension_policy` (`crates/bc_core/src/parser/parse.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `parser::parse::Parser::set_max_depth` (`crates/bc_core/src/parser/parse.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `parser::parse::Parser::take_code` (`crates/bc_core/src/parser/parse.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `parser::parse::Parser::take_extension_uses` (`crates/bc_core/src/parser/parse.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `parser::parse::Parser::try_new` (`crates/bc_core/src/parser/parse.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_core` `parser::parse::Parser::try_parse_program` (`crates/bc_core/src/parser/parse.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
-- `bc_core` `trusted_bigint::big_add` (`crates/bc_core/src/trusted_bigint.rs`): a trusted wrapper without a Kani harness or Miri test that runs it
-- `bc_core` `trusted_bigint::big_bits` (`crates/bc_core/src/trusted_bigint.rs`): a trusted wrapper without a Kani harness or Miri test that runs it
-- `bc_core` `trusted_bigint::big_clone` (`crates/bc_core/src/trusted_bigint.rs`): a trusted wrapper without a Kani harness or Miri test that runs it
-- `bc_core` `trusted_bigint::big_cmp` (`crates/bc_core/src/trusted_bigint.rs`): a trusted wrapper without a Kani harness or Miri test that runs it
-- `bc_core` `trusted_bigint::big_from_u64` (`crates/bc_core/src/trusted_bigint.rs`): a trusted wrapper without a Kani harness or Miri test that runs it
-- `bc_core` `trusted_bigint::big_mul` (`crates/bc_core/src/trusted_bigint.rs`): a trusted wrapper without a Kani harness or Miri test that runs it
-- `bc_core` `trusted_bigint::big_sub` (`crates/bc_core/src/trusted_bigint.rs`): a trusted wrapper without a Kani harness or Miri test that runs it
-- `bc_core` `trusted_bigint::big_tdiv_rem` (`crates/bc_core/src/trusted_bigint.rs`): a trusted wrapper without a Kani harness or Miri test that runs it
-- `bc_core` `trusted_bigint::big_to_i64` (`crates/bc_core/src/trusted_bigint.rs`): a trusted wrapper without a Kani harness or Miri test that runs it
-- `bc_core` `verified_kernels::dual_verified` (`crates/bc_core/src/verified_kernels.rs`): an assumption outside a `trusted*` file
-- `bc_core` `verified_kernels::dual_verified` (`crates/bc_core/src/verified_kernels.rs`): an assumption outside a `trusted*` file
 - `bc_clone` `IoWriter::flush` (`crates/bc_cli/src/main.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_clone` `IoWriter::new` (`crates/bc_cli/src/main.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)
 - `bc_clone` `IoWriter::write_bytes` (`crates/bc_cli/src/main.rs`): not covered by Verus, Kani, Miri or a shim (add a `// coverage:` tag)

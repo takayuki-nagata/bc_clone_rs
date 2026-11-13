@@ -97,6 +97,39 @@ mod proofs {
 }
 
 #[test]
+fn property_tests_are_tests() {
+    let (s, _) = scan_one(
+        CORE,
+        &[(
+            "crates/bc_core/src/lib.rs",
+            r#"
+#[cfg(test)]
+mod tests {
+    proptest! {
+        #[test]
+        fn prop_a(x in 0..3u8) { prop_assert!(f(x)); }
+
+        #[test]
+        #[cfg_attr(miri, ignore)]
+        fn prop_slow(x in 0..3u8) { g(x); }
+
+        fn not_a_test(x: u8) {}
+    }
+}
+#[cfg(not(test))]
+proptest! {
+    #[test]
+    fn prop_in_production(x in 0..3u8) { h(x); }
+}
+"#,
+        )],
+    );
+    let tests: Vec<&str> = s.miri_tests.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(tests, ["prop_a"]);
+    assert!(s.miri_tests[0].body.contains("f"));
+}
+
+#[test]
 fn tests_of_a_crate_that_miri_does_not_run_do_not_count() {
     let (s, _) = scan_one(
         QEMU,

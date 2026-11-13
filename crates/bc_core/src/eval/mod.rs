@@ -21,7 +21,6 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use core::fmt::Write as FmtWrite;
 
 #[cfg(verus_keep_ghost)]
 use crate::bigint::{axiom_bigint_size, big_view};
@@ -29,7 +28,7 @@ use crate::bigint::{
     big_abs, big_cmp, big_from_usize, big_is_negative, big_neg, big_tdiv, big_to_u64_small,
 };
 use crate::error::{BcError, RuntimeError};
-use crate::format::{push_dec, wrap_output};
+use crate::format::push_dec;
 use crate::math::pow10_within;
 use crate::math::{BCNum, literal_digit_values};
 use crate::mathlib::{bc_atan, bc_bessel, bc_cos, bc_exp, bc_ln, bc_sin};
@@ -112,73 +111,14 @@ mod machine;
 mod ops;
 #[cfg(test)]
 mod tests;
+mod trusted_io;
 mod unit;
 
-/// Abstract output writer trait compatible with both no_std and std environments.
-pub trait BcWriter: FmtWrite + Send {
-    /// Writes bytes. A string literal is printed byte for byte, so the bytes need not be UTF-8.
-    /// The default implementation passes them to `write_str`, replacing each invalid UTF-8
-    /// sequence with U+FFFD; a writer to a byte stream overrides it to write them unchanged.
-    fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
-        match core::str::from_utf8(b) {
-            Ok(text) => self.write_str(text),
-            Err(_) => self.write_str(&String::from_utf8_lossy(b)),
-        }
-    }
-
-    /// Flushes any buffered content.
-    fn flush(&mut self) -> core::fmt::Result {
-        Ok(())
-    }
-}
-
-impl BcWriter for String {}
-
-impl WrappedStdout {
-    /// Creates a new WrappedStdout writing to the given writer.
-    pub fn new(writer: Box<dyn BcWriter>) -> Self {
-        Self { writer, col: 0 }
-    }
-
-    /// Writes a string to the output stream with POSIX line wrapping: a backslash-newline
-    /// before a character at column 68 or beyond (`format::wrap_output`, verified against the
-    /// specification's `write_wrapped`).
-    pub fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let (out, col) = wrap_output(self.col, s.as_bytes());
-        self.col = col;
-        self.writer.write_bytes(&out)
-    }
-
-    /// Flushes the underlying writer.
-    pub fn flush(&mut self) -> core::fmt::Result {
-        self.writer.flush()
-    }
-}
+pub use trusted_io::{BcWriter, ErrWriter, WrappedStdout};
+#[cfg(verus_keep_ghost)]
+pub use trusted_io::{err_log, out_col, out_log};
 
 verus! {
-
-/// Wrapper to write output characters with POSIX-style 70-character line wrapping. Opaque to
-/// Verus: the refinement proofs see it through `out_log` and `out_col`.
-#[verifier::external_body]
-pub struct WrappedStdout {
-    writer: Box<dyn BcWriter>,
-    col: usize,
-}
-
-/// The diagnostic stream. Opaque to Verus: the refinement proofs see it through `err_log`.
-#[verifier::external_body]
-pub struct ErrWriter {
-    writer: Box<dyn BcWriter>,
-}
-
-/// The bytes written to standard output so far (the model of the output stream).
-pub uninterp spec fn out_log(w: &WrappedStdout) -> Seq<u8>;
-
-/// The output column of standard output (`write_wrapped`'s column).
-pub uninterp spec fn out_col(w: &WrappedStdout) -> u64;
-
-/// The bytes written to the diagnostic stream so far.
-pub uninterp spec fn err_log(w: &ErrWriter) -> Seq<u8>;
 
 /// Evaluator maintaining registers, scoped variables, functions, and state.
 pub struct Evaluator {
@@ -710,53 +650,6 @@ pub(crate) open spec fn r_place(p: Place, sp: bc_spec::eval::Place) -> bool {
     }
 }
 
-impl WrappedStdout {
-    /// Writes `b` to standard output with POSIX line wrapping (the verified
-    /// `format::wrap_output`). Trusted: the writer's `BcWriter::write_bytes` receives exactly
-    /// the wrapped bytes, as the specification's `write_wrapped` describes (a writer that stores
-    /// text replaces invalid UTF-8 there); a failing writer is outside the model.
-    #[verifier::external_body]
-    pub(crate) fn write_bytes(&mut self, b: &[u8])
-        ensures
-            (out_log(final(self)), out_col(final(self))) == write_wrapped(out_log(old(self)), out_col(old(self)), b@),
-    {
-        let (out, col) = wrap_output(self.col, b);
-        self.col = col;
-        let _ = self.writer.write_bytes(&out);
-    }
-
-    /// Flushes the underlying writer (no effect on what has been written).
-    #[verifier::external_body]
-    pub(crate) fn flush_out(&mut self)
-        ensures
-            out_log(final(self)) == out_log(old(self)),
-            out_col(final(self)) == out_col(old(self)),
-    {
-        let _ = self.writer.flush();
-    }
-}
-
-impl ErrWriter {
-    /// Writes `b` to the diagnostic stream. Trusted: the writer's `BcWriter::write_bytes`
-    /// receives exactly these bytes; a failing writer is outside the model (diagnostics ignore
-    /// write errors).
-    #[verifier::external_body]
-    pub(crate) fn write_bytes(&mut self, b: &[u8])
-        ensures
-            err_log(final(self)) == err_log(old(self)).add(b@),
-    {
-        let _ = self.writer.write_bytes(b);
-    }
-    /// Flushes the underlying writer (no effect on what has been written).
-    #[verifier::external_body]
-    pub(crate) fn flush_err(&mut self)
-        ensures
-            err_log(final(self)) == err_log(old(self)),
-    {
-        let _ = self.writer.flush();
-    }
-}
-
 /// The result of executing a statement corresponds to the specification's `ER` (as
 /// `r_result`, without a value).
 pub(crate) open spec fn r_unit(r: Result<(), BcError>, e: Evaluator, x: ER, d: usize) -> bool {
@@ -907,30 +800,6 @@ impl Evaluator {
 }
 
 } // verus!
-
-impl ErrWriter {
-    /// Creates the diagnostic stream writing to the given writer.
-    pub fn new(writer: Box<dyn BcWriter>) -> Self {
-        Self { writer }
-    }
-
-    /// Flushes the underlying writer.
-    pub fn flush(&mut self) -> core::fmt::Result {
-        self.writer.flush()
-    }
-
-    /// Writes formatted text, so that `writeln!(evaluator.stderr_writer, ...)` works without
-    /// importing `fmt::Write`.
-    pub fn write_fmt(&mut self, args: core::fmt::Arguments<'_>) -> core::fmt::Result {
-        FmtWrite::write_fmt(self, args)
-    }
-}
-
-impl FmtWrite for ErrWriter {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        self.writer.write_str(s)
-    }
-}
 
 impl Evaluator {
     /// Creates a new Evaluator with abstract BcWriter streams.

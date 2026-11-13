@@ -144,7 +144,7 @@ fn the_engine_keeps_code_outside_verus_in_unverified_files() {
     );
     assert_eq!(
         v(&fact("trusted_io.rs", ROLE_CORE, KIND_OUTSIDE, TAG_MIRI)),
-        V_CORE_PLACEMENT
+        V_NONE
     );
     assert_eq!(
         v(&fact("driver.rs", ROLE_PRODUCT, KIND_OUTSIDE, TAG_MIRI)),

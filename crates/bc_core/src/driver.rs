@@ -20,6 +20,9 @@ use crate::parser::{Code, ExtensionPolicy, ascii_string, parse_unit_ref};
 #[cfg(verus_keep_ghost)]
 use crate::refine::{r_code, r_err, text_view};
 use crate::verified_kernels::{verified_repl_block_scan, verified_unit_within_limit};
+use trusted::{append_bytes, subslice};
+
+mod trusted;
 use alloc::rc::Rc;
 #[cfg(verus_keep_ghost)]
 use bc_spec::eval::{EState, bytes_add, with_call, with_depth, with_err, with_flags};
@@ -747,25 +750,6 @@ impl UnitAccumulator {
     }
 }
 
-/// Trusted: `extend_from_slice` appends the slice.
-#[verifier::external_body]
-fn append_bytes(buf: &mut Vec<u8>, line: &[u8])
-    ensures
-        final(buf)@ == old(buf)@.add(line@),
-{
-    buf.extend_from_slice(line);
-}
-
-/// Trusted: the subslice of `text` from `a` to `b`.
-#[verifier::external_body]
-fn subslice(text: &[u8], a: usize, b: usize) -> (r: &[u8])
-    requires
-        a <= b <= text@.len(),
-    ensures
-        r@ == text@.subrange(a as int, b as int),
-{
-    &text[a..b]
-}
 
 /// The first line of the text from `pos`.
 proof fn lemma_take_line(t: Seq<u8>, pos: int, end: int)

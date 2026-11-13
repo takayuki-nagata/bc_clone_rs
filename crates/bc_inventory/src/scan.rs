@@ -784,6 +784,8 @@ fn scan_items(src: &dyn Source, items: &[syn::Item], ctx: &mut Ctx, scan: &mut S
                         scan_verus(&m.mac.tokens, ctx, scan, None);
                         ctx.act = saved;
                     }
+                    // Property tests: `proptest! { #[test] fn name(x in s) { ... } }`.
+                    "proptest" => macro_tests(ctx, scan, act, &m.mac.tokens),
                     // `dual_verified!` is trusted to expand the body Verus checked unchanged in a
                     // normal build. Any other macro is code, covered like a function.
                     "macro_rules" if act.prod || act.ghost => {
@@ -842,6 +844,56 @@ fn type_name(t: &syn::Type) -> String {
             .unwrap_or_default(),
         syn::Type::Reference(r) => type_name(&r.elem),
         other => other.to_token_stream().to_string(),
+    }
+}
+
+/// The `#[test]` functions in the tokens of a test macro such as `proptest!`.
+fn macro_tests(ctx: &Ctx, scan: &mut Scan, act: Active, ts: &TokenStream) {
+    let toks: Vec<TokenTree> = ts.clone().into_iter().collect();
+    let mut i = 0;
+    while i < toks.len() {
+        let is_test_attr = matches!(&toks[i], TokenTree::Punct(p) if p.as_char() == '#')
+            && matches!(toks.get(i + 1), Some(TokenTree::Group(g))
+                if g.delimiter() == Delimiter::Bracket && g.stream().to_string() == "test");
+        if !is_test_attr {
+            i += 1;
+            continue;
+        }
+        let mut metas: Vec<Meta> = Vec::new();
+        let mut k = i;
+        while let (Some(TokenTree::Punct(p)), Some(TokenTree::Group(g))) =
+            (toks.get(k), toks.get(k + 1))
+        {
+            if p.as_char() != '#' {
+                break;
+            }
+            if let Ok(m) = syn::parse2::<Meta>(g.stream()) {
+                metas.push(m);
+            }
+            k += 2;
+        }
+        let name = match (toks.get(k), toks.get(k + 1)) {
+            (Some(TokenTree::Ident(f)), Some(TokenTree::Ident(n))) if f == "fn" => n.to_string(),
+            _ => {
+                i = k.max(i + 1);
+                continue;
+            }
+        };
+        let body = toks[k + 2..].iter().find_map(|t| match t {
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => Some(g.stream()),
+            _ => None,
+        });
+        let act = act.and(active(&metas));
+        if act.test && !has_attr(&metas, TEST, "ignore") && CRATES[ctx.krate].miri {
+            let mut b = BTreeSet::new();
+            idents(&body.unwrap_or_default(), &mut b);
+            scan.miri_tests.push(Check {
+                krate: ctx.krate,
+                name,
+                body: b,
+            });
+        }
+        i = k + 2;
     }
 }
 

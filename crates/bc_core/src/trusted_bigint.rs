@@ -50,6 +50,7 @@ pub axiom fn axiom_bigint_size(b: &BigInt)
         -spec_pow_int(2, value_bits()) < big_view(b) < spec_pow_int(2, value_bits()),
 ;
 
+// coverage: miri(wrappers_match_integer_arithmetic)
 #[verifier::external_body]
 pub fn big_add(a: &BigInt, b: &BigInt) -> (r: BigInt)
     ensures
@@ -58,6 +59,7 @@ pub fn big_add(a: &BigInt, b: &BigInt) -> (r: BigInt)
     a + b
 }
 
+// coverage: miri(wrappers_match_integer_arithmetic)
 #[verifier::external_body]
 pub fn big_sub(a: &BigInt, b: &BigInt) -> (r: BigInt)
     ensures
@@ -66,6 +68,7 @@ pub fn big_sub(a: &BigInt, b: &BigInt) -> (r: BigInt)
     a - b
 }
 
+// coverage: miri(wrappers_match_integer_arithmetic)
 #[verifier::external_body]
 pub fn big_mul(a: &BigInt, b: &BigInt) -> (r: BigInt)
     ensures
@@ -76,6 +79,7 @@ pub fn big_mul(a: &BigInt, b: &BigInt) -> (r: BigInt)
 
 /// The truncating quotient and its remainder (`Integer::div_rem`, which is `BigInt`'s `/` and
 /// `%` computed at once).
+// coverage: miri(wrappers_match_integer_arithmetic)
 #[verifier::external_body]
 pub fn big_tdiv_rem(a: &BigInt, b: &BigInt) -> (r: (BigInt, BigInt))
     requires
@@ -87,6 +91,7 @@ pub fn big_tdiv_rem(a: &BigInt, b: &BigInt) -> (r: (BigInt, BigInt))
     num_integer::Integer::div_rem(a, b)
 }
 
+// coverage: miri(wrappers_match_integer_arithmetic)
 #[verifier::external_body]
 pub fn big_cmp(a: &BigInt, b: &BigInt) -> (r: Ordering)
     ensures
@@ -97,6 +102,7 @@ pub fn big_cmp(a: &BigInt, b: &BigInt) -> (r: Ordering)
     a.cmp(b)
 }
 
+// coverage: miri(clone_and_to_i64)
 #[verifier::external_body]
 pub fn big_clone(a: &BigInt) -> (r: BigInt)
     ensures
@@ -106,6 +112,7 @@ pub fn big_clone(a: &BigInt) -> (r: BigInt)
 }
 
 /// The value as an `i64`, if it fits.
+// coverage: miri(clone_and_to_i64)
 #[verifier::external_body]
 pub fn big_to_i64(a: &BigInt) -> (r: Option<i64>)
     ensures
@@ -117,6 +124,7 @@ pub fn big_to_i64(a: &BigInt) -> (r: Option<i64>)
     a.to_i64()
 }
 
+// coverage: miri(bits_and_from_u64)
 #[verifier::external_body]
 pub fn big_from_u64(n: u64) -> (r: BigInt)
     ensures
@@ -127,6 +135,7 @@ pub fn big_from_u64(n: u64) -> (r: BigInt)
 
 /// The number of bits of |a| (`BigInt::bits`): 0 for 0, otherwise the `r` with
 /// `2^(r-1) <= |a| < 2^r`.
+// coverage: miri(bits_and_from_u64)
 #[verifier::external_body]
 pub fn big_bits(a: &BigInt) -> (r: u64)
     ensures

@@ -23,10 +23,12 @@ mod parse;
 pub(crate) mod test_tree;
 #[cfg(test)]
 mod tests;
+mod trusted;
 
 pub use lexer::Lexer;
 pub(crate) use parse::parse_unit_ref;
 pub use parse::{DEFAULT_MAX_DEPTH, NESTING_TOO_DEEP, Parser};
+pub(crate) use trusted::{ascii_string, share_code};
 
 /// The types of tokens supported by the bc lexer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,26 +100,6 @@ impl Token {
 /// Whether all the bytes are ASCII, so that each one is a character.
 pub open spec fn all_ascii(b: Seq<u8>) -> bool {
     forall|i: int| 0 <= i < b.len() ==> b[i] < 0x80
-}
-
-/// Trusted: a `char` below 0x80 is one UTF-8 byte of the same value.
-#[verifier::external_body]
-pub(crate) fn ascii_string(b: &[u8]) -> (r: String)
-    requires
-        all_ascii(b@),
-    ensures
-        text_view(r) == b@,
-{
-    b.iter().map(|&x| char::from(x)).collect()
-}
-
-/// Trusted: cloning an `Rc` shares the same value.
-#[verifier::external_body]
-pub(crate) fn share_code(c: &Rc<Code>) -> (r: Rc<Code>)
-    ensures
-        *r == **c,
-{
-    Rc::clone(c)
 }
 
 } // verus!

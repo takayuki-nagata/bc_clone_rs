@@ -8,6 +8,7 @@
 
 #[cfg(verus_keep_ghost)]
 use super::all_ascii;
+use super::trusted::copy_bytes;
 use super::{Token, TokenType, ascii_string};
 use crate::error::BcError;
 #[cfg(verus_keep_ghost)]
@@ -208,15 +209,6 @@ proof fn lemma_ascii_message(m: Seq<u8>, head: Seq<u8>, t: Seq<u8>)
             assert(m[i] == shown[i - 19]);
         }
     }
-}
-
-/// Trusted: `to_vec` copies the slice.
-#[verifier::external_body]
-fn copy_bytes(text: &[u8]) -> (r: Vec<u8>)
-    ensures
-        r@ == text@,
-{
-    text.to_vec()
 }
 
 /// The operator at a byte `c` followed by `next` (0 at the end of the input), as `(kind, length)`;

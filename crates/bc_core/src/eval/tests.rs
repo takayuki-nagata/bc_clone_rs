@@ -7,6 +7,7 @@ use crate::parser::Parser;
 use crate::parser::test_tree::{Expr, ExprOrArray, FunctionDef, Stmt};
 use alloc::format;
 use alloc::string::ToString;
+use core::fmt::Write as FmtWrite;
 use num_bigint::BigInt;
 
 #[derive(Clone)]

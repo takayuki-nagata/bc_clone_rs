@@ -30,66 +30,6 @@ use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
-#[cfg(verus_keep_ghost)]
-macro_rules! dual_verified {
-    (
-        $(
-            pub const $cname:ident : $cty:ty = $cval:expr;
-        )*
-        $(
-            $(#[$meta:meta])*
-            pub $(($scope:tt))? fn $name:ident( $($arg:ident : $arg_ty:ty),* $(,)? ) -> ($ret_name:ident : $ret_ty:ty)
-                $(requires [ $($req:tt)* ])?
-                ensures [ $($ens:tt)* ]
-            $body:block
-        )+
-    ) => {
-        verus! {
-            $(
-                pub const $cname : $cty = $cval;
-            )*
-            $(
-                $(#[$meta])*
-                pub $(($scope))? fn $name( $($arg : $arg_ty),* ) -> ($ret_name : $ret_ty)
-                    $(requires $($req)*)?
-                    ensures $($ens)*
-                $body
-            )+
-        }
-    };
-}
-
-#[cfg(not(verus_keep_ghost))]
-macro_rules! dual_verified {
-    (
-        $(
-            pub const $cname:ident : $cty:ty = $cval:expr;
-        )*
-        $(
-            $(#[$meta:meta])*
-            pub $(($scope:tt))? fn $name:ident( $($arg:ident : $arg_ty:ty),* $(,)? ) -> ($ret_name:ident : $ret_ty:ty)
-                $(requires [ $($req:tt)* ])?
-                ensures [ $($ens:tt)* ]
-            $body:block
-        )+
-    ) => {
-        $(
-            pub const $cname : $cty = $cval;
-        )*
-        $(
-            $(#[$meta])*
-            #[inline]
-            #[allow(
-                clippy::manual_range_contains,
-                clippy::manual_clamp,
-                clippy::implicit_saturating_sub
-            )]
-            pub $(($scope))? fn $name( $($arg : $arg_ty),* ) -> $ret_ty
-            $body
-        )+
-    };
-}
-
 verus! {
 
 /// `s` is the long option `--version`.
