@@ -9,6 +9,10 @@ value truncated toward zero at `scale`. The lexer, the parser and the unit split
 themselves are not proved. AGENTS.md lists what the proofs assume.
 
 ### Changed
+- **The QEMU RISC-V 32 package names its emulator package for Ubuntu 26.04.** There,
+  `qemu-system-riscv32` is in `qemu-system-riscv`, no longer in `qemu-system-misc`; CI and the
+  release workflow install whichever the runner has, and the Zephyr workspace script rebuilds
+  a cached Python environment that the runner's Python cannot use.
 - **Evaluation runs on an explicit stack, with its own nesting limit.** Expressions, statements
   and function calls no longer recurse on the native stack (beyond a fixed eight levels for
   shallow call-free code of at most 64 statements, the enclosing ones included, which runs

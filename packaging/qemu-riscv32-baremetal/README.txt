@@ -7,7 +7,7 @@ Stand-alone RISC-V 32 binaries (no OS) that run the bc_clone engine's self-test 
   ./run.sh        # bc_qemu_riscv32-riscv32imac.elf
   ./run.sh imc    # bc_qemu_riscv32-riscv32imc.elf
 
-Requirements: qemu-system-riscv32 (Debian/Ubuntu: apt install qemu-system-misc).
+Requirements: qemu-system-riscv32 (Ubuntu 26.04 and later: apt install qemu-system-riscv; older Debian/Ubuntu: apt install qemu-system-misc).
 
 The banner at start-up names the build, such as "bc_clone 0.5.0 (a916de2)": the version and
 the commit it was built from. Please quote it when you report a problem.

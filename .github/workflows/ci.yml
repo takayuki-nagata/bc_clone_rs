@@ -150,7 +150,9 @@ jobs:
       - name: Install QEMU RISC-V System Emulator
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-system-misc
+          # Ubuntu 26.04 moved qemu-system-riscv32 out of qemu-system-misc into qemu-system-riscv.
+          QEMU_PKG=qemu-system-misc; if apt-cache show qemu-system-riscv >/dev/null 2>&1; then QEMU_PKG=qemu-system-riscv; fi
+          sudo apt-get install -y --no-install-recommends "$QEMU_PKG"
 
       - name: Run QEMU RISC-V 32 Baremetal Automated Test Suite
         run: bash scripts/run_qemu_riscv32_tests.sh
@@ -300,7 +302,9 @@ jobs:
       - name: Install Build Tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-system-misc ninja-build
+          # Ubuntu 26.04 moved qemu-system-riscv32 out of qemu-system-misc into qemu-system-riscv.
+          QEMU_PKG=qemu-system-misc; if apt-cache show qemu-system-riscv >/dev/null 2>&1; then QEMU_PKG=qemu-system-riscv; fi
+          sudo apt-get install -y --no-install-recommends "$QEMU_PKG" ninja-build
 
       - name: Cache Zephyr Workspace
         uses: actions/cache@v4

@@ -21,8 +21,10 @@ WS="$(mkdir -p "${1:-${HOME}/zephyrproject-bc}" && cd "${1:-${HOME}/zephyrprojec
 
 echo "=== Zephyr ${ZEPHYR_VERSION} workspace in ${WS} ==="
 
-if [ ! -x "${WS}/.venv/bin/west" ] || [ ! -x "${WS}/.venv/bin/cmake" ]; then
-    python3 -m venv "${WS}/.venv"
+# A venv restored from a cache may come from another Python (a newer runner image); then its
+# packages cannot be imported, and it is rebuilt.
+if ! "${WS}/.venv/bin/python" -c 'import west' >/dev/null 2>&1 || [ ! -x "${WS}/.venv/bin/cmake" ]; then
+    python3 -m venv --clear "${WS}/.venv"
     "${WS}/.venv/bin/pip" install --quiet --upgrade pip west cmake ninja
 fi
 WEST="${WS}/.venv/bin/west"

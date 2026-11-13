@@ -99,7 +99,9 @@ jobs:
       - name: Install Packaging and Test Tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-system-misc zip
+          # Ubuntu 26.04 moved qemu-system-riscv32 out of qemu-system-misc into qemu-system-riscv.
+          QEMU_PKG=qemu-system-misc; if apt-cache show qemu-system-riscv >/dev/null 2>&1; then QEMU_PKG=qemu-system-riscv; fi
+          sudo apt-get install -y --no-install-recommends "$QEMU_PKG" zip
           cargo install wasm-bindgen-cli --version 0.2.127
 
       - name: Build and Package
@@ -138,7 +140,9 @@ jobs:
       - name: Install Build Tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-system-misc ninja-build
+          # Ubuntu 26.04 moved qemu-system-riscv32 out of qemu-system-misc into qemu-system-riscv.
+          QEMU_PKG=qemu-system-misc; if apt-cache show qemu-system-riscv >/dev/null 2>&1; then QEMU_PKG=qemu-system-riscv; fi
+          sudo apt-get install -y --no-install-recommends "$QEMU_PKG" ninja-build
 
       - name: Set Up Pinned Zephyr Workspace
         run: bash scripts/setup_zephyr_workspace.sh "${HOME}/zephyrproject-bc"
