@@ -578,6 +578,8 @@ mod tests {
         }
         zephyr_rust_main(false);
         let put = String::from_utf8(MOCK_PUT_CHARS.lock().unwrap().clone()).unwrap();
+        // Without the banner, whose version and commit contain digits.
+        let put = put.replacen(bc_build_info::VERSION_LINE, "", 1);
         assert!(put.contains("4"));
     }
 
@@ -628,6 +630,8 @@ mod tests {
             |_| {},
             None,
         );
+        // The banner's commit hash may contain any digits.
+        let out = out.replacen(bc_build_info::VERSION_LINE, "", 1);
         assert_eq!(out.matches("\x08 \x08").count(), 2);
         assert!(out.contains("5\n"));
         assert!(!out.contains("59"));
@@ -699,7 +703,12 @@ mod tests {
         );
 
         assert!(output_str.borrow().contains("^C\r\nbc> "));
-        assert!(output_str.borrow().contains("21"));
+        assert!(
+            output_str
+                .borrow()
+                .replacen(bc_build_info::VERSION_LINE, "", 1)
+                .contains("21")
+        );
         assert!(
             output_str
                 .borrow()
@@ -734,6 +743,8 @@ mod tests {
         }
         run_repl();
         let put = String::from_utf8(MOCK_PUT_CHARS.lock().unwrap().clone()).unwrap();
+        // Without the banner, whose version and commit contain digits.
+        let put = put.replacen(bc_build_info::VERSION_LINE, "", 1);
         assert!(put.contains("2"));
     }
 
