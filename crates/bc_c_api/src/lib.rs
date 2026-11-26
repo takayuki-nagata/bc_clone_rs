@@ -35,30 +35,55 @@ const HEAP_SIZE: usize = 65536;
 static mut HEAP_MEM: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 #[cfg(not(feature = "std"))]
+static mut HEAP_INITIALIZED: bool = false;
+
+// The library runs on one hart without preemption by its own callers, so a critical section has
+// nothing to save or restore. `critical_section::set_impl!` generates two `#[no_mangle]`
+// functions that forward to these methods, and nothing else.
+#[cfg(not(feature = "std"))]
 struct SingleHartCs;
 #[cfg(not(feature = "std"))]
 unsafe impl critical_section::Impl for SingleHartCs {
+    // coverage: shim(scripts/run_c_api_link_tests.sh); why: hw, trait
     unsafe fn acquire() -> critical_section::RawRestoreState {}
+    // coverage: shim(scripts/run_c_api_link_tests.sh); why: hw, trait
     unsafe fn release(_token: critical_section::RawRestoreState) {}
 }
 #[cfg(not(feature = "std"))]
 critical_section::set_impl!(SingleHartCs);
 
+/// Runs `init` the first time it is called with `done` false, and sets `done`.
+// coverage: miri(test_init_once_runs_init_once); why: hw
+#[cfg_attr(
+    feature = "std",
+    allow(dead_code, reason = "only the no_std heap uses it")
+)]
+fn init_once(done: &mut bool, init: impl FnOnce()) {
+    if !*done {
+        *done = true;
+        init();
+    }
+}
+
+// coverage: shim(scripts/run_c_api_link_tests.sh); why: hw
 #[cfg(not(feature = "std"))]
 fn init_heap_if_needed() {
-    static mut HEAP_INITIALIZED: bool = false;
+    // The flag is only touched here, and the library is called from one thread (the critical
+    // section is a no-op), so this is the only reference to it.
     critical_section::with(|_| unsafe {
-        #[allow(static_mut_refs)]
-        if !HEAP_INITIALIZED {
-            HEAP_INITIALIZED = true;
-            HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE);
-        }
+        init_once(&mut *core::ptr::addr_of_mut!(HEAP_INITIALIZED), || {
+            HEAP.init(core::ptr::addr_of!(HEAP_MEM) as usize, HEAP_SIZE)
+        })
     });
 }
 
+// coverage: miri(via bc_eval); why: hw
 #[cfg(feature = "std")]
 fn init_heap_if_needed() {}
 
+// Halts: the library has no way to report a panic to its caller (bc_core does not panic on any
+// input; exhausting the heap does).
+// coverage: shim(scripts/run_c_api_link_tests.sh); why: hw
 #[cfg(not(feature = "std"))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -88,6 +113,7 @@ struct SharedBuffer(Rc<RefCell<Vec<u8>>>);
 unsafe impl Send for SharedBuffer {}
 
 impl Write for SharedBuffer {
+    // coverage: miri(test_shared_buffer_keeps_bytes); why: trait
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.0.borrow_mut().extend_from_slice(s.as_bytes());
         Ok(())
@@ -95,11 +121,13 @@ impl Write for SharedBuffer {
 }
 
 impl BcWriter for SharedBuffer {
+    // coverage: miri(test_shared_buffer_keeps_bytes); why: trait
     fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
         self.0.borrow_mut().extend_from_slice(b);
         Ok(())
     }
 
+    // coverage: miri(test_shared_buffer_keeps_bytes); why: trait
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
     }
@@ -117,12 +145,14 @@ struct CallbackWriter {
 unsafe impl Send for CallbackWriter {}
 
 impl Write for CallbackWriter {
+    // coverage: miri(test_callback_writer_passes_both_writes); why: trait, ffi
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.write_bytes(s.as_bytes())
     }
 }
 
 impl BcWriter for CallbackWriter {
+    // coverage: miri(test_callback_writer_passes_both_writes); why: trait, ffi
     fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
         if let (Some(callback), Ok(c_str)) = (self.cb, CString::new(b)) {
             unsafe {
@@ -132,6 +162,7 @@ impl BcWriter for CallbackWriter {
         Ok(())
     }
 
+    // coverage: miri(test_callback_writer_passes_both_writes); why: trait, ffi
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
     }
@@ -145,6 +176,7 @@ impl BcWriter for CallbackWriter {
 ///
 /// # Safety
 /// `out_buf` must be valid for writes of `buf_size` bytes, and `buf_size >= 1`.
+// coverage: kani(proof_write_c_string); why: ffi
 unsafe fn write_c_string(bytes: &[u8], out_buf: *mut c_char, buf_size: usize) -> bool {
     if verified_c_ffi_check_buf_capacity(bytes.len(), buf_size) {
         unsafe {
@@ -161,6 +193,7 @@ unsafe fn write_c_string(bytes: &[u8], out_buf: *mut c_char, buf_size: usize) ->
 /// Evaluates the bytes `code` against `ev` without panicking. Errors are reported to `ev`'s stderr
 /// writer and evaluation continues with the next input unit (`docs/COMPATIBILITY.md` §3.1).
 /// Returns `BcStatus::ErrExecution` if any unit failed.
+// coverage: miri(via bc_eval); why: boundary, ffi
 fn eval_into_evaluator(code: &[u8], ev: &mut Evaluator) -> BcStatus {
     let summary = ev.run_source(code, STDIN_SOURCE);
     if summary.errors > 0 {
@@ -172,6 +205,7 @@ fn eval_into_evaluator(code: &[u8], ev: &mut Evaluator) -> BcStatus {
 
 /// Returns the version line of the build, such as `bc_clone 0.5.0 (a916de2)`, as a static
 /// NUL-terminated string that the caller must not modify or free.
+// coverage: miri(test_bc_version_is_the_version_line); why: ffi
 #[unsafe(no_mangle)]
 pub extern "C" fn bc_version() -> *const c_char {
     bc_build_info::VERSION_LINE_NUL.as_ptr().cast()
@@ -182,6 +216,7 @@ pub extern "C" fn bc_version() -> *const c_char {
 /// # Safety
 /// - `code` must be a valid null-terminated C string.
 /// - `out_buf` must be a valid writable pointer of at least `buf_size` bytes.
+// coverage: miri(test_bc_eval_basic, test_bc_eval_null_pointers_and_small_buffer); why: ffi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bc_eval(
     code: *const c_char,
@@ -233,6 +268,7 @@ pub unsafe extern "C" fn bc_eval(
 ///
 /// # Safety
 /// - `code` must be a valid null-terminated C string.
+// coverage: miri(test_bc_eval_callback); why: ffi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bc_eval_callback(
     code: *const c_char,
@@ -277,6 +313,7 @@ pub struct BcSession {
 ///
 /// # Safety
 /// This function is safe to call across FFI boundaries.
+// coverage: miri(test_bc_session_persistence_and_lifecycle); why: ffi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bc_session_create(math_enabled: bool) -> *mut BcSession {
     init_heap_if_needed();
@@ -305,6 +342,7 @@ pub unsafe extern "C" fn bc_session_create(math_enabled: bool) -> *mut BcSession
 /// - `session` must be a valid pointer obtained from `bc_session_create`.
 /// - `code` must be a valid null-terminated C string.
 /// - `out_buf` must be a valid writable pointer of at least `buf_size` bytes.
+// coverage: miri(test_bc_session_persistence_and_lifecycle, test_bc_session_errors_and_null_ptrs); why: ffi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bc_session_eval(
     session: *mut BcSession,
@@ -356,6 +394,7 @@ pub unsafe extern "C" fn bc_session_eval(
 /// # Safety
 /// - `session` must be a valid pointer obtained from `bc_session_create`.
 /// - `code` must be a valid null-terminated C string.
+// coverage: miri(test_bc_session_persistence_and_lifecycle, test_bc_session_errors_and_null_ptrs); why: ffi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bc_session_eval_callback(
     session: *mut BcSession,
@@ -409,6 +448,7 @@ pub unsafe extern "C" fn bc_session_eval_callback(
 ///
 /// # Safety
 /// - `session` must be a valid pointer obtained from `bc_session_create` or null.
+// coverage: miri(test_bc_session_persistence_and_lifecycle); why: ffi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bc_session_reset(session: *mut BcSession, math_enabled: bool) {
     if session.is_null() {
@@ -438,6 +478,7 @@ pub unsafe extern "C" fn bc_session_reset(session: *mut BcSession, math_enabled:
 ///
 /// # Safety
 /// - `session` must be a valid pointer obtained from `bc_session_create` or null.
+// coverage: miri(test_bc_session_max_depth); why: ffi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bc_session_set_max_depth(
     session: *mut BcSession,
@@ -462,6 +503,7 @@ pub unsafe extern "C" fn bc_session_set_max_depth(
 ///
 /// # Safety
 /// - `session` must be a valid pointer obtained from `bc_session_create` or null.
+// coverage: miri(test_bc_session_max_depth); why: ffi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bc_session_set_max_eval_depth(
     session: *mut BcSession,
@@ -483,6 +525,7 @@ pub unsafe extern "C" fn bc_session_set_max_eval_depth(
 ///
 /// # Safety
 /// - `session` must be a valid pointer obtained from `bc_session_create` or null.
+// coverage: miri(test_bc_session_extension_policy_and_scale_clamp); why: ffi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bc_session_set_extension_policy(
     session: *mut BcSession,
@@ -505,6 +548,7 @@ pub unsafe extern "C" fn bc_session_set_extension_policy(
 ///
 /// # Safety
 /// - `session` must be a valid pointer obtained from `bc_session_create` or null.
+// coverage: miri(test_bc_session_persistence_and_lifecycle); why: ffi
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bc_session_destroy(session: *mut BcSession) {
     if !session.is_null() {
@@ -904,10 +948,21 @@ mod tests {
     }
 
     #[test]
+    fn test_init_once_runs_init_once() {
+        let mut done = false;
+        let mut runs = 0;
+        init_once(&mut done, || runs += 1);
+        assert!(done);
+        init_once(&mut done, || runs += 1);
+        assert_eq!(runs, 1);
+    }
+
+    #[test]
     fn test_shared_buffer_keeps_bytes() {
         let mut shared = SharedBuffer::default();
         assert!(BcWriter::write_bytes(&mut shared, b"a\xff").is_ok());
         assert!(Write::write_str(&mut shared, "b").is_ok());
+        assert!(BcWriter::flush(&mut shared).is_ok());
         assert_eq!(*shared.0.borrow(), b"a\xffb");
     }
 
@@ -927,6 +982,7 @@ mod tests {
         };
         assert!(BcWriter::write_bytes(&mut writer, b"a\xff").is_ok());
         assert!(Write::write_str(&mut writer, "b").is_ok());
+        assert!(BcWriter::flush(&mut writer).is_ok());
         assert_eq!(collected, b"a\xffb");
     }
 

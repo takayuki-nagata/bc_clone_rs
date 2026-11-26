@@ -130,7 +130,7 @@ are listed below until each one is brought into the tiers.\n",
     );
     let _ = writeln!(
         s,
-        "| shim | No branch (checked by this tool); run by the named integration test |\n"
+        "| shim | No branch (checked by this tool; a `loop` without `break`, which only halts, is not one); run by the named integration test |\n"
     );
 
     let _ = writeln!(s, "## Summary\n");

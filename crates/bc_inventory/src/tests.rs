@@ -66,14 +66,14 @@ fn every_violation_has_a_message() {
 }
 
 #[test]
-fn the_engine_the_specification_the_tool_and_the_cli_are_enforced() {
+fn the_engine_the_specification_the_tool_and_the_finished_front_ends_are_enforced() {
     let enforced_names: Vec<&str> = (0..scan::CRATES.len())
         .filter(|&k| enforced(k))
         .map(|k| scan::CRATES[k].name)
         .collect();
     assert_eq!(
         enforced_names,
-        ["bc_core", "bc_clone", "bc_spec", "bc_inventory"]
+        ["bc_core", "bc_clone", "bc_c_api", "bc_spec", "bc_inventory"]
     );
     // Every non-product crate is enforced.
     for (k, c) in scan::CRATES.iter().enumerate() {

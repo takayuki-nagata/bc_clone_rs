@@ -76,7 +76,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/lib.rs", "")],
         role: ROLE_PRODUCT,
         miri: true,
-        enforced: false,
+        enforced: true,
     },
     CrateSpec {
         name: "bc_zephyr",
@@ -431,14 +431,22 @@ fn idents(ts: &TokenStream, out: &mut BTreeSet<String>) {
     }
 }
 
-/// Whether a body has no branch: no `if`, `match`, loop, `?`, `&&`, `||`, `unwrap*` or `expect*`.
+/// Whether a body has no branch: no `if`, `match`, `while`, `for`, `?`, `&&`, `||`, `unwrap*` or
+/// `expect*`, and no `loop` that can be left with `break`. A `loop` whose body has no `break` never
+/// ends (a panic handler's halt), so it decides nothing; its body is checked like any other.
 pub fn branch_free(ts: &TokenStream) -> bool {
     let toks: Vec<TokenTree> = ts.clone().into_iter().collect();
     for (k, t) in toks.iter().enumerate() {
         match t {
             TokenTree::Ident(i) => {
                 let s = i.to_string();
-                if matches!(s.as_str(), "if" | "match" | "while" | "for" | "loop")
+                if s == "loop" {
+                    match toks.get(k + 1) {
+                        Some(TokenTree::Group(g))
+                            if g.delimiter() == Delimiter::Brace && !has_break(&g.stream()) => {}
+                        _ => return false,
+                    }
+                } else if matches!(s.as_str(), "if" | "match" | "while" | "for")
                     || s.starts_with("unwrap")
                     || s.starts_with("expect")
                 {
@@ -466,6 +474,15 @@ pub fn branch_free(ts: &TokenStream) -> bool {
         }
     }
     true
+}
+
+/// Whether `break` occurs anywhere in the tokens.
+fn has_break(ts: &TokenStream) -> bool {
+    ts.clone().into_iter().any(|t| match t {
+        TokenTree::Ident(i) => i == "break",
+        TokenTree::Group(g) => has_break(&g.stream()),
+        _ => false,
+    })
 }
 
 /// The calls of `assume` and `admit` in a token stream (not `kani::assume`).

@@ -380,12 +380,19 @@ fn branches_are_found_anywhere_in_a_body() {
     let free = |code: &str| branch_free(&code.parse::<TokenStream>().unwrap_or_default());
     assert!(free("{ let x = f(a, &b); g(x) }"));
     assert!(!free("{ let r = &&x; }"));
+    // A loop that cannot be left halts; it is not a decision, but its body is still checked.
+    assert!(free("{ loop { core::hint::spin_loop(); } }"));
+    assert!(free("{ loop {} }"));
     for code in [
         "{ if a { } }",
         "{ match a { _ => () } }",
         "{ while a {} }",
         "{ for x in y {} }",
-        "{ loop {} }",
+        "{ loop { break; } }",
+        "{ loop { g(|| { break }) } }",
+        "{ loop { if a {} } }",
+        "{ loop { f()?; } }",
+        "{ 'l: loop { loop { break 'l; } } }",
         "{ f()?; }",
         "{ a && b }",
         "{ a || b }",
