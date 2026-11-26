@@ -73,7 +73,14 @@ fn the_engine_the_specification_the_tool_and_the_finished_front_ends_are_enforce
         .collect();
     assert_eq!(
         enforced_names,
-        ["bc_core", "bc_clone", "bc_c_api", "bc_spec", "bc_inventory"]
+        [
+            "bc_core",
+            "bc_clone",
+            "bc_c_api",
+            "bc_zephyr",
+            "bc_spec",
+            "bc_inventory"
+        ]
     );
     // Every non-product crate is enforced.
     for (k, c) in scan::CRATES.iter().enumerate() {

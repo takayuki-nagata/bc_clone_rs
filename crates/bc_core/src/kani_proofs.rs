@@ -321,6 +321,15 @@ fn proof_verified_cli_is_interactive() {
     );
 }
 
+/// `verified_qemu_test_exit_code` writes the passing value exactly when every self-test passed.
+#[kani::proof]
+fn proof_verified_qemu_test_exit_code() {
+    let passed: bool = kani::any();
+    let code = verified_qemu_test_exit_code(passed);
+    assert!(code == QEMU_TEST_PASS || code == QEMU_TEST_FAIL);
+    assert_eq!(code == QEMU_TEST_PASS, passed);
+}
+
 /// `RunSummary::record` counts a failure without overflow, records `quit`, and stops exactly
 /// after `quit`, for every summary and outcome.
 #[kani::proof]

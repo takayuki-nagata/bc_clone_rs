@@ -84,7 +84,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/lib.rs", "")],
         role: ROLE_PRODUCT,
         miri: true,
-        enforced: false,
+        enforced: true,
     },
     CrateSpec {
         name: "bc_qemu_riscv32",

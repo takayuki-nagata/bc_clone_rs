@@ -78,6 +78,10 @@ dual_verified! {
     pub const REPL_ACTION_BACKSPACE: u8 = 2;
     pub const REPL_ACTION_CTRL_C: u8 = 3;
     pub const REPL_ACTION_APPEND_CHAR: u8 = 4;
+    // Values written to the SiFive test device of QEMU `virt`: exit with status 0, and with 1.
+    // A failure takes its status from the upper 16 bits, so a bare 0x3333 would exit with 0.
+    pub const QEMU_TEST_PASS: u32 = 0x5555;
+    pub const QEMU_TEST_FAIL: u32 = 0x0001_3333;
 
     /// Verified hexadecimal digit parser (`eval/` assignments to `ibase`/`obase`).
     ///
@@ -875,6 +879,21 @@ dual_verified! {
         ]
     {
         stdin_tty && stdout_tty
+    }
+
+    /// Verified choice of the value an embedded self-test run writes to the SiFive test device of
+    /// QEMU `virt`: QEMU exits with status 0 exactly when every self-test passed.
+    pub fn verified_qemu_test_exit_code(passed: bool) -> (res: u32)
+        ensures [
+            passed ==> res == QEMU_TEST_PASS,
+            !passed ==> res == QEMU_TEST_FAIL,
+        ]
+    {
+        if passed {
+            QEMU_TEST_PASS
+        } else {
+            QEMU_TEST_FAIL
+        }
     }
 }
 

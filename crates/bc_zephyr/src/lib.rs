@@ -12,6 +12,8 @@ extern crate alloc;
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
+#[cfg(not(feature = "std"))]
+use bc_core::verified_kernels::verified_qemu_test_exit_code;
 use bc_core::verified_kernels::{
     REPL_ACTION_APPEND_CHAR, REPL_ACTION_BACKSPACE, REPL_ACTION_CTRL_C, REPL_ACTION_EVAL_LINE,
     verified_zephyr_repl_action,
@@ -33,30 +35,54 @@ const HEAP_SIZE: usize = 65536;
 static mut HEAP_MEM: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 #[cfg(not(feature = "std"))]
+static mut HEAP_INITIALIZED: bool = false;
+
+// The application runs on Zephyr's main thread alone, so a critical section has nothing to save
+// or restore. `critical_section::set_impl!` generates two `#[no_mangle]` functions that forward
+// to these methods, and nothing else.
+#[cfg(not(feature = "std"))]
 struct SingleHartCs;
 #[cfg(not(feature = "std"))]
 unsafe impl critical_section::Impl for SingleHartCs {
+    // coverage: shim(scripts/run_zephyr_tests.sh); why: hw, trait
     unsafe fn acquire() -> critical_section::RawRestoreState {}
+    // coverage: shim(scripts/run_zephyr_tests.sh); why: hw, trait
     unsafe fn release(_token: critical_section::RawRestoreState) {}
 }
 #[cfg(not(feature = "std"))]
 critical_section::set_impl!(SingleHartCs);
 
+/// Runs `init` the first time it is called with `done` false, and sets `done`.
+// coverage: miri(test_init_once_runs_init_once); why: hw
+#[cfg_attr(
+    feature = "std",
+    allow(dead_code, reason = "only the no_std heap uses it")
+)]
+fn init_once(done: &mut bool, init: impl FnOnce()) {
+    if !*done {
+        *done = true;
+        init();
+    }
+}
+
+// coverage: shim(scripts/run_zephyr_tests.sh); why: hw
 #[cfg(not(feature = "std"))]
 pub fn init_heap_if_needed() {
-    static mut HEAP_INITIALIZED: bool = false;
+    // The flag is only touched here, and the application runs on one thread (the critical
+    // section is a no-op), so this is the only reference to it.
     critical_section::with(|_| unsafe {
-        #[allow(static_mut_refs)]
-        if !HEAP_INITIALIZED {
-            HEAP_INITIALIZED = true;
-            HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE);
-        }
+        init_once(&mut *core::ptr::addr_of_mut!(HEAP_INITIALIZED), || {
+            HEAP.init(core::ptr::addr_of!(HEAP_MEM) as usize, HEAP_SIZE)
+        })
     });
 }
 
+// coverage: miri(via zephyr_rust_main); why: hw
 #[cfg(feature = "std")]
 pub fn init_heap_if_needed() {}
 
+// Prints the panic and halts (bc_core does not panic on any input; exhausting the heap does).
+// coverage: shim(scripts/run_zephyr_tests.sh); why: hw, fmt
 #[cfg(not(feature = "std"))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -79,12 +105,14 @@ unsafe extern "C" {
 pub struct ZephyrConsoleWriter;
 
 impl Write for ZephyrConsoleWriter {
+    // coverage: miri(test_zephyr_console_writer); why: trait, ffi
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.write_bytes(s.as_bytes())
     }
 }
 
 impl BcWriter for ZephyrConsoleWriter {
+    // coverage: miri(test_zephyr_console_writer); why: trait, ffi
     fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
         for &byte in b {
             unsafe {
@@ -94,11 +122,13 @@ impl BcWriter for ZephyrConsoleWriter {
         Ok(())
     }
 
+    // coverage: miri(test_zephyr_console_writer); why: trait, ffi
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
     }
 }
 
+// coverage: miri(test_zephyr_console_writer); why: fmt, ffi
 /// Print formatted text to the Zephyr console.
 #[macro_export]
 macro_rules! zephyr_print {
@@ -108,6 +138,7 @@ macro_rules! zephyr_print {
     }};
 }
 
+// coverage: miri(test_zephyr_console_writer); why: fmt, ffi
 /// Print formatted text followed by a newline to the Zephyr console.
 #[macro_export]
 macro_rules! zephyr_println {
@@ -127,6 +158,7 @@ pub struct SharedBuffer(Rc<RefCell<String>>);
 unsafe impl Send for SharedBuffer {}
 
 impl Write for SharedBuffer {
+    // coverage: miri(test_shared_buffer); why: trait
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.0.borrow_mut().push_str(s);
         Ok(())
@@ -134,6 +166,7 @@ impl Write for SharedBuffer {
 }
 
 impl BcWriter for SharedBuffer {
+    // coverage: miri(test_shared_buffer); why: trait
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
     }
@@ -273,6 +306,7 @@ pub const TEST_CASES: &[TestCase] = &[
     },
 ];
 
+// coverage: miri(via run_single_test); why: dyn
 /// Evaluates `code` on `ev` without panicking, writing diagnostics to its diagnostic stream.
 pub fn eval_bc_non_panicking(code: &str, ev: &mut Evaluator) {
     if ev.run_source(code.as_bytes(), STDIN_SOURCE).quit {
@@ -280,6 +314,7 @@ pub fn eval_bc_non_panicking(code: &str, ev: &mut Evaluator) {
     }
 }
 
+// coverage: miri(test_single_test_failure); why: dyn, string
 /// Evaluates a single test case and returns true if actual output matches expected.
 pub fn run_single_test(tc: &TestCase) -> bool {
     let out_buf = SharedBuffer::default();
@@ -299,6 +334,7 @@ pub fn run_single_test(tc: &TestCase) -> bool {
     captured.trim() == tc.expected
 }
 
+// coverage: miri(test_single_test_failure); why: dyn, fmt
 /// Runs a test suite with the given test cases.
 pub fn run_test_suite(cases: &[TestCase]) -> bool {
     zephyr_println!("\n=================================================");
@@ -343,11 +379,13 @@ pub fn run_test_suite(cases: &[TestCase]) -> bool {
     all_passed
 }
 
+// coverage: miri(test_all_zephyr_cases); why: dyn, fmt
 /// Runs the complete default test suite.
 pub fn run_self_tests() -> bool {
     run_test_suite(TEST_CASES)
 }
 
+// coverage: miri(test_repl_with_interactive_flow, test_repl_error_recovery_and_quit); why: dyn, io, string
 /// Runs the interactive serial REPL loop with customizable I/O functions.
 pub fn run_repl_with<G, P, S, W>(
     mut getchar: G,
@@ -439,6 +477,7 @@ pub fn run_repl_with<G, P, S, W>(
 /// that typing cannot exhaust the 64 KiB heap.
 pub const REPL_MAX_LINE: usize = 1024;
 
+// coverage: miri(test_run_repl_direct); why: ffi, hw
 /// Runs the interactive serial REPL loop using Zephyr hardware shims.
 pub fn run_repl() {
     run_repl_with(
@@ -454,6 +493,22 @@ pub fn run_repl() {
     );
 }
 
+/// Exits QEMU through its SiFive test device, with status 0 exactly when `all_passed`.
+// coverage: shim(scripts/run_zephyr_tests.sh); why: hw
+#[cfg(not(feature = "std"))]
+fn report_to_test_device(all_passed: bool) {
+    let test_exit = 0x10_0000 as *mut u32;
+    unsafe {
+        core::ptr::write_volatile(test_exit, verified_qemu_test_exit_code(all_passed));
+    }
+}
+
+/// The host has no test device: the unit tests read the result of the self-tests instead.
+// coverage: miri(via zephyr_rust_main); why: hw
+#[cfg(feature = "std")]
+fn report_to_test_device(_all_passed: bool) {}
+
+// coverage: miri(test_zephyr_rust_main_qemu, test_zephyr_rust_main_repl); why: ffi, hw
 /// Entry point called by the minimal Zephyr C trampoline `main()`.
 #[unsafe(no_mangle)]
 pub extern "C" fn zephyr_rust_main(is_qemu: bool) {
@@ -462,18 +517,8 @@ pub extern "C" fn zephyr_rust_main(is_qemu: bool) {
     let all_passed = run_self_tests();
 
     if is_qemu {
-        // Automated exit for QEMU emulation in CI (SiFive Test device)
-        #[cfg(not(feature = "std"))]
-        {
-            let test_exit = 0x10_0000 as *mut u32;
-            unsafe {
-                core::ptr::write_volatile(test_exit, if all_passed { 0x5555 } else { 0x13333 });
-            }
-        }
-        #[cfg(feature = "std")]
-        {
-            let _ = all_passed;
-        }
+        // Automated exit for QEMU emulation in CI.
+        report_to_test_device(all_passed);
     } else {
         run_repl();
     }
@@ -548,6 +593,16 @@ mod tests {
         };
         assert!(!run_single_test(&fake_tc));
         assert!(!run_test_suite(&[fake_tc]));
+    }
+
+    #[test]
+    fn test_init_once_runs_init_once() {
+        let mut done = false;
+        let mut runs = 0;
+        init_once(&mut done, || runs += 1);
+        init_once(&mut done, || runs += 1);
+        assert!(done);
+        assert_eq!(runs, 1);
     }
 
     #[test]
