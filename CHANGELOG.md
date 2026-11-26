@@ -145,6 +145,11 @@ themselves are not proved. AGENTS.md lists what the proofs assume.
   the range whose result is not provably 0, are the new runtime error `argument too large`.
 
 ### Behavior changes and fixes
+- **A failing self-test run on QEMU exits with status 1.** The bare-metal runner and the Zephyr
+  application wrote the SiFive test device's failure value with exit code 0, so QEMU exited with
+  status 0 whether or not the self-tests passed. `scripts/run_qemu_riscv32_tests.sh` reads only
+  that status, so a failing bare-metal self-test or a panic passed it; the Zephyr script read the
+  output. The same holds for a fatal error during the Zephyr self-tests, such as a stack overflow.
 - `UnitAccumulator::default()` starts at line 1, like `new`.
 - A unit of many lines is split in linear time. Each line used to rescan the whole unit, so that
   the time grew with the square of the number of lines (a function of 60000 lines took minutes).

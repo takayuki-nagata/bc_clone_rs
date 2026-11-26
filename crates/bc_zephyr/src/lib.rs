@@ -467,7 +467,7 @@ pub extern "C" fn zephyr_rust_main(is_qemu: bool) {
         {
             let test_exit = 0x10_0000 as *mut u32;
             unsafe {
-                core::ptr::write_volatile(test_exit, if all_passed { 0x5555 } else { 0x3333 });
+                core::ptr::write_volatile(test_exit, if all_passed { 0x5555 } else { 0x13333 });
             }
         }
         #[cfg(feature = "std")]

@@ -44,7 +44,8 @@ void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
 {
     ARG_UNUSED(esf);
     printk("FATAL ERROR %u: bc_core self-tests aborted\n", reason);
-    *(volatile uint32_t *)0x100000 = 0x3333;
+    /* FAIL (0x3333) with exit status 1 in the upper half; status 0 would read as a pass. */
+    *(volatile uint32_t *)0x100000 = 0x13333;
     for (;;) {
     }
 }
