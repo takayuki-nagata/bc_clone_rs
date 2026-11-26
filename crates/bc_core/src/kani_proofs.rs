@@ -310,6 +310,47 @@ fn proof_verified_cli_kernels() {
     }
 }
 
+/// `verified_cli_is_interactive` is the conjunction of its arguments.
+#[kani::proof]
+fn proof_verified_cli_is_interactive() {
+    let stdin_tty: bool = kani::any();
+    let stdout_tty: bool = kani::any();
+    assert_eq!(
+        verified_cli_is_interactive(stdin_tty, stdout_tty),
+        stdin_tty && stdout_tty
+    );
+}
+
+/// `RunSummary::record` counts a failure without overflow, records `quit`, and stops exactly
+/// after `quit`, for every summary and outcome.
+#[kani::proof]
+fn proof_run_summary_record() {
+    use crate::{RunSummary, UnitOutcome};
+    let before = RunSummary {
+        errors: kani::any(),
+        quit: kani::any(),
+    };
+    let outcome = match kani::any::<u8>() % 3 {
+        0 => UnitOutcome::Completed,
+        1 => UnitOutcome::Failed,
+        _ => UnitOutcome::Quit,
+    };
+    let mut after = before;
+    let stop = after.record(outcome);
+    assert_eq!(stop, outcome == UnitOutcome::Quit);
+    match outcome {
+        UnitOutcome::Completed => assert_eq!(after, before),
+        UnitOutcome::Failed => {
+            assert_eq!(after.quit, before.quit);
+            assert_eq!(after.errors, before.errors.saturating_add(1));
+        }
+        UnitOutcome::Quit => {
+            assert!(after.quit);
+            assert_eq!(after.errors, before.errors);
+        }
+    }
+}
+
 /// `verified_cli_parse_options` over symbolic command lines of up to 5 entries, against a
 /// direct statement of its rules: the first invalid option or `-v` ends the reading, `-l`
 /// enables the math library, `-s` wins over `-w`, and nothing else changes the state.

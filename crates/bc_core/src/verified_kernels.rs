@@ -866,6 +866,16 @@ dual_verified! {
             0
         }
     }
+
+    /// Verified choice of the interactive mode: `bc_clone` reads standard input line by line as
+    /// a REPL only when both standard input and standard output are terminals.
+    pub fn verified_cli_is_interactive(stdin_tty: bool, stdout_tty: bool) -> (res: bool)
+        ensures [
+            res == (stdin_tty && stdout_tty),
+        ]
+    {
+        stdin_tty && stdout_tty
+    }
 }
 
 verus! {

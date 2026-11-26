@@ -43,6 +43,9 @@ pub struct CrateSpec {
     pub role: u8,
     /// Whether `scripts/run_miri_tests.sh` runs the unit tests of this package.
     pub miri: bool,
+    /// Whether its violations make `--check` fail. A front end is enforced once it has been
+    /// brought into the tiers.
+    pub enforced: bool,
 }
 
 const fn root(file: &'static str, label: &'static str) -> Root {
@@ -57,6 +60,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/lib.rs", "")],
         role: ROLE_CORE,
         miri: true,
+        enforced: true,
     },
     CrateSpec {
         name: "bc_clone",
@@ -64,6 +68,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/main.rs", "")],
         role: ROLE_PRODUCT,
         miri: true,
+        enforced: true,
     },
     CrateSpec {
         name: "bc_c_api",
@@ -71,6 +76,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/lib.rs", "")],
         role: ROLE_PRODUCT,
         miri: true,
+        enforced: false,
     },
     CrateSpec {
         name: "bc_zephyr",
@@ -78,6 +84,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/lib.rs", "")],
         role: ROLE_PRODUCT,
         miri: true,
+        enforced: false,
     },
     CrateSpec {
         name: "bc_qemu_riscv32",
@@ -85,6 +92,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/main.rs", "")],
         role: ROLE_PRODUCT,
         miri: false,
+        enforced: false,
     },
     CrateSpec {
         name: "bc_build_info",
@@ -92,6 +100,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/lib.rs", ""), root("build.rs", "build")],
         role: ROLE_PRODUCT,
         miri: false,
+        enforced: false,
     },
     CrateSpec {
         name: "m5stamp_c3_bc",
@@ -99,6 +108,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/lib.rs", ""), root("src/bin/main.rs", "main")],
         role: ROLE_PRODUCT,
         miri: false,
+        enforced: false,
     },
     CrateSpec {
         name: "bc_wasm",
@@ -106,6 +116,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/lib.rs", "")],
         role: ROLE_PRODUCT,
         miri: false,
+        enforced: false,
     },
     CrateSpec {
         name: "bc_spec",
@@ -113,6 +124,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/lib.rs", ""), root("src/main.rs", "main")],
         role: ROLE_SPEC,
         miri: false,
+        enforced: true,
     },
     CrateSpec {
         name: "bc_inventory",
@@ -120,6 +132,7 @@ pub const CRATES: &[CrateSpec] = &[
         roots: &[root("src/lib.rs", ""), root("src/main.rs", "main")],
         role: ROLE_TOOL,
         miri: false,
+        enforced: true,
     },
 ];
 

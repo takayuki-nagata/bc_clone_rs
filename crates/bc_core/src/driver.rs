@@ -531,6 +531,33 @@ pub struct RunSummary {
     pub quit: bool,
 }
 
+impl RunSummary {
+    /// Counts the outcome of one unit: a failed unit adds an error (at most `usize::MAX`), and
+    /// `quit` is recorded. Returns `true` when processing must stop, that is after `quit`.
+    pub fn record(&mut self, outcome: UnitOutcome) -> (stop: bool)
+        ensures
+            stop == (outcome == UnitOutcome::Quit),
+            outcome == UnitOutcome::Completed ==> *final(self) == *old(self),
+            outcome == UnitOutcome::Failed ==> final(self).quit == old(self).quit && final(self).errors == (
+                if old(self).errors < usize::MAX { (old(self).errors + 1) as usize } else { old(self).errors }),
+            outcome == UnitOutcome::Quit ==> final(self).quit && final(self).errors == old(self).errors,
+    {
+        match outcome {
+            UnitOutcome::Completed => false,
+            UnitOutcome::Failed => {
+                if self.errors < usize::MAX {
+                    self.errors += 1;
+                }
+                false
+            },
+            UnitOutcome::Quit => {
+                self.quit = true;
+                true
+            },
+        }
+    }
+}
+
 /// Accumulates input lines until they form a complete unit.
 ///
 /// A unit is complete when it does not end with a backslash-newline continuation and has no
@@ -1325,6 +1352,36 @@ mod tests {
         let out = out.0.borrow().clone();
         let err = err.0.borrow().clone();
         (summary, out, err)
+    }
+
+    #[test]
+    fn a_summary_records_failures_and_stops_at_quit() {
+        let mut s = RunSummary::default();
+        assert!(!s.record(UnitOutcome::Completed));
+        assert_eq!(s, RunSummary::default());
+        assert!(!s.record(UnitOutcome::Failed));
+        assert!(!s.record(UnitOutcome::Failed));
+        assert_eq!(
+            s,
+            RunSummary {
+                errors: 2,
+                quit: false
+            }
+        );
+        assert!(s.record(UnitOutcome::Quit));
+        assert_eq!(
+            s,
+            RunSummary {
+                errors: 2,
+                quit: true
+            }
+        );
+        let mut full = RunSummary {
+            errors: usize::MAX,
+            quit: false,
+        };
+        assert!(!full.record(UnitOutcome::Failed));
+        assert_eq!(full.errors, usize::MAX);
     }
 
     /// Texts whose units are split in every way the accumulator can: continuations (also after

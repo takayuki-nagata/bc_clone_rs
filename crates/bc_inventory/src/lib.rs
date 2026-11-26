@@ -24,21 +24,18 @@ pub mod render;
 pub mod rules;
 pub mod scan;
 
-use rules::{Fact, ROLE_PRODUCT, V_NONE, verified_tier, verified_tier_counts, verified_violations};
+use rules::{Fact, V_NONE, verified_tier, verified_tier_counts, verified_violations};
 use scan::{CRATES, Item, Source};
 use std::path::Path;
 
 /// Where the inventory is written, relative to the repository root.
 pub const OUTPUT: &str = "docs/VERIFICATION_INVENTORY.md";
 
-/// Whether the violations of each role (`ROLE_*`) make `--check` fail: the engine, the
-/// specification and this tool. The front ends' violations are reported, and become enforced
-/// once every front end is brought into the tiers.
-const ENFORCED: [bool; 4] = [true, false, true, true];
-
-/// Whether the violations of the crates of `role` make `--check` fail.
-pub fn enforced(role: u8) -> bool {
-    role != ROLE_PRODUCT && ENFORCED.get(usize::from(role)).copied().unwrap_or(true)
+/// Whether the violations of the crate `krate` (an index into [`CRATES`]) make `--check` fail:
+/// those of the engine, the specification, this tool, and each front end already brought into
+/// the tiers ([`scan::CrateSpec::enforced`]). The other front ends' violations are reported.
+pub fn enforced(krate: usize) -> bool {
+    CRATES.get(krate).is_none_or(|c| c.enforced)
 }
 
 /// The inventory of a repository.
@@ -83,12 +80,12 @@ pub fn build(src: &dyn Source) -> Report {
     }
 }
 
-/// The violations of the enforced roles.
+/// The violations of the enforced crates.
 pub fn enforced_violations(r: &Report) -> Vec<(usize, u8)> {
     r.violations
         .iter()
         .copied()
-        .filter(|&(i, v)| v != V_NONE && enforced(CRATES[r.items[i].krate].role))
+        .filter(|&(i, v)| v != V_NONE && enforced(r.items[i].krate))
         .collect()
 }
 

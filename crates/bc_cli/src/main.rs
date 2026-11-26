@@ -14,7 +14,8 @@ use bc_core::verified_kernels::verified_repl_block_completeness;
 use bc_core::verified_kernels::{
     CLI_ARG_END_OF_OPTIONS, CLI_ARG_FILE, CLI_ARG_OPT_CLUSTER, CLI_PARSE_ERROR, CLI_PARSE_VERSION,
     CLI_POLICY_REJECT, CLI_POLICY_WARN, verified_cli_classify_arg,
-    verified_cli_classify_option_char, verified_cli_initial_scale, verified_cli_parse_options,
+    verified_cli_classify_option_char, verified_cli_initial_scale, verified_cli_is_interactive,
+    verified_cli_parse_options,
 };
 use bc_core::{
     BcWriter, DEFAULT_MAX_DEPTH, Evaluator, ExtensionPolicy, RunSummary, STDIN_SOURCE, SourceUnits,
@@ -27,6 +28,7 @@ pub struct IoWriter<W: Write + Send> {
 }
 
 impl<W: Write + Send> IoWriter<W> {
+    // coverage: miri(test_io_writer_write_and_flush); why: io
     /// Creates a new IoWriter wrapping the given Write stream.
     pub fn new(inner: W) -> Self {
         Self { inner }
@@ -34,6 +36,7 @@ impl<W: Write + Send> IoWriter<W> {
 }
 
 impl<W: Write + Send> FmtWrite for IoWriter<W> {
+    // coverage: miri(test_io_writer_write_and_flush); why: io, trait
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.inner
             .write_all(s.as_bytes())
@@ -42,15 +45,18 @@ impl<W: Write + Send> FmtWrite for IoWriter<W> {
 }
 
 impl<W: Write + Send> BcWriter for IoWriter<W> {
+    // coverage: miri(test_io_writer_write_and_flush); why: io, trait
     fn write_bytes(&mut self, b: &[u8]) -> core::fmt::Result {
         self.inner.write_all(b).map_err(|_| core::fmt::Error)
     }
 
+    // coverage: miri(test_io_writer_write_and_flush); why: io, trait
     fn flush(&mut self) -> core::fmt::Result {
         self.inner.flush().map_err(|_| core::fmt::Error)
     }
 }
 
+// coverage: miri(test_run_repl_interactive); why: dyn, io
 /// Helper to construct an Evaluator with std::io::Write streams.
 pub fn create_evaluator<O: Write + Send + 'static, E: Write + Send + 'static>(
     math_enabled: bool,
@@ -67,6 +73,7 @@ pub fn create_evaluator<O: Write + Send + 'static, E: Write + Send + 'static>(
 /// Global atomic flag indicating if Ctrl+C was pressed.
 pub static CTRL_C_PRESSED: AtomicBool = AtomicBool::new(false);
 
+// coverage: shim(crates/bc_cli/tests/integration_tests.rs); why: signal
 /// Handles the Ctrl+C / SIGINT signal.
 pub fn handle_ctrlc_signal() {
     CTRL_C_PRESSED.store(true, Ordering::SeqCst);
@@ -76,6 +83,7 @@ pub fn handle_ctrlc_signal() {
     std::process::exit(0);
 }
 
+// coverage: shim(crates/bc_cli/tests/integration_tests.rs); why: signal
 /// Sets up the cross-platform SIGINT / Ctrl+C handler.
 pub fn setup_ctrlc_handler() {
     #[cfg(not(test))]
@@ -105,6 +113,7 @@ thread_local! {
     static IN_UNIT_GUARD: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
 
+// coverage: miri(test_internal_panic_is_reported_and_counted); why: dyn
 /// Extracts the message from a panic payload.
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
     payload
@@ -114,6 +123,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
         .unwrap_or("unknown panic")
 }
 
+// coverage: miri(via run_non_interactive_block); why: dyn, fmt
 /// Runs one input unit with `run`. `bc_core` reports every bc error through `Result`, so a
 /// panic here is an internal bug; it is reported as such and counted as a failed unit instead of
 /// aborting.
@@ -139,21 +149,7 @@ fn run_unit_guarded<T>(
     }
 }
 
-/// Records the outcome of one unit in `summary`. Returns `true` if processing must stop.
-fn record(summary: &mut RunSummary, outcome: UnitOutcome) -> bool {
-    match outcome {
-        UnitOutcome::Completed => false,
-        UnitOutcome::Failed => {
-            summary.errors += 1;
-            false
-        }
-        UnitOutcome::Quit => {
-            summary.quit = true;
-            true
-        }
-    }
-}
-
+// coverage: miri(test_non_interactive_block_errors, test_internal_panic_skips_only_its_own_unit); why: dyn, io
 /// Processes a complete file or standard-input text, continuing after errors until its end
 /// or `quit` (`docs/COMPATIBILITY.md` §3.1). Each unit is run by the proved
 /// `Evaluator::run_next_unit`, the step of `Evaluator::run_source`, guarded on its own.
@@ -169,13 +165,14 @@ pub fn run_non_interactive_block(
         |ev| ev.run_next_unit(&mut units, source),
         Some(UnitOutcome::Failed),
     ) {
-        if record(&mut summary, outcome) {
+        if summary.record(outcome) {
             break;
         }
     }
     summary
 }
 
+// coverage: miri(test_run_repl_errors, test_run_repl_ctrlc_read_line); why: io, signal
 /// Runs the interactive REPL, reading and executing one unit at a time.
 pub fn run_interactive_loop<R: BufRead>(mut reader: R, evaluator: &mut Evaluator) -> RunSummary {
     let mut summary = RunSummary::default();
@@ -199,27 +196,21 @@ pub fn run_interactive_loop<R: BufRead>(mut reader: R, evaluator: &mut Evaluator
         }
 
         if let Some((unit, first_line)) = acc.push_line(&bytes)
-            && record(
-                &mut summary,
-                run_unit_guarded(
-                    evaluator,
-                    |ev| ev.run_unit(&unit, STDIN_SOURCE, first_line),
-                    UnitOutcome::Failed,
-                ),
-            )
+            && summary.record(run_unit_guarded(
+                evaluator,
+                |ev| ev.run_unit(&unit, STDIN_SOURCE, first_line),
+                UnitOutcome::Failed,
+            ))
         {
             return summary;
         }
     }
     if let Some((unit, first_line)) = acc.finish() {
-        record(
-            &mut summary,
-            run_unit_guarded(
-                evaluator,
-                |ev| ev.run_unit(&unit, STDIN_SOURCE, first_line),
-                UnitOutcome::Failed,
-            ),
-        );
+        summary.record(run_unit_guarded(
+            evaluator,
+            |ev| ev.run_unit(&unit, STDIN_SOURCE, first_line),
+            UnitOutcome::Failed,
+        ));
     }
     summary
 }
@@ -232,6 +223,7 @@ enum ArgSource<'a> {
     Arg(&'a String),
 }
 
+// coverage: miri(test_run_app, test_option_syntax_follows_xbd_12_2); why: string, io, fmt
 /// Main application entry point, extracted for testing. Returns the process exit status:
 /// 0 if all input was processed without error, 1 otherwise (`docs/COMPATIBILITY.md` §3.1).
 pub fn run_app<R, W, E>(
@@ -349,6 +341,7 @@ where
     i32::from(errors + summary.errors > 0)
 }
 
+// coverage: miri(test_internal_panic_is_reported_and_counted); why: dyn
 /// Installs a panic hook that stays silent for panics inside [`run_unit_guarded`], which reports
 /// them in bc's diagnostic format, and defers to the default hook otherwise.
 fn install_panic_hook() {
@@ -384,6 +377,7 @@ const ENGINE_MAX_EVAL_DEPTH: usize = 2_000_000;
 /// Evaluation limit that [`run_app`] gives its evaluator.
 static MAX_EVAL_DEPTH: AtomicUsize = AtomicUsize::new(ENGINE_MAX_EVAL_DEPTH);
 
+// coverage: shim(crates/bc_cli/tests/integration_tests.rs); why: io
 /// Runs [`run_app`] on the process's standard streams.
 fn run_on_stdio(args: &[String], is_interactive: bool) -> i32 {
     let stdin = std::io::stdin();
@@ -396,26 +390,51 @@ fn run_on_stdio(args: &[String], is_interactive: bool) -> i32 {
     )
 }
 
+// coverage: miri(test_run_with_engine_stack_falls_back_to_this_thread); why: io
+/// Runs `run` on the engine thread that `spawn` creates, with the nesting limit
+/// [`ENGINE_MAX_DEPTH`], and returns its status (1 if it panicked). If the thread cannot be
+/// created (its large stack could not be reserved), runs `run` on this thread's default stack
+/// with [`DEFAULT_MAX_DEPTH`].
+fn run_with_engine_stack<F>(
+    spawn: impl FnOnce(F) -> std::io::Result<std::thread::JoinHandle<i32>>,
+    run: F,
+) -> i32
+where
+    F: FnOnce() -> i32 + Send + Clone + 'static,
+{
+    MAX_DEPTH.store(ENGINE_MAX_DEPTH, Ordering::SeqCst);
+    match spawn(run.clone()) {
+        Ok(engine) => engine.join().unwrap_or(1),
+        Err(_) => {
+            MAX_DEPTH.store(DEFAULT_MAX_DEPTH, Ordering::SeqCst);
+            run()
+        }
+    }
+}
+
+// coverage: shim(crates/bc_cli/tests/integration_tests.rs); why: io
+/// Creates the engine thread, with [`ENGINE_STACK_SIZE`] bytes of stack, running `run`.
+fn spawn_engine<F>(run: F) -> std::io::Result<std::thread::JoinHandle<i32>>
+where
+    F: FnOnce() -> i32 + Send + 'static,
+{
+    std::thread::Builder::new()
+        .name(String::from("bc"))
+        .stack_size(ENGINE_STACK_SIZE)
+        .spawn(run)
+}
+
+// coverage: shim(crates/bc_cli/tests/integration_tests.rs); why: io
 fn main() {
     install_panic_hook();
 
     let args: Vec<String> = std::env::args().collect();
     use std::io::IsTerminal;
-    let is_interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    MAX_DEPTH.store(ENGINE_MAX_DEPTH, Ordering::SeqCst);
-    let engine_args = args.clone();
-    let status = match std::thread::Builder::new()
-        .name(String::from("bc"))
-        .stack_size(ENGINE_STACK_SIZE)
-        .spawn(move || run_on_stdio(&engine_args, is_interactive))
-    {
-        Ok(engine) => engine.join().unwrap_or(1),
-        Err(_) => {
-            // The large stack could not be reserved: run on this thread's default stack.
-            MAX_DEPTH.store(DEFAULT_MAX_DEPTH, Ordering::SeqCst);
-            run_on_stdio(&args, is_interactive)
-        }
-    };
+    let is_interactive = verified_cli_is_interactive(
+        std::io::stdin().is_terminal(),
+        std::io::stdout().is_terminal(),
+    );
+    let status = run_with_engine_stack(spawn_engine, move || run_on_stdio(&args, is_interactive));
     std::process::exit(status);
 }
 
@@ -1272,6 +1291,43 @@ mod tests {
             1
         );
         assert_eq!(run_app(&args, &b""[..], Vec::new(), Vec::new(), false), 0);
+    }
+
+    #[test]
+    fn test_run_with_engine_stack_falls_back_to_this_thread() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        fn depth() -> i32 {
+            i32::try_from(MAX_DEPTH.load(Ordering::SeqCst)).unwrap()
+        }
+        fn on_thread<F: FnOnce() -> i32 + Send + 'static>(
+            f: F,
+        ) -> std::io::Result<std::thread::JoinHandle<i32>> {
+            Ok(std::thread::spawn(f))
+        }
+        fn no_thread<F>(_: F) -> std::io::Result<std::thread::JoinHandle<i32>> {
+            Err(std::io::Error::other("no stack"))
+        }
+        let engine = i32::try_from(ENGINE_MAX_DEPTH).unwrap();
+        let default = i32::try_from(DEFAULT_MAX_DEPTH).unwrap();
+
+        // On the engine thread, with the engine's nesting limit.
+        let main_thread = std::thread::current().id();
+        let elsewhere = move || {
+            assert_ne!(std::thread::current().id(), main_thread);
+            depth() + 1
+        };
+        assert_eq!(run_with_engine_stack(on_thread, elsewhere), engine + 1);
+        // Without the thread, here, with the default limit.
+        let here = move || {
+            assert_eq!(std::thread::current().id(), main_thread);
+            depth() + 2
+        };
+        assert_eq!(run_with_engine_stack(no_thread, here), default + 2);
+        // A panic of the engine thread gives status 1.
+        let panics = || -> i32 { panic!("engine exploded") };
+        assert_eq!(run_with_engine_stack(on_thread, panics), 1);
+
+        MAX_DEPTH.store(DEFAULT_MAX_DEPTH, Ordering::SeqCst);
     }
 }
 
