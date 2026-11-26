@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 description = "Baremetal RISC-V 32 runner and test suite for bc_clone on QEMU virt"
 
+# The self-tests, the measurement loop and the writers, which the host's unit tests run under Miri.
+[lib]
+path = "src/lib.rs"
+
+# The bare-metal entry point and the hardware glue: built for riscv32 only.
 [[bin]]
 name = "bc_qemu_riscv32"
 test = false
@@ -17,7 +22,14 @@ m5stamp-probe = []
 [dependencies]
 bc_core = { path = "../bc_core" }
 bc_build_info = { path = "../bc_build_info" }
+
+# Only the binary uses these, and it is built for riscv32 alone; leaving them out of host builds
+# lets the library's unit tests run on the host.
+[target.'cfg(target_arch = "riscv32")'.dependencies]
 riscv = "0.16"
 riscv-rt = "0.18"
 critical-section = { version = "1.2", features = ["restore-state-none"] }
 embedded-alloc = "0.7"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(miri)'] }

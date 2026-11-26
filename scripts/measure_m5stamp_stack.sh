@@ -23,5 +23,7 @@ for limit in "${@:-128}"; do
     qemu-system-riscv32 -M virt -cpu rv32 -bios none -nographic \
         -kernel "${CARGO_TARGET_DIR}/riscv32imc-unknown-none-elf/release/bc_qemu_riscv32" \
         -device "loader,addr=0x80fffff0,data=${limit},data-len=4" \
-        -device "loader,addr=0x80fffff4,data=0,data-len=4" </dev/null || true
+        -device "loader,addr=0x80fffff4,data=0,data-len=4" </dev/null && status=0 || status=$?
+    # 0 after `PROBE DONE`; 1 after a panic, such as running out of heap at a high limit.
+    echo "exit status ${status}"
 done

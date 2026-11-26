@@ -42,8 +42,11 @@ jobs:
         run: |
           cargo clippy --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --package bc_build_info --package bc_inventory --all-targets -- -D warnings
           cargo clippy --manifest-path examples/wasm_web_app/crate/Cargo.toml --all-targets -- -D warnings
+          # The library of bc_qemu_riscv32 and its unit tests on the host; its binary is riscv32-only.
+          cargo clippy --package bc_qemu_riscv32 --lib --tests -- -D warnings
           cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings
           cargo clippy --package bc_qemu_riscv32 --target riscv32imc-unknown-none-elf -- -D warnings
+          cargo clippy --package bc_qemu_riscv32 --target riscv32imc-unknown-none-elf --features m5stamp-probe -- -D warnings
           cargo clippy --package bc_c_api --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings
           cargo clippy --package bc_c_api --target riscv32imc-unknown-none-elf --no-default-features -- -D warnings
           cargo clippy --package bc_zephyr --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings
@@ -88,6 +91,9 @@ jobs:
 
       - name: Run Tests with Coverage
         run: cargo llvm-cov --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --package bc_build_info --all-targets --fail-under-lines 97 --lcov --output-path lcov.info
+
+      - name: Run the Unit Tests of the QEMU Runner's Library
+        run: cargo test --package bc_qemu_riscv32 --lib
 
       - name: Run Official GNU bc Reference Test Suite
         run: bash scripts/run_gnu_reference_tests.sh
@@ -222,6 +228,7 @@ jobs:
           - { name: bc_c_api, stage: c_api, args: '' }
           - { name: bc_c_api tree borrows, stage: c_api_tree, args: '' }
           - { name: bc_zephyr, stage: zephyr, args: '' }
+          - { name: bc_qemu_riscv32, stage: qemu, args: '' }
           - { name: bc_clone, stage: cli, args: '' }
           # bc_core is split by test name, by the times measured under Miri: the wide-block test
           # alone takes about as long as the integer and math-library tests together. The last
@@ -287,8 +294,9 @@ jobs:
         run: |
           mkdir -p target/mutants-tmp
           # Exit status 3 means only timeouts: a mutant made a loop never end, which the tests
-          # detected by hanging.
-          TMPDIR="$PWD/target/mutants-tmp" cargo mutants --in-diff mutants.diff --gitignore true \
+          # detected by hanging. --workspace also mutates the members outside default-members
+          # (bc_qemu_riscv32's library), which cargo-mutants would otherwise skip.
+          TMPDIR="$PWD/target/mutants-tmp" cargo mutants --workspace --in-diff mutants.diff --gitignore true \
             --timeout 300 -j 2 --shard ${{ matrix.shard }}/3 || [ $? -eq 3 ]
 
       - name: Upload the mutants report

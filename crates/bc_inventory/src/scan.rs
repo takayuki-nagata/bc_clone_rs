@@ -89,10 +89,10 @@ pub const CRATES: &[CrateSpec] = &[
     CrateSpec {
         name: "bc_qemu_riscv32",
         dir: "crates/bc_qemu_riscv32",
-        roots: &[root("src/main.rs", "")],
+        roots: &[root("src/lib.rs", ""), root("src/main.rs", "main")],
         role: ROLE_PRODUCT,
-        miri: false,
-        enforced: false,
+        miri: true,
+        enforced: true,
     },
     CrateSpec {
         name: "bc_build_info",
