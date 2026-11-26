@@ -230,6 +230,7 @@ jobs:
           - { name: bc_zephyr, stage: zephyr, args: '' }
           - { name: bc_qemu_riscv32, stage: qemu, args: '' }
           - { name: bc_clone, stage: cli, args: '' }
+          - { name: bc_build_info, stage: build_info, args: '' }
           # bc_core is split by test name, by the times measured under Miri: the wide-block test
           # alone takes about as long as the integer and math-library tests together. The last
           # shard skips what the others run, so a new test always runs somewhere.

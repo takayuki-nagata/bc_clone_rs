@@ -79,6 +79,7 @@ fn the_engine_the_specification_the_tool_and_the_finished_front_ends_are_enforce
             "bc_c_api",
             "bc_zephyr",
             "bc_qemu_riscv32",
+            "bc_build_info",
             "bc_spec",
             "bc_inventory"
         ]

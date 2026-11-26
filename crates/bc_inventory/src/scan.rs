@@ -89,7 +89,11 @@ pub const CRATES: &[CrateSpec] = &[
     CrateSpec {
         name: "bc_qemu_riscv32",
         dir: "crates/bc_qemu_riscv32",
-        roots: &[root("src/lib.rs", ""), root("src/main.rs", "main")],
+        roots: &[
+            root("src/lib.rs", ""),
+            root("src/main.rs", "main"),
+            root("build.rs", "build"),
+        ],
         role: ROLE_PRODUCT,
         miri: true,
         enforced: true,
@@ -99,13 +103,17 @@ pub const CRATES: &[CrateSpec] = &[
         dir: "crates/bc_build_info",
         roots: &[root("src/lib.rs", ""), root("build.rs", "build")],
         role: ROLE_PRODUCT,
-        miri: false,
-        enforced: false,
+        miri: true,
+        enforced: true,
     },
     CrateSpec {
         name: "m5stamp_c3_bc",
         dir: "examples/m5stamp_c3",
-        roots: &[root("src/lib.rs", ""), root("src/bin/main.rs", "main")],
+        roots: &[
+            root("src/lib.rs", ""),
+            root("src/bin/main.rs", "main"),
+            root("build.rs", "build"),
+        ],
         role: ROLE_PRODUCT,
         miri: false,
         enforced: false,

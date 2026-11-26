@@ -456,6 +456,35 @@ fn test_clone_cli_invalid_option() {
     assert!(stderr.contains("invalid option"));
 }
 
+/// The commit `HEAD` of the git repository whose top level is the workspace root, if there is
+/// one (the condition under which `bc_build_info`'s build script reads the commit from git).
+fn workspace_head() -> Option<String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .ok()?;
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .ok()?;
+        let text = String::from_utf8(output.stdout).ok()?;
+        output
+            .status
+            .success()
+            .then(|| String::from(text.trim_end()))
+    };
+    let top_level = std::path::PathBuf::from(git(&["rev-parse", "--show-toplevel"])?)
+        .canonicalize()
+        .ok()?;
+    if top_level != root {
+        return None;
+    }
+    git(&["rev-parse", "--verify", "HEAD"])
+}
+
 /// `-v` and `--version` print `bc_clone VERSION (COMMIT)` and exit with status 0 without
 /// reading standard input. GNU bc prints another text, so this is not a differential test.
 #[test]
@@ -485,6 +514,18 @@ fn test_clone_cli_version() {
                         .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))),
             "{stdout:?}"
         );
+        // In the work tree of the workspace, the build script of `bc_build_info` names HEAD
+        // (a copy elsewhere, such as cargo-mutants' in `target/`, gives `unknown`). The script
+        // reruns when a watched git file changes, which misses a few ways of moving HEAD (a
+        // branch kept only in `packed-refs` and moved without touching the index, the reftable
+        // backend, a binary built before a commit); a stale commit then fails here, and
+        // `cargo clean -p bc_build_info` rebuilds it.
+        if let (None, Some(head)) = (option_env!("BC_CLONE_GIT_COMMIT"), workspace_head()) {
+            assert!(
+                hash.len() == 7 && head.starts_with(hash),
+                "{stdout:?} {head}"
+            );
+        }
     }
     let (code, stdout, stderr) = run_command(bin_path, &["--version=1"], "");
     assert_eq!((code, stdout.as_str()), (1, ""));

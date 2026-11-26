@@ -1,16 +1,11 @@
-use std::env;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
+// SPDX-License-Identifier: MIT
 
+//! Links the riscv32 binary with `memory.x` (from this directory) and `riscv-rt`'s `link.x`.
+//! The library's host tests are not affected: the arguments are for the binaries only.
+
+// coverage: shim(scripts/run_qemu_riscv32_tests.sh); why: build
 fn main() {
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let memory_x = include_bytes!("memory.x");
-    File::create(out_dir.join("memory.x"))
-        .unwrap()
-        .write_all(memory_x)
-        .unwrap();
-    println!("cargo:rustc-link-search={}", out_dir.display());
+    println!("cargo:rustc-link-search={}", env!("CARGO_MANIFEST_DIR"));
     println!("cargo:rustc-link-arg-bins=-Tmemory.x");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
     println!("cargo:rerun-if-changed=memory.x");
