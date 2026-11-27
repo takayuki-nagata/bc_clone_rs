@@ -9,7 +9,8 @@ extern crate std;
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::string::String;
-use bc_core::{BcWriter, Evaluator, ExtensionPolicy, STDIN_SOURCE};
+use bc_core::verified_kernels::verified_extension_policy;
+use bc_core::{BcWriter, Evaluator, STDIN_SOURCE};
 use core::cell::RefCell;
 use core::fmt::Write;
 use wasm_bindgen::prelude::*;
@@ -20,6 +21,7 @@ struct SharedBuffer(Rc<RefCell<String>>);
 unsafe impl Send for SharedBuffer {}
 
 impl Write for SharedBuffer {
+    // coverage: miri(test_shared_buffer_collects_the_output); why: trait
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.0.borrow_mut().push_str(s);
         Ok(())
@@ -27,6 +29,7 @@ impl Write for SharedBuffer {
 }
 
 impl BcWriter for SharedBuffer {
+    // coverage: miri(test_shared_buffer_collects_the_output); why: trait
     fn flush(&mut self) -> core::fmt::Result {
         Ok(())
     }
@@ -38,6 +41,7 @@ impl BcWriter for SharedBuffer {
 /// up to 2000 levels. Safari is not measured. An overflow of either stack kills the instance.
 const WASM_MAX_DEPTH: usize = 1000;
 
+// coverage: miri(via eval_bc, via BcSession::new); why: dyn
 fn new_evaluator(math_enabled: bool, out_buf: &SharedBuffer, err_buf: &SharedBuffer) -> Evaluator {
     let mut ev = Evaluator::new(
         math_enabled,
@@ -49,11 +53,13 @@ fn new_evaluator(math_enabled: bool, out_buf: &SharedBuffer, err_buf: &SharedBuf
     ev
 }
 
+// coverage: miri(via eval_bc, via BcSession::eval); why: dyn
 fn eval_into_wasm(code: &str, ev: &mut Evaluator) {
     ev.run_source(code.as_bytes(), STDIN_SOURCE);
 }
 
 /// One-shot evaluation function for simple calculations.
+// coverage: miri(test_eval_bc_basic_and_mathlib, test_eval_bc_error_recovery); why: bindgen
 #[wasm_bindgen]
 pub fn eval_bc(code: &str, math_enabled: bool, default_scale: u32) -> String {
     let out_buf = SharedBuffer::default();
@@ -73,6 +79,7 @@ pub fn eval_bc(code: &str, math_enabled: bool, default_scale: u32) -> String {
 }
 
 /// The version line of the build, such as `bc_clone 0.5.0 (a916de2)`.
+// coverage: miri(test_version_is_the_version_line); why: bindgen
 #[wasm_bindgen]
 pub fn version() -> String {
     String::from(bc_build_info::VERSION_LINE)
@@ -88,6 +95,7 @@ pub struct BcSession {
 
 #[wasm_bindgen]
 impl BcSession {
+    // coverage: miri(test_bc_session_lifecycle_and_error_recovery); why: bindgen
     #[wasm_bindgen(constructor)]
     pub fn new(math_enabled: bool) -> BcSession {
         let out_buf = SharedBuffer::default();
@@ -103,6 +111,7 @@ impl BcSession {
     }
 
     /// Evaluates a code snippet within this persistent session.
+    // coverage: miri(test_bc_session_lifecycle_and_error_recovery); why: bindgen
     pub fn eval(&mut self, code: &str) -> String {
         // Clear previous buffers
         self.out_buf.0.borrow_mut().clear();
@@ -125,6 +134,7 @@ impl BcSession {
     }
 
     /// Resets the session state.
+    // coverage: miri(test_bc_session_lifecycle_and_error_recovery); why: bindgen
     pub fn reset(&mut self, math_enabled: bool) {
         self.out_buf.0.borrow_mut().clear();
         self.err_buf.0.borrow_mut().clear();
@@ -133,6 +143,7 @@ impl BcSession {
     }
 
     /// Sets the nesting limit, to measure the stack use of other limits.
+    // coverage: miri(test_set_max_depth_moves_the_nesting_limit); why: bindgen
     #[cfg(feature = "stack-probe")]
     pub fn set_max_depth(&mut self, max_depth: usize) {
         self.evaluator.max_depth = max_depth;
@@ -140,22 +151,22 @@ impl BcSession {
     }
 
     /// Sets the default scale precision.
+    // coverage: miri(test_bc_session_lifecycle_and_error_recovery); why: bindgen
     pub fn set_scale(&mut self, scale: u32) {
         self.evaluator.set_scale(scale as usize);
     }
 
     /// Sets how non-POSIX syntax is treated: 0 accepts it (default), 1 warns like `bc -w`,
     /// 2 rejects it like `bc -s`. Other values are ignored.
+    // coverage: miri(test_bc_session_extension_policy_and_scale_clamp); why: bindgen
     pub fn set_extension_policy(&mut self, policy: u8) {
-        self.evaluator.extension_policy = match policy {
-            0 => ExtensionPolicy::Allow,
-            1 => ExtensionPolicy::Warn,
-            2 => ExtensionPolicy::Reject,
-            _ => return,
-        };
+        if let Some(policy) = verified_extension_policy(u32::from(policy)) {
+            self.evaluator.extension_policy = policy;
+        }
     }
 
     /// Gets the current scale precision.
+    // coverage: miri(test_bc_session_lifecycle_and_error_recovery); why: bindgen
     pub fn get_scale(&self) -> u32 {
         self.evaluator.scale() as u32
     }
@@ -164,6 +175,35 @@ impl BcSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_shared_buffer_collects_the_output() {
+        let mut buf = SharedBuffer::default();
+        let other = buf.clone();
+        buf.write_str("1").unwrap();
+        buf.write_bytes(b"2\n").unwrap();
+        buf.flush().unwrap();
+        assert_eq!(*other.0.borrow(), "12\n");
+    }
+
+    #[cfg(feature = "stack-probe")]
+    #[test]
+    fn test_set_max_depth_moves_the_nesting_limit() {
+        let deep = |n: usize| {
+            let mut s = String::new();
+            (0..n).for_each(|_| s.push('('));
+            s.push('1');
+            (0..n).for_each(|_| s.push(')'));
+            s
+        };
+        let mut sess = BcSession::new(false);
+        assert_eq!(sess.eval(&deep(20)), "1\n");
+        sess.set_max_depth(10);
+        assert_eq!(sess.evaluator.max_eval_depth, 10);
+        assert!(sess.eval(&deep(20)).contains("nesting too deep"));
+        sess.set_max_depth(30);
+        assert_eq!(sess.eval(&deep(20)), "1\n");
+    }
 
     #[test]
     fn test_version_is_the_version_line() {
@@ -216,7 +256,13 @@ mod tests {
             sess.eval("xyz"),
             "(standard_in) 2: Error: multiple letter name - xyz\n"
         );
+        sess.set_extension_policy(1);
+        assert_eq!(
+            sess.eval("xyz"),
+            "(standard_in) 2: (Warning) multiple letter name - xyz\n"
+        );
         sess.set_extension_policy(0);
+        assert_eq!(sess.eval("xyz"), "0\n");
         sess.set_scale(u32::MAX);
         assert_eq!(sess.get_scale(), 1_000_000_000);
     }

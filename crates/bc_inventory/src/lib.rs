@@ -15,7 +15,7 @@
 //! ```
 //!
 //! `cargo run -p bc_inventory` writes `docs/VERIFICATION_INVENTORY.md`; with `--check` it fails
-//! when that file is out of date or an enforced rule is broken. The rules are `spec fn`s in
+//! when that file is out of date or a rule is broken in any crate. The rules are `spec fn`s in
 //! [`rules`], and the decisions are verified against them by Verus
 //! (`cargo verus verify -p bc_inventory`). Reading the sources ([`scan`]) and writing the
 //! document ([`render`]) are checked by tests.
@@ -24,19 +24,12 @@ pub mod render;
 pub mod rules;
 pub mod scan;
 
-use rules::{Fact, V_NONE, verified_tier, verified_tier_counts, verified_violations};
+use rules::{Fact, verified_tier, verified_tier_counts, verified_violations};
 use scan::{CRATES, Item, Source};
 use std::path::Path;
 
 /// Where the inventory is written, relative to the repository root.
 pub const OUTPUT: &str = "docs/VERIFICATION_INVENTORY.md";
-
-/// Whether the violations of the crate `krate` (an index into [`CRATES`]) make `--check` fail:
-/// those of the engine, the specification, this tool, and each front end already brought into
-/// the tiers ([`scan::CrateSpec::enforced`]). The other front ends' violations are reported.
-pub fn enforced(krate: usize) -> bool {
-    CRATES.get(krate).is_none_or(|c| c.enforced)
-}
 
 /// The inventory of a repository.
 pub struct Report {
@@ -80,15 +73,6 @@ pub fn build(src: &dyn Source) -> Report {
     }
 }
 
-/// The violations of the enforced crates.
-pub fn enforced_violations(r: &Report) -> Vec<(usize, u8)> {
-    r.violations
-        .iter()
-        .copied()
-        .filter(|&(i, v)| v != V_NONE && enforced(r.items[i].krate))
-        .collect()
-}
-
 /// Runs the command: no argument writes the inventory, `--check` checks it. Returns the exit
 /// status; messages go to `out` and `err`.
 pub fn run(
@@ -121,8 +105,7 @@ pub fn run(
             );
             status = 1;
         }
-        let enforced = enforced_violations(&report);
-        for &(i, v) in &enforced {
+        for &(i, v) in &report.violations {
             let it = &report.items[i];
             let _ = writeln!(
                 err,
@@ -133,7 +116,7 @@ pub fn run(
                 render::violation_text(v)
             );
         }
-        if !enforced.is_empty() {
+        if !report.violations.is_empty() {
             status = 1;
         }
     } else if let Err(e) = std::fs::write(&path, &text) {
@@ -142,10 +125,9 @@ pub fn run(
     }
     let _ = writeln!(
         out,
-        "{} items, {} violations ({} enforced)",
+        "{} items, {} violations",
         report.items.len(),
-        report.violations.len(),
-        enforced_violations(&report).len()
+        report.violations.len()
     );
     status
 }

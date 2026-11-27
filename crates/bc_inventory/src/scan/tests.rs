@@ -28,7 +28,7 @@ impl Source for Mem {
 
 const CORE: usize = 0;
 /// A crate whose tests Miri does not run.
-const WASM: usize = 7;
+const SPEC: usize = 8;
 
 fn scan_one(krate: usize, files: &[(&str, &str)]) -> (Scan, Mem) {
     let src = Mem::new(files);
@@ -131,14 +131,8 @@ proptest! {
 
 #[test]
 fn tests_of_a_crate_that_miri_does_not_run_do_not_count() {
-    assert!(!CRATES[WASM].miri, "pick a crate that Miri does not run");
-    let (s, _) = scan_one(
-        WASM,
-        &[(
-            "examples/wasm_web_app/crate/src/lib.rs",
-            "#[test] fn t() {}",
-        )],
-    );
+    assert!(!CRATES[SPEC].miri, "pick a crate that Miri does not run");
+    let (s, _) = scan_one(SPEC, &[("crates/bc_spec/src/lib.rs", "#[test] fn t() {}")]);
     assert!(s.miri_tests.is_empty());
 }
 
@@ -517,7 +511,7 @@ fn the_lists_of_crates_and_miri_packages_are_checked_against_the_repository() {
             ("scripts/run_miri_tests.sh", "")
         ]))
         .len(),
-        7
+        8
     );
     assert_eq!(check_lists(&Mem::new(&[])).len(), 2);
 }

@@ -6,6 +6,7 @@
 //! bit-precise CBMC symbolic execution (`kani::any()`) and verifies multi-step
 //! state-machine invariants without heap allocation state explosion.
 
+use crate::parser::ExtensionPolicy;
 use crate::verified_kernels::*;
 
 /// Bit-precise verification of `verified_hex_char_val` across all 256 possible `u8` values.
@@ -328,6 +329,20 @@ fn proof_verified_qemu_test_exit_code() {
     let code = verified_qemu_test_exit_code(passed);
     assert!(code == QEMU_TEST_PASS || code == QEMU_TEST_FAIL);
     assert_eq!(code == QEMU_TEST_PASS, passed);
+}
+
+/// `verified_extension_policy` reads 0, 1 and 2 as the three policies and nothing else.
+#[kani::proof]
+fn proof_verified_extension_policy() {
+    let code: u32 = kani::any();
+    let expected = match code {
+        0 => Some(ExtensionPolicy::Allow),
+        1 => Some(ExtensionPolicy::Warn),
+        2 => Some(ExtensionPolicy::Reject),
+        _ => None,
+    };
+    assert_eq!(verified_extension_policy(code), expected);
+    assert_eq!(verified_extension_policy(code).is_some(), code <= 2);
 }
 
 /// `verified_m5stamp_stack_within_budget` never overflows and accepts exactly the uses within

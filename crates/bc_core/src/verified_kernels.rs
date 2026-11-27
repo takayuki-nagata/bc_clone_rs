@@ -25,6 +25,7 @@
     reason = "proved lossless by the Verus contracts (see the module documentation)"
 )]
 
+use crate::parser::ExtensionPolicy;
 #[cfg(not(verus_keep_ghost))]
 use verus_builtin_macros::verus;
 #[cfg(verus_keep_ghost)]
@@ -908,6 +909,25 @@ dual_verified! {
         ]
     {
         (used as u128) * 100 <= (size as u128) * (M5STAMP_MAX_STACK_PERCENT as u128)
+    }
+
+    /// Verified reading of the extension policy that the C API and the Wasm binding take as a
+    /// number: 0 accepts the non-POSIX syntax, 1 warns about it (`-w`), 2 rejects it (`-s`);
+    /// any other value is none of them.
+    pub fn verified_extension_policy(code: u32) -> (res: Option<ExtensionPolicy>)
+        ensures [
+            code == 0 ==> res == Some(ExtensionPolicy::Allow),
+            code == 1 ==> res == Some(ExtensionPolicy::Warn),
+            code == 2 ==> res == Some(ExtensionPolicy::Reject),
+            code > 2 ==> res.is_none(),
+        ]
+    {
+        match code {
+            0 => Some(ExtensionPolicy::Allow),
+            1 => Some(ExtensionPolicy::Warn),
+            2 => Some(ExtensionPolicy::Reject),
+            _ => None,
+        }
     }
 }
 

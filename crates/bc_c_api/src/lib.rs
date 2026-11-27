@@ -16,8 +16,8 @@ use alloc::boxed::Box;
 use alloc::ffi::CString;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
-use bc_core::verified_kernels::verified_c_ffi_check_buf_capacity;
-use bc_core::{BcWriter, Evaluator, ExtensionPolicy, STDIN_SOURCE};
+use bc_core::verified_kernels::{verified_c_ffi_check_buf_capacity, verified_extension_policy};
+use bc_core::{BcWriter, Evaluator, STDIN_SOURCE};
 use core::cell::RefCell;
 use core::ffi::{CStr, c_char, c_void};
 use core::fmt::Write;
@@ -534,11 +534,8 @@ pub unsafe extern "C" fn bc_session_set_extension_policy(
     if session.is_null() {
         return BcStatus::ErrNullPtr;
     }
-    let policy = match policy {
-        0 => ExtensionPolicy::Allow,
-        1 => ExtensionPolicy::Warn,
-        2 => ExtensionPolicy::Reject,
-        _ => return BcStatus::ErrExecution,
+    let Some(policy) = verified_extension_policy(policy) else {
+        return BcStatus::ErrExecution;
     };
     unsafe { &mut *session }.evaluator.extension_policy = policy;
     BcStatus::Ok

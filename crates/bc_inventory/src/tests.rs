@@ -66,13 +66,10 @@ fn every_violation_has_a_message() {
 }
 
 #[test]
-fn the_engine_the_specification_the_tool_and_the_finished_front_ends_are_enforced() {
-    let enforced_names: Vec<&str> = (0..scan::CRATES.len())
-        .filter(|&k| enforced(k))
-        .map(|k| scan::CRATES[k].name)
-        .collect();
+fn every_crate_of_the_workspace_and_the_examples_is_read() {
+    let names: Vec<&str> = scan::CRATES.iter().map(|c| c.name).collect();
     assert_eq!(
-        enforced_names,
+        names,
         [
             "bc_core",
             "bc_clone",
@@ -81,20 +78,27 @@ fn the_engine_the_specification_the_tool_and_the_finished_front_ends_are_enforce
             "bc_qemu_riscv32",
             "bc_build_info",
             "m5stamp_c3_bc",
+            "bc_wasm",
             "bc_spec",
             "bc_inventory"
         ]
     );
-    // Every non-product crate is enforced.
-    for (k, c) in scan::CRATES.iter().enumerate() {
-        assert!(c.role == rules::ROLE_PRODUCT || enforced(k), "{}", c.name);
+    // Miri runs the unit tests of every product crate and of the engine.
+    for c in scan::CRATES {
+        assert_eq!(
+            c.miri,
+            c.role == rules::ROLE_PRODUCT || c.role == rules::ROLE_CORE,
+            "{}",
+            c.name
+        );
     }
 }
 
 #[test]
-fn the_repository_breaks_no_enforced_rule() {
+fn the_repository_breaks_no_rule() {
     let r = build(&scan::FsSource(repo()));
-    let broken: Vec<String> = enforced_violations(&r)
+    let broken: Vec<String> = r
+        .violations
         .iter()
         .map(|&(i, v)| {
             format!(

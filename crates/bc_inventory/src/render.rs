@@ -95,21 +95,12 @@ a function it cannot verify is covered by a Kani harness if possible, otherwise 
 that none of them can run is a branch-free shim, run by an integration test. A function outside Verus carries a \
 `// coverage:` comment naming what covers it and why a higher tier cannot (`why:` {}). The rules are `spec fn`s in \
 `crates/bc_inventory/src/rules.rs`, verified by Verus; tests, Kani harnesses, the executable specification and this \
-tool's reader and writer are verification tools and are only counted. `--check` enforces the rules for the engine, \
-the specification, this tool and the front ends already brought into the tiers ({}); the other front ends' violations \
-are listed below until each one is brought into the tiers.\n",
+tool's reader and writer are verification tools and are only counted. `--check` fails on a violation in any crate.\n",
         WHY_WORDS
             .iter()
             .map(|w| format!("`{w}`"))
             .collect::<Vec<_>>()
             .join(", "),
-        CRATES
-            .iter()
-            .enumerate()
-            .filter(|&(k, c)| c.role == ROLE_PRODUCT && crate::enforced(k))
-            .map(|(_, c)| format!("`{}`", c.name))
-            .collect::<Vec<_>>()
-            .join(", ")
     );
     let _ = writeln!(s, "| Tier | What it establishes |\n|---|---|");
     let _ = writeln!(

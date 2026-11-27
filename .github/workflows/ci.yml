@@ -39,11 +39,13 @@ jobs:
         run: |
           cargo fmt --check
           cargo fmt --check --manifest-path examples/m5stamp_c3/Cargo.toml
+          cargo fmt --check --manifest-path examples/wasm_web_app/crate/Cargo.toml
 
       - name: Run Clippy Linter
         run: |
           cargo clippy --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --package bc_build_info --package bc_inventory --all-targets -- -D warnings
-          cargo clippy --manifest-path examples/wasm_web_app/crate/Cargo.toml --all-targets -- -D warnings
+          # The Wasm binding on the host (outside the workspace); stack-probe adds set_max_depth.
+          cargo clippy --manifest-path examples/wasm_web_app/crate/Cargo.toml --all-targets --all-features -- -D warnings
           # The library of bc_qemu_riscv32 and its unit tests on the host; its binary is riscv32-only.
           cargo clippy --package bc_qemu_riscv32 --lib --tests -- -D warnings
           # Likewise the library of the M5Stamp C3 application (outside the workspace; its own
@@ -240,6 +242,7 @@ jobs:
           - { name: bc_clone, stage: cli, args: '' }
           - { name: bc_build_info, stage: build_info, args: '' }
           - { name: m5stamp_c3, stage: m5stamp, args: '' }
+          - { name: bc_wasm, stage: wasm, args: '' }
           # bc_core is split by test name, by the times measured under Miri: the wide-block test
           # alone takes about as long as the integer and math-library tests together. The last
           # shard skips what the others run, so a new test always runs somewhere.
@@ -302,7 +305,8 @@ jobs:
           # The M5Stamp C3 application is outside the workspace; it is mutated on its own, with
           # paths relative to its directory.
           git diff --relative=examples/m5stamp_c3 "$range" -- examples/m5stamp_c3 > m5stamp.diff
-          wc -l mutants.diff m5stamp.diff
+          git diff --relative=examples/wasm_web_app/crate "$range" -- examples/wasm_web_app/crate > wasm.diff
+          wc -l mutants.diff m5stamp.diff wasm.diff
 
       - name: Run Diff-based Mutation Testing
         run: |
@@ -322,6 +326,15 @@ jobs:
             --in-diff m5stamp.diff --timeout 300 --output target/mutants-m5stamp \
             --cargo-arg=--target=x86_64-unknown-linux-gnu --cargo-arg=--lib || [ $? -eq 3 ]
 
+      - name: Mutate the Wasm Binding
+        if: matrix.shard == 0
+        run: |
+          # Outside the workspace as well, and in place for the same reason; on the host, with
+          # stack-probe so that the test of set_max_depth runs.
+          TMPDIR="$PWD/target/mutants-tmp" cargo mutants --in-place --dir examples/wasm_web_app/crate \
+            --in-diff wasm.diff --timeout 300 --output target/mutants-wasm \
+            --cargo-arg=--lib --all-features || [ $? -eq 3 ]
+
       - name: Upload the mutants report
         if: failure()
         uses: actions/upload-artifact@v4
@@ -330,6 +343,7 @@ jobs:
           path: |
             mutants.out
             target/mutants-m5stamp/mutants.out
+            target/mutants-wasm/mutants.out
 
   zephyr:
     name: Zephyr RTOS (QEMU RISC-V 32 tests, M5Stamp C3 build)
