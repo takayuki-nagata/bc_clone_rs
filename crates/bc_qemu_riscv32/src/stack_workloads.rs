@@ -351,6 +351,20 @@ mod tests {
         assert_eq!(deepest(&WORKLOADS[0], &mut run, 12), Ok(9));
     }
 
+    /// A computed expectation is checked only at the deepest accepted depth, whose parity
+    /// depends on the limit; check every one at both even and odd depths here.
+    #[test]
+    fn test_computed_expectations_match_the_evaluator() {
+        for w in &WORKLOADS {
+            if let Expect::Computed(text) = w.expect {
+                for n in 0..4 {
+                    let actual = crate::eval_bc_at_depth(&(w.build)(n), w.math, w.scale, 64);
+                    assert_eq!(actual.trim(), text(n).trim(), "{} at depth {n}", w.name);
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_for_each_word() {
         let mut seen = Vec::new();
