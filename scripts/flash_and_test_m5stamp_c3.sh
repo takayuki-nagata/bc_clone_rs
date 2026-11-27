@@ -24,40 +24,33 @@ fi
 
 echo ""
 echo "=== Flashing to M5Stamp C3 on ${PORT} ==="
-espflash flash --port "${PORT}" --non-interactive "${ELF_PATH}"
+# The board's USB-Serial/JTAG port is reset through USB: espflash's default reset (DTR/RTS) does
+# not reach it, and the DTR/RTS sequence boots the chip into download mode.
+espflash flash --port "${PORT}" --before usb-reset --non-interactive "${ELF_PATH}"
 
 echo ""
 echo "=== Monitoring M5Stamp C3 Serial Output ==="
-python3 -c "
-import serial, time, sys
-
-try:
-    ser = serial.Serial('${PORT}', 115200, timeout=1)
-except Exception as e:
-    print(f'Error opening serial port: {e}')
-    sys.exit(1)
-
-# Reset ESP32-C3 via DTR/RTS
-ser.dtr = False
-ser.rts = True
-time.sleep(0.1)
-ser.dtr = True
-ser.rts = False
-time.sleep(0.1)
-ser.dtr = False
-ser.rts = False
-
-start = time.time()
-while time.time() - start < 60:
-    line = ser.readline().decode('utf-8', errors='replace')
-    if line:
-        print(line, end='')
-        if 'ALL M5STAMP-C3 BC_CORE TESTS PASSED (100%)!' in line:
-            print('\n=== M5Stamp C3 Hardware Tests PASSED 100%! ===')
-            ser.close()
-            sys.exit(0)
-
-ser.close()
-print('\nError: Test success message not detected within timeout!')
-sys.exit(1)
-"
+# The monitor resets the board and attaches a moment after it boots, so the first lines of the
+# report may be missing; the verdict line is printed only if every test passed.
+log="$(mktemp)"
+trap 'rm -f "${log}"' EXIT
+timeout 90 espflash monitor --port "${PORT}" --before usb-reset --non-interactive >"${log}" 2>&1 &
+monitor=$!
+for _ in $(seq 90); do
+    sleep 1
+    if grep -q 'ALL M5STAMP-C3 BC_CORE TESTS PASSED (100%)!' "${log}"; then
+        kill "${monitor}" 2>/dev/null || true
+        cat "${log}"
+        echo ""
+        echo "=== M5Stamp C3 Hardware Tests PASSED 100%! ==="
+        exit 0
+    fi
+    if grep -q -e 'SOME M5STAMP-C3 BC_CORE TESTS FAILED!' -e 'M5Stamp C3 PANIC' "${log}"; then
+        break
+    fi
+done
+kill "${monitor}" 2>/dev/null || true
+cat "${log}"
+echo ""
+echo "Error: Test success message not detected within timeout!"
+exit 1

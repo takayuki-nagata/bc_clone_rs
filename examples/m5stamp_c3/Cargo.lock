@@ -45,6 +45,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bc_qemu_riscv32"
+version = "0.4.0"
+dependencies = [
+ "bc_build_info",
+ "bc_core",
+]
+
+[[package]]
 name = "bitfield"
 version = "0.19.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -895,6 +903,7 @@ version = "0.4.0"
 dependencies = [
  "bc_build_info",
  "bc_core",
+ "bc_qemu_riscv32",
  "critical-section",
  "embedded-io 0.6.1",
  "esp-alloc",

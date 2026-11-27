@@ -1,47 +1,28 @@
 // SPDX-License-Identifier: MIT
 
+//! The M5Stamp C3 (ESP32-C3) application: the self-tests, then the serial REPL.
+//!
+//! Only the hardware is here: the heap, the USB serial port, the stack region and the panic
+//! handler. What the application decides is in the library (`src/lib.rs`) and the QEMU runner's
+//! library, which the host's unit tests run.
+
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
-#[path = "../../../../crates/bc_qemu_riscv32/src/stack_workloads.rs"]
-#[allow(
-    dead_code,
-    reason = "shared with the QEMU runner, which also uses the builders"
-)]
-mod stack_workloads;
-
 use alloc::boxed::Box;
-use alloc::rc::Rc;
-use alloc::string::String;
-use alloc::vec::Vec;
-use bc_core::verified_kernels::{
-    REPL_ACTION_APPEND_CHAR, REPL_ACTION_BACKSPACE, REPL_ACTION_CTRL_C, REPL_ACTION_EVAL_LINE,
-    verified_zephyr_repl_action,
-};
-use bc_core::{BcWriter, Evaluator, STDIN_SOURCE, UnitAccumulator};
-use core::cell::RefCell;
-use core::fmt::Write;
+use bc_qemu_riscv32::CrlfWriter;
+use bc_qemu_riscv32::SELF_TESTS;
+use bc_qemu_riscv32::stack_workloads::{WORKLOADS, paint_stack, stack_high_water};
 use embedded_io::Read;
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
-use esp_println::{print, println};
+use esp_println::{Printer, println};
+use m5stamp_c3_bc::{M5STAMP_MAX_DEPTH, Repl, repl_banner, run_self_tests};
 
-/// Longest input line the serial REPL accepts (see `bc_zephyr::REPL_MAX_LINE`).
-const REPL_MAX_LINE: usize = 1024;
-
-/// Nesting limit (`docs/COMPATIBILITY.md` §2). At 128 levels the workloads use at most 82 KB of
-/// stack on the board (see [`MAX_STACK_PERCENT`]). The heap is measured on QEMU with the same
-/// optimization settings and a 128 KiB heap (`bc_qemu_riscv32`'s `m5stamp-probe`): 90 KB. At 160 the
-/// heap reaches 116 KB, too close to the limit for an allocator we did not measure with; at 192
-/// it runs out. Running out of heap is not recoverable here, so the heap decides this limit.
-const M5STAMP_MAX_DEPTH: usize = 128;
-
-/// The self-tests fail if they use more of the stack than this.
-const MAX_STACK_PERCENT: usize = 60;
-
+// coverage: shim(scripts/flash_and_test_m5stamp_c3.sh); why: hw, fmt
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     println!("\n[M5Stamp C3 PANIC]: {:?}", info);
@@ -50,69 +31,13 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-#[derive(Clone, Default)]
-struct SharedBuffer(Rc<RefCell<String>>);
-
-unsafe impl Send for SharedBuffer {}
-
-impl Write for SharedBuffer {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        self.0.borrow_mut().push_str(s);
-        Ok(())
-    }
+// coverage: shim(scripts/flash_and_test_m5stamp_c3.sh); why: hw
+/// Writes one byte to the USB serial port.
+fn put(byte: u8) {
+    Printer::write_bytes(&[byte]);
 }
 
-impl BcWriter for SharedBuffer {
-    fn flush(&mut self) -> core::fmt::Result {
-        Ok(())
-    }
-}
-
-/// Direct terminal writer that streams output directly to esp-println (USB-Serial).
-struct SerialWriter;
-
-impl Write for SerialWriter {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        for c in s.chars() {
-            if c == '\n' {
-                print!("\r\n");
-            } else {
-                print!("{}", c);
-            }
-        }
-        Ok(())
-    }
-}
-
-impl BcWriter for SerialWriter {
-    fn flush(&mut self) -> core::fmt::Result {
-        Ok(())
-    }
-}
-
-fn eval_bc_non_panicking(code: &str, ev: &mut Evaluator) {
-    if ev.run_source(code.as_bytes(), STDIN_SOURCE).quit {
-        ev.request_quit();
-    }
-}
-
-fn eval_bc_string(code: &str, math_enabled: bool, default_scale: usize) -> String {
-    let out_buf = SharedBuffer::default();
-
-    let mut ev = Evaluator::new(
-        math_enabled,
-        Box::new(out_buf.clone()),
-        Box::new(out_buf.clone()),
-    );
-    ev.set_scale(default_scale);
-    ev.max_depth = M5STAMP_MAX_DEPTH;
-    ev.max_eval_depth = M5STAMP_MAX_DEPTH;
-
-    eval_bc_non_panicking(code, &mut ev);
-
-    out_buf.0.borrow().clone()
-}
-
+// coverage: shim(scripts/flash_and_test_m5stamp_c3.sh); why: hw
 /// The stack region: above esp-hal's guard word, which must not be written, up to its top.
 fn stack_region() -> (usize, usize) {
     unsafe extern "C" {
@@ -125,145 +50,7 @@ fn stack_region() -> (usize, usize) {
     )
 }
 
-fn run_self_tests() -> bool {
-    let (stack_bottom, stack_top) = stack_region();
-    // SAFETY: the region is the stack, and everything below the current frame is unused.
-    unsafe { stack_workloads::paint_stack(stack_bottom) };
-
-    println!("\n=================================================");
-    println!("  bc_clone (bc_core) on M5Stamp C3 (ESP32-C3)    ");
-    println!("  {}", bc_build_info::VERSION_LINE);
-    println!("=================================================");
-    println!("[ESP32-C3] Initialized successfully @ 160MHz.");
-    println!("[ESP32-C3] 128KB SRAM Heap allocated for bc_core.\n");
-
-    let test_cases: [(&str, &str, bool, usize, &str); 11] = [
-        (
-            "Basic Arithmetic & Precedence",
-            "1 + 2 * 3 - 4 / 2\n",
-            false,
-            0,
-            "5",
-        ),
-        ("Scale Division", "scale = 4; 5 / 3\n", false, 0, "1.6666"),
-        (
-            "BigInt Power (2^100)",
-            "2^100\n",
-            false,
-            0,
-            "1267650600228229401496703205376",
-        ),
-        (
-            "Recursive Factorial f(20)",
-            "define f(n) {\n  if (n <= 1) return (1)\n  return (n * f(n - 1))\n}\nf(20)\n",
-            false,
-            0,
-            "2432902008176640000",
-        ),
-        (
-            "Transcendental Pi: 4 * a(1)",
-            "4 * a(1)\n",
-            true,
-            20,
-            "3.14159265358979323844",
-        ),
-        (
-            "Transcendental Exp: e(1)",
-            "e(1)\n",
-            true,
-            15,
-            "2.718281828459045",
-        ),
-        (
-            "Transcendental Log: l(2.718281828459045)",
-            "l(2.718281828459045)\n",
-            true,
-            15,
-            ".999999999999999",
-        ),
-        (
-            "Transcendental Sine & Cosine",
-            "s(0) + c(0)\n",
-            true,
-            15,
-            "1.000000000000000",
-        ),
-        (
-            "Base Conversion (Hex to Binary)",
-            "ibase = 16; obase = 2; FF\n",
-            false,
-            0,
-            "11111111",
-        ),
-        (
-            "Arrays and Dynamic Auto Scoping",
-            "a[0] = 10; a[1] = 20\ndefine sum(x[]) {\n  auto s\n  s = x[0] + x[1]\n  return (s)\n}\nsum(a[])\n",
-            false,
-            0,
-            "30",
-        ),
-        (
-            "Error Recovery (Div by Zero)",
-            "1 / 0\n",
-            false,
-            0,
-            "Runtime error (func=(main)): Divide by zero",
-        ),
-    ];
-
-    let mut all_passed = true;
-    for (name, code, math_enabled, scale, expected) in test_cases {
-        print!("  Running: {:<35} ... ", name);
-
-        let actual = eval_bc_string(code, math_enabled, scale);
-
-        if actual.trim() == expected.trim() {
-            println!("[PASS]");
-        } else {
-            println!("[FAIL]");
-            println!("    Expected: \"{}\"", expected);
-            println!("    Actual  : \"{}\"", actual.trim());
-            all_passed = false;
-        }
-    }
-
-    // Every workload at the limit; `deepest` also checks that one level more is an error.
-    for workload in &stack_workloads::WORKLOADS {
-        print!("  Running: limit, {:<28} ... ", workload.name);
-        let mut run = |code: &str, math: bool, scale: usize| eval_bc_string(code, math, scale);
-        match stack_workloads::deepest(workload, &mut run, M5STAMP_MAX_DEPTH) {
-            Ok(_) => println!("[PASS]"),
-            Err(message) => {
-                println!("[FAIL]");
-                println!("    {}", message);
-                all_passed = false;
-            }
-        }
-    }
-
-    // SAFETY: the region painted above.
-    let used = unsafe { stack_workloads::stack_high_water(stack_bottom, stack_top) };
-    let size = stack_top - stack_bottom;
-    println!(
-        "[ESP32-C3] Stack high-water mark: {} of {} bytes.",
-        used, size
-    );
-    if used * 100 > size * MAX_STACK_PERCENT {
-        println!("  [FAIL] over {}% of the stack", MAX_STACK_PERCENT);
-        all_passed = false;
-    }
-
-    println!("-------------------------------------------------");
-    if all_passed {
-        println!("ALL M5STAMP-C3 BC_CORE TESTS PASSED (100%)!");
-        println!("=================================================\n");
-    } else {
-        println!("SOME M5STAMP-C3 BC_CORE TESTS FAILED!");
-        println!("=================================================\n");
-    }
-    all_passed
-}
-
+// coverage: shim(scripts/flash_and_test_m5stamp_c3.sh); why: hw
 #[main]
 fn main() -> ! {
     // Initialize 128KB heap for arbitrary-precision arithmetic
@@ -274,67 +61,29 @@ fn main() -> ! {
     let mut usb_serial = UsbSerialJtag::new(peripherals.USB_DEVICE);
 
     // 1. Run automated self-tests first
-    run_self_tests();
-
-    // 2. Start Interactive REPL CLI
-    println!("Entering bc_core Interactive REPL mode...");
-    println!("{}", bc_build_info::VERSION_LINE);
-    println!("Type bc expressions (e.g. 2^64, scale=10; 4*a(1), define f(x)...)");
-    print!("bc> ");
-
-    // Persistent Evaluator holding variables, user functions, scale, ibase, obase
-    let mut evaluator = Evaluator::new(
-        true, // Enable math library functions (s, c, e, l, a, j)
-        Box::new(SerialWriter),
-        Box::new(SerialWriter),
+    let (stack_bottom, stack_top) = stack_region();
+    // SAFETY: the region is the stack, and everything below the current frame is unused.
+    unsafe { paint_stack(stack_bottom) };
+    run_self_tests(
+        &mut Printer,
+        &SELF_TESTS,
+        &WORKLOADS,
+        M5STAMP_MAX_DEPTH,
+        (stack_bottom, stack_top),
+        // SAFETY: the region painted above.
+        || unsafe { stack_high_water(stack_bottom, stack_top) },
     );
-    evaluator.max_depth = M5STAMP_MAX_DEPTH;
-    evaluator.max_eval_depth = M5STAMP_MAX_DEPTH;
 
-    let mut line_buf = Vec::new();
-    let mut acc = UnitAccumulator::new();
+    // 2. Start Interactive REPL CLI: one evaluator keeps variables, functions, scale, ibase and
+    // obase across lines, with the math library.
+    repl_banner(&mut Printer);
+    let mut repl = Repl::new(
+        Box::new(CrlfWriter(put as fn(u8))),
+        Box::new(CrlfWriter(put as fn(u8))),
+    );
     let mut rx_byte = [0u8; 1];
-
     loop {
-        let count: usize = usb_serial.read(&mut rx_byte).unwrap_or_default();
-        if count == 0 {
-            continue;
-        }
-        let byte = rx_byte[0];
-
-        match verified_zephyr_repl_action(byte, line_buf.len(), REPL_MAX_LINE) {
-            REPL_ACTION_EVAL_LINE => {
-                print!("\r\n");
-                line_buf.push(b'\n');
-                // Lines are grouped into input units exactly as in the CLI. There is no
-                // process to exit on bare metal, so `quit` only ends the current unit.
-                if let Some((unit, first_line)) = acc.push_line(&line_buf) {
-                    evaluator.run_unit(&unit, STDIN_SOURCE, first_line);
-                    evaluator.clear_quit();
-                }
-                line_buf.clear();
-                print!("{}", if acc.is_pending() { "... " } else { "bc> " });
-            }
-            REPL_ACTION_BACKSPACE => {
-                // Backspace / Delete
-                line_buf.pop();
-                print!("\x08 \x08");
-            }
-            REPL_ACTION_CTRL_C => {
-                // Ctrl+C: Cancel current line and any pending multi-line unit
-                line_buf.clear();
-                acc.clear();
-                print!("^C\r\nbc> ");
-            }
-            // Characters beyond REPL_MAX_LINE are ignored so typing cannot exhaust the heap.
-            REPL_ACTION_APPEND_CHAR => {
-                // Printable ASCII characters
-                line_buf.push(byte);
-                print!("{}", byte as char);
-            }
-            _ => {
-                // Ignore other control characters or backspace on empty buffer
-            }
-        }
+        let read = usb_serial.read(&mut rx_byte);
+        repl.poll(read, &rx_byte, &mut Printer);
     }
 }

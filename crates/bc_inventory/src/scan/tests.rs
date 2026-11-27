@@ -517,7 +517,7 @@ fn the_lists_of_crates_and_miri_packages_are_checked_against_the_repository() {
             ("scripts/run_miri_tests.sh", "")
         ]))
         .len(),
-        6
+        7
     );
     assert_eq!(check_lists(&Mem::new(&[])).len(), 2);
 }

@@ -36,7 +36,9 @@ jobs:
           shared-key: lint
 
       - name: Check Code Formatting
-        run: cargo fmt --check
+        run: |
+          cargo fmt --check
+          cargo fmt --check --manifest-path examples/m5stamp_c3/Cargo.toml
 
       - name: Run Clippy Linter
         run: |
@@ -44,6 +46,9 @@ jobs:
           cargo clippy --manifest-path examples/wasm_web_app/crate/Cargo.toml --all-targets -- -D warnings
           # The library of bc_qemu_riscv32 and its unit tests on the host; its binary is riscv32-only.
           cargo clippy --package bc_qemu_riscv32 --lib --tests -- -D warnings
+          # Likewise the library of the M5Stamp C3 application (outside the workspace; its own
+          # config, which selects the ESP32-C3, applies only inside its directory).
+          cargo clippy --manifest-path examples/m5stamp_c3/Cargo.toml --lib --tests -- -D warnings
           cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings
           cargo clippy --package bc_qemu_riscv32 --target riscv32imc-unknown-none-elf -- -D warnings
           cargo clippy --package bc_qemu_riscv32 --target riscv32imc-unknown-none-elf --features m5stamp-probe -- -D warnings
@@ -94,6 +99,9 @@ jobs:
 
       - name: Run the Unit Tests of the QEMU Runner's Library
         run: cargo test --package bc_qemu_riscv32 --lib
+
+      - name: Run the Unit Tests of the M5Stamp C3 Application's Library
+        run: cargo test --manifest-path examples/m5stamp_c3/Cargo.toml --lib
 
       - name: Run Official GNU bc Reference Test Suite
         run: bash scripts/run_gnu_reference_tests.sh
@@ -231,6 +239,7 @@ jobs:
           - { name: bc_qemu_riscv32, stage: qemu, args: '' }
           - { name: bc_clone, stage: cli, args: '' }
           - { name: bc_build_info, stage: build_info, args: '' }
+          - { name: m5stamp_c3, stage: m5stamp, args: '' }
           # bc_core is split by test name, by the times measured under Miri: the wide-block test
           # alone takes about as long as the integer and math-library tests together. The last
           # shard skips what the others run, so a new test always runs somewhere.

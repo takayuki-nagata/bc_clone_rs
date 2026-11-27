@@ -14,10 +14,15 @@ path = "src/lib.rs"
 name = "bc_qemu_riscv32"
 test = false
 bench = false
+required-features = ["bin"]
 
 [features]
+default = ["bin"]
+# The binary's dependencies. The M5Stamp C3 application uses the library without them: esp-hal
+# brings its own critical section (`restore-state-u32`), which cannot be combined with ours.
+bin = ["dep:riscv", "dep:riscv-rt", "dep:critical-section", "dep:embedded-alloc"]
 # Measures the stack and heap use of the workloads for the M5Stamp C3 instead of running the tests.
-m5stamp-probe = []
+m5stamp-probe = ["bin"]
 
 [dependencies]
 bc_core = { path = "../bc_core" }
@@ -26,10 +31,10 @@ bc_build_info = { path = "../bc_build_info" }
 # Only the binary uses these, and it is built for riscv32 alone; leaving them out of host builds
 # lets the library's unit tests run on the host.
 [target.'cfg(target_arch = "riscv32")'.dependencies]
-riscv = "0.16"
-riscv-rt = "0.18"
-critical-section = { version = "1.2", features = ["restore-state-none"] }
-embedded-alloc = "0.7"
+riscv = { version = "0.16", optional = true }
+riscv-rt = { version = "0.18", optional = true }
+critical-section = { version = "1.2", features = ["restore-state-none"], optional = true }
+embedded-alloc = { version = "0.7", optional = true }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(miri)'] }

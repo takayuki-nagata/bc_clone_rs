@@ -1,36 +1,8 @@
 // SPDX-License-Identifier: MIT
 
+// coverage: shim(scripts/build_m5stamp_c3.sh); why: build
+/// Links the application with esp-hal's linker script. Only the binary: the library's unit tests
+/// run on the host.
 fn main() {
-    linker_be_nice();
-    println!("cargo:rustc-link-arg=-Tlinkall.x");
-}
-
-fn linker_be_nice() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 {
-        let kind = &args[1];
-        let what = &args[2];
-
-        match kind.as_str() {
-            "undefined-symbol" => match what.as_str() {
-                what if what.starts_with("_defmt_") => {
-                    eprintln!("defmt not found");
-                }
-                "_stack_start" => {
-                    eprintln!("Is the linker script `linkall.x` missing?");
-                }
-                _ => (),
-            },
-            _ => {
-                std::process::exit(1);
-            }
-        }
-
-        std::process::exit(0);
-    }
-
-    println!(
-        "cargo:rustc-link-arg=--error-handling-script={}",
-        std::env::current_exe().unwrap().display()
-    );
+    println!("cargo:rustc-link-arg-bins=-Tlinkall.x");
 }

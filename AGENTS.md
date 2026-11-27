@@ -47,11 +47,11 @@ graph TD
 | `crates/bc_cli` | `bc_clone` binary: option parsing, file/stdin processing, interactive REPL, SIGINT |
 | `crates/bc_c_api` | C ABI (`include/bc_core.h`): `bc_eval`, `bc_eval_callback`, `bc_session_*`, `bc_version` |
 | `crates/bc_zephyr` | Zephyr RTOS application logic (self-tests, serial REPL); C trampoline in `examples/zephyr_app` |
-| `crates/bc_qemu_riscv32` | Bare-metal RISC-V 32 self-test runner for QEMU `virt`: a library (the self-tests, the nesting workloads, the M5Stamp measurement loop, the serial writer, the peak-counting allocator), which the host's unit tests run, and a riscv32-only binary with the hardware glue |
+| `crates/bc_qemu_riscv32` | Bare-metal RISC-V 32 self-test runner for QEMU `virt`: a library (the self-tests, the nesting workloads, the M5Stamp measurement loop, the serial writer, the peak-counting allocator), which the host's unit tests run and the M5Stamp C3 application uses too, and a riscv32-only binary with the hardware glue, whose dependencies are behind the default feature `bin` |
 | `crates/bc_build_info` | `no_std` constants `VERSION`, `COMMIT` and `VERSION_LINE` (`bc_clone 0.5.0 (a916de2)`), which every front end displays (`bc_clone -v`, `bc_version()`, Wasm `version()`, the embedded banners). Its `build.rs` reads the commit from git (`-dirty`, `unknown`, or `BC_CLONE_GIT_COMMIT`) and never fails the build; the decisions are in `src/commit.rs`, which `build.rs` includes with `#[path]` and the library's unit tests run on a fake git. `bc_core` does not depend on it, so a new commit does not rebuild the engine or disturb the Verus and mutants caches |
 | `crates/bc_spec` | Executable formal specification: Verus `spec fn`s from input bytes to stdout, stderr and exit status, compiled by `exec_spec_verified!` into the reference interpreter `bc_spec_oracle` (`scripts/build_spec_oracle.sh`). A workspace member outside `default-members`: `cargo verus verify -p bc_spec` checks it, and a normal `cargo build` compiles the oracle, because `verus!` erases the specifications |
 | `crates/bc_inventory` | Verification tool: assigns every production function of the workspace and the examples to the tier that covers it (Verus, assumed by Verus, Kani, Miri, branch-free shim) from its `// coverage:` tag, and writes `docs/VERIFICATION_INVENTORY.md`; `--check` fails when that file is out of date. The rules are `spec fn`s in `src/rules.rs`, and the decisions are verified against them (`cargo verus verify -p bc_inventory`); the source reader (`syn`) and the writer are checked by tests |
-| `examples/m5stamp_c3` | ESP32-C3 bare-metal app (`esp-hal`) |
+| `examples/m5stamp_c3` | ESP32-C3 bare-metal app (`esp-hal`), outside the workspace: a library (the self-test report and the stack budget, the serial REPL), which the host's unit tests run, and an ESP32-C3-only binary with the hardware glue. It runs the QEMU runner's self-tests and workloads (`bc_qemu_riscv32` without `bin`) |
 | `examples/wasm_web_app` | Browser frontend backed by `bc_core` compiled to `wasm32-unknown-unknown` |
 
 ## Core Engine (`crates/bc_core`)
@@ -230,7 +230,7 @@ Small pure functions are defined once with `dual_verified!` (defined in the trus
 Examples are the POSIX scale and shift computations for `+ - * / sqrt ^`, digit parsing,
 `ibase`/`obase` clamping, the `WrappedStdout` column step, lexer cursor and lookahead bounds, the
 UTF-8 sequence length of an illegal character, Pratt
-precedence, the C-FFI buffer-capacity check, the serial REPLs' character class and line-editing action, the value written to QEMU's test device, the CLI argument
+precedence, the C-FFI buffer-capacity check, the serial REPLs' character class and line-editing action, the value written to QEMU's test device, the M5Stamp C3's stack budget, the CLI argument
 class, and the REPL block-completeness scanner.
 
 A kernel with a loop cannot go through `dual_verified!`, whose normal expansion keeps the body
@@ -280,7 +280,7 @@ except the following, whose preconditions are argued here but not proved:
 | Deductive proofs | Verus — `scripts/run_verus_verification.sh` (`verified_kernels.rs`, `math.rs`, `format.rs`, `parser/`, `eval/`, `driver.rs`, `refine.rs`, `mathlib/`, `real_arith.rs`, `bigint.rs`, the trusted `trusted_bigint.rs`, `trusted_std.rs`, `trusted_math.rs`, `trusted_dual.rs` and the `trusted*` files of `driver/`, `eval/` and `parser/`, `crates/bc_spec` including `spec_num.rs`) | The kernels meet their contracts for all inputs that satisfy their preconditions, and production code establishes those preconditions (e.g. `BC_SCALE_MAX`). The production `BCNum::add`, `sub`, `mul`, `try_div`, `try_mod_op`, `try_pow`, `try_sqrt`, `length`, `scale_func`, `cmp_val` and `from_digit_values` compute the L0 operations exactly, and `format_bytes` writes `l0_format` of the value, assuming the `num-bigint` wrappers in `trusted_bigint.rs`. Without `-l`, `try_evaluate` and `try_execute` refine the specification's `ev` and `exec` (every finishing fuel gives a corresponding result and state, including output, diagnostics and runtime errors), assuming in addition the axioms of `trusted_std.rs` and the output-stream wrappers (`WrappedStdout::write_bytes` and `flush_out`, `ErrWriter::write_bytes` and `flush_err`); this is partial correctness. The lexer (`parser/lexer.rs`) produces the specification's `tokenize`, and the parser (`parser/parse.rs` and `parser/parse/`) the specification's `parse_unit` (for every fuel with which the specification finishes), assuming in addition the one-line wrappers `ascii_string`, `copy_bytes`, `append_bytes` and `subslice`. `Evaluator::run_unit_ref` refines the specification's `run_unit` (diagnostics, `quit`, the failure count), and `run_source_ref` refines `run_units` on `split_units` of the text: state, output, diagnostics, `quit`, and whether a unit failed. `run_source_ref` is a loop over `run_next_unit_ref`, whose theorem (`r_step`) is one step of `run_units` on the units of the text not yet run (`UnitCursor::rest`): `None` when none is left, and otherwise the outcome of the first. `with_streams` gives the specification's `initial` state, and `lemma_outcome` proves that evaluators going through `run_source_ref` on the inputs in order have the specification's `run`. Not proved: the front ends' loops (reading lines or files, the order of the inputs, the exit status, `catch_unwind`), and that parsing ends (partial correctness); stack and memory exhaustion are outside the model. The embedded targets, the C API and Wasm call `run_source`. For a file or piped standard input, `bc_clone` calls the public `run_next_unit` (`run_next_source_unit_ref`, with the same theorem) on `SourceUnits` until `None` or `quit`, each call under `catch_unwind` (`run_non_interactive_block`); that loop, which repeats `run_source_ref`'s, is not proved. Its interactive loop over `UnitAccumulator::push_line` and `run_unit` is not proved either. The six functions of the math library (`mathlib/`) return the exact value truncated toward zero at `scale` digits (partial correctness over the reals, assuming the facts of real analysis stated as axioms in `trusted_math.rs`); the evaluator calls them from the verified `finish_math1` and `finish_bessel`, which ensure that an `Ok` result is the function's exact value at some argument values (`mathlib::math_ok`); which argument values is not stated, because the refinement theorem excludes `-l`. |
 | Bounded model checking | Kani — `scripts/run_kani_verification.sh` (`kani_proofs.rs`, `bc_c_api`, `bc_cli`) | Kernels are free of overflow and panics over symbolic inputs (64-bit host only; the 32-bit targets are exercised by the QEMU and Zephyr self-tests). The production C-FFI output helper `write_c_string` never writes at or beyond `buf_size` and always NUL-terminates. C-API NULL and zero-size guards hold. The CLI brace scanner is consistent, and `verified_cli_parse_options` agrees with a direct statement of the option rules on command lines of up to 5 entries. |
 | C linkage | `scripts/run_c_api_link_tests.sh` | A C program compiled against `include/bc_core.h` links with the `bc_c_api` static library, built with `std` and as `no_std` (its own heap, critical section and panic handler), and gets the expected status, output and session state from every entry point. On the host only; the embedded builds of the library are compiled in CI but not run. |
-| UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, `bc_qemu_riscv32`, `bc_build_info` (the decisions of its build script), and `bc_cli` (strict provenance, symbolic alignment, Stacked Borrows), and `bc_c_api` again under Tree Borrows. CI runs each stage as its own job and splits `bc_core` by test name (`run_miri_tests.sh STAGE -- FILTER`). |
+| UB / memory safety | Miri — `scripts/run_miri_tests.sh` | No UB or leaks in the `--lib` unit tests of `bc_core`, `bc_c_api`, `bc_zephyr`, `bc_qemu_riscv32`, `m5stamp_c3_bc`, `bc_build_info` (the decisions of its build script), and `bc_cli` (strict provenance, symbolic alignment, Stacked Borrows), and `bc_c_api` again under Tree Borrows. CI runs each stage as its own job and splits `bc_core` by test name (`run_miri_tests.sh STAGE -- FILTER`). |
 | Executable specification | Verus — `crates/bc_spec`, `scripts/build_spec_oracle.sh`; `crates/bc_cli/tests/spec_differential.rs` | `bc_spec` defines the observable behavior of `bc_clone` without `-l` (units, tokens, parsing, evaluation, output, diagnostics, exit status), mirroring the production structure. `exec_spec_verified!` proves that the compiled oracle equals the `spec fn`s, except for `vstd`'s unverified `Seq` translations; lemmas prove that its arithmetic (`+ - * / % ^ sqrt`, comparison, `length`, constants under `ibase`) computes the integer definitions of `spec_num.rs` exactly. The differential tests then show that `bc_clone` matches the specification **on the generated inputs only**. Deductively, a whole input given to `run_source` refines the specification, and so does each step of `bc_clone`'s own loop (the Verus row above). `prop_parser_output_corresponds_to_*` still compares the parser's output with the specification's on generated inputs, which also checks the unproved public wrappers around the parser. The specification itself is checked against POSIX only by review, the POSIX suite, and GNU bc. `exec_spec_verified!` copies the fields of every struct it builds, so the parts of the state that grow with the run (scope and call stacks, arenas, output streams, the token and unit lists) are types of `persist.rs`, which the compiled code shares through `Rc`; their `exec_*` operations are written and verified there by hand, and `lex_toks` and `split_units_into` are compiled twins of `lex` and `split_units_from`, proved equal to them. The oracle's time therefore grows about linearly with nesting depth and with the number of units and of output lines, and the tests nest a thousand levels deep. Other sequences are still copied at every step, so it stays quadratic in the number of statements or extension uses in one unit, the length of a number or string, and the number of set array elements, and it is slow for large powers (its digit arithmetic copies a sequence at every step); the tests skip a case where the oracle exceeds the time limit. |
 | Property tests | proptest — `crates/bc_core/tests/proptest_suite.rs` | `+ - * / % ^ sqrt` against an exact `BigInt` reference truncated to the POSIX result scale (scales up to 40, negative values). Also checks the scale and exponent limits, integer and fractional base conversion, and that the parser and evaluator never panic. |
 | Differential fuzzing | proptest — `crates/bc_cli/tests/differential_proptest.rs` | Random programs (expressions, registers, arrays, control flow, recursion, runtime errors) produce the same stdout, diagnostics, and exit status as GNU bc. A second generator produces deeply nested programs (operator chains, parentheses, blocks, recursion thousands of levels deep, functions that change `ibase`). 300 + 40 cases per `cargo test`; set `PROPTEST_CASES` for long runs. Inputs where GNU knowingly deviates from POSIX are not generated. |
@@ -318,15 +318,15 @@ The gaps listed above are known and remain open. Do not describe any layer as pr
 - **Nesting limits of Wasm and the M5Stamp C3** come from the workloads in
   `crates/bc_qemu_riscv32/src/stack_workloads.rs`, mirrored in
   `examples/wasm_web_app/tests/nesting_limit.mjs`. `deepest` finds the largest input the limit
-  accepts, so each workload reaches the limit. The QEMU runner and the M5Stamp self-tests run them.
+  accepts, so each workload reaches the limit. The QEMU runner and the M5Stamp self-tests run them
+  (the M5Stamp C3 runs the QEMU runner's whole self-test suite, at its own limit).
   - M5Stamp C3 (`M5STAMP_MAX_DEPTH` = 128): the criteria are at most 60% of the 185 KB stack and
     completing in the 128 KiB heap. Since evaluation runs on an explicit stack, the heap decides:
     `scripts/measure_m5stamp_stack.sh` gives 34 KB of stack and 87 KB of heap at 128 (nested
     `for`), and no heap left at 160. It measures a QEMU build with the same optimization settings
-    and another allocator. The application's self-tests, which fail above 60% of the stack, passed
-    on a board: 32 376 of 185 204 bytes of stack (17%; 82 104 bytes, 44%, with the recursive
-    evaluator), measured before the stack painting left 1 KiB unpainted instead of 64 bytes, which
-    added 16 bytes to every figure on QEMU and has not been measured on a board. The REPL has the
+    and another allocator. The application's self-tests, which fail above 60% of the stack
+    (`verified_m5stamp_stack_within_budget`), passed on a board: 32 184 of 185 204 bytes of stack
+    (17%; 82 104 bytes, 44%, with the recursive evaluator), with the QEMU runner's whole suite. The REPL has the
     same limit, and the self-tests take the board about 5 seconds to
     reach the prompt. The heap use is not measured on the board. An overflow runs into `.bss`; esp-hal's watchpoint only sees a write to its one guard
     word, so it may miss one.
@@ -347,8 +347,8 @@ The gaps listed above are known and remain open. Do not describe any layer as pr
   exhausts the heap and checks that the program then halts without returning (the run that the
   `std` build finishes at once is ended by `timeout`), which is taken as the panic handler's
   spin loop; no debugger confirms where it stops.
-- **ESP32-C3** (`examples/m5stamp_c3`): built in CI by `scripts/build_m5stamp_c3.sh`. Flashing
-  scripts exist for manual hardware testing.
+- **ESP32-C3** (`examples/m5stamp_c3`): built in CI by `scripts/build_m5stamp_c3.sh`, and its
+  library's unit tests run on the host. Flashing scripts exist for manual hardware testing.
 - **Wasm** (`scripts/build_wasm.sh`): runs the `bc_wasm` tests, Clippy for host and wasm32, and
   produces the bundle.
 
@@ -366,7 +366,7 @@ packages before uploading. When you change how an example is built or run, updat
 Run before every commit; do not commit unless everything passes:
 
 ```bash
-cargo fmt --check && cargo clippy --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --package bc_build_info --package bc_inventory --all-targets -- -D warnings && cargo clippy --package bc_qemu_riscv32 --lib --tests -- -D warnings && cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings && cargo clippy --package bc_c_api --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo clippy --package bc_zephyr --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo test && cargo test --package bc_qemu_riscv32 --lib && cargo run -q -p bc_inventory -- --check
+cargo fmt --check && cargo fmt --check --manifest-path examples/m5stamp_c3/Cargo.toml && cargo clippy --package bc_core --package bc_clone --package bc_c_api --package bc_zephyr --package bc_build_info --package bc_inventory --all-targets -- -D warnings && cargo clippy --package bc_qemu_riscv32 --lib --tests -- -D warnings && cargo clippy --manifest-path examples/m5stamp_c3/Cargo.toml --lib --tests -- -D warnings && cargo clippy --package bc_qemu_riscv32 --target riscv32imac-unknown-none-elf -- -D warnings && cargo clippy --package bc_c_api --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo clippy --package bc_zephyr --target riscv32imac-unknown-none-elf --no-default-features -- -D warnings && cargo test && cargo test --package bc_qemu_riscv32 --lib && cargo test --manifest-path examples/m5stamp_c3/Cargo.toml --lib && cargo run -q -p bc_inventory -- --check
 ```
 
 ### Dividing work among subagents
@@ -415,8 +415,8 @@ can work, and lift a function to a higher one when you can:
   form of tags (their other functions are verification tools and only counted). It also enforces
   every rule but bc_core's own (functions outside Verus only in `trusted*`/`unverified*` files)
   for each front end that has been brought into the tiers (`CrateSpec::enforced` in
-  `crates/bc_inventory/src/scan.rs`; so far `bc_clone`, `bc_c_api`, `bc_zephyr`, `bc_qemu_riscv32`
-  and `bc_build_info`); the other front ends' violations are
+  `crates/bc_inventory/src/scan.rs`; so far `bc_clone`, `bc_c_api`, `bc_zephyr`, `bc_qemu_riscv32`,
+  `bc_build_info` and `m5stamp_c3_bc`); the other front ends' violations are
   listed in the inventory until each one is.
 - In `bc_clone`, `main` and the other entry points (`run_on_stdio`, `spawn_engine`, the Ctrl-C
   handler) are shims: their decisions are in the verified kernels (`verified_cli_*`,
@@ -439,6 +439,18 @@ can work, and lift a function to a higher one when you can:
   loops run under Miri. The binary (`main.rs`, `uart.rs`, `qemu_exit.rs`) and the two
   stack-painting wrappers are shims run by `scripts/run_qemu_riscv32_tests.sh`; the binary is
   built for riscv32 only, so host checks use `--lib` (`cargo test -p bc_qemu_riscv32 --lib`).
+- In `m5stamp_c3_bc`, the library takes the hardware as arguments (the terminal, the evaluator's
+  writers, the result of each serial read, a closure measuring the stack), so the self-test
+  report, the stack budget (the kernel `verified_m5stamp_stack_within_budget`) and the REPL run
+  under Miri (stage `m5stamp`); the self-tests, the workloads and `CrlfWriter` are the QEMU
+  runner's library. The binary (`main`, `put`, `stack_region`, the panic handler) is shims run on
+  a board by `scripts/flash_and_test_m5stamp_c3.sh`, by hand: without a board the script only
+  builds, so CI compiles the shims but never runs them, and no test makes the board panic. The
+  example is outside the workspace, so `cargo mutants --workspace` (CI) does not mutate it; run it
+  by hand with `--dir examples/m5stamp_c3 --cargo-arg=--target=<host> --cargo-arg=--lib`. `build.rs`, which only prints the link
+  argument, a shim run by `scripts/build_m5stamp_c3.sh`. The crate is outside the workspace and
+  its config selects the ESP32-C3 only inside its directory, so host checks run from the
+  repository root with `--manifest-path examples/m5stamp_c3/Cargo.toml --lib`.
 - A build script (`build.rs`) is production code, a root of its crate's module tree in the
   inventory (`build::…`). `bc_qemu_riscv32`'s only prints its directives, a shim run by
   `scripts/run_qemu_riscv32_tests.sh`. In `bc_build_info`, `build.rs` is a shim run by

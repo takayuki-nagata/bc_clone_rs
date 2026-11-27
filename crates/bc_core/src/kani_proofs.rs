@@ -330,6 +330,24 @@ fn proof_verified_qemu_test_exit_code() {
     assert_eq!(code == QEMU_TEST_PASS, passed);
 }
 
+/// `verified_m5stamp_stack_within_budget` never overflows and accepts exactly the uses within
+/// the budget, checked in `u128` against a division-free statement.
+#[kani::proof]
+fn proof_verified_m5stamp_stack_within_budget() {
+    let used: usize = kani::any();
+    let size: usize = kani::any();
+    let ok = verified_m5stamp_stack_within_budget(used, size);
+    let lhs = used as u128 * 100;
+    let rhs = size as u128 * M5STAMP_MAX_STACK_PERCENT as u128;
+    assert_eq!(ok, lhs <= rhs);
+    if used <= size / 2 {
+        assert!(ok);
+    }
+    if used > size {
+        assert!(!ok);
+    }
+}
+
 /// `RunSummary::record` counts a failure without overflow, records `quit`, and stops exactly
 /// after `quit`, for every summary and outcome.
 #[kani::proof]

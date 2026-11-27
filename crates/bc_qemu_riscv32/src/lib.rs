@@ -4,7 +4,8 @@
 //! verdict, the measurement loop for the M5Stamp C3, the serial writer's line endings and the
 //! peak-counting allocator. They take the hardware as arguments, so the host's unit tests run them
 //! under Miri; the binary (`main.rs`) only connects them to the UART, the heap and QEMU's test
-//! device.
+//! device. The M5Stamp C3 application (`examples/m5stamp_c3`) runs the same self-tests and
+//! workloads through this library, built without the feature `bin` (the binary's dependencies).
 
 #![cfg_attr(not(test), no_std)]
 
@@ -190,7 +191,7 @@ pub const SELF_TESTS: [SelfTest; 13] = [
     ),
 ];
 
-// coverage: miri(via run_self_tests); why: fmt, string
+// coverage: miri(via run_cases); why: fmt, string
 /// Runs one test, writes its line, and returns whether it passed.
 fn check<W: Write>(
     out: &mut W,
@@ -216,7 +217,8 @@ fn check<W: Write>(
 
 // coverage: miri(test_self_tests_pass, test_self_tests_report_failures); why: fmt, dyn
 /// Runs `cases`, the nesting-limit tests for `depth`, and every workload at `depth`, writing a
-/// report to `out`; returns whether every test passed.
+/// report to `out` between the QEMU runner's banner and verdict; returns whether every test
+/// passed.
 pub fn run_self_tests<W: Write>(
     out: &mut W,
     cases: &[SelfTest],
@@ -228,6 +230,28 @@ pub fn run_self_tests<W: Write>(
     let _ = writeln!(out, " {}", bc_build_info::VERSION_LINE);
     let _ = writeln!(out, "=================================================");
 
+    let all_passed = run_cases(out, cases, workloads, depth);
+
+    let _ = writeln!(out, "-------------------------------------------------");
+    if all_passed {
+        let _ = writeln!(out, "ALL RISC-V 32 BAREMETAL TESTS PASSED (100%)!");
+    } else {
+        let _ = writeln!(out, "SOME RISC-V 32 BAREMETAL TESTS FAILED!");
+    }
+    let _ = writeln!(out, "=================================================");
+    all_passed
+}
+
+// coverage: miri(test_run_cases); why: fmt, dyn
+/// Runs `cases`, the nesting-limit tests for `depth`, and every workload at `depth`, writing one
+/// line for each to `out`; returns whether every test passed. The QEMU runner and the M5Stamp C3
+/// application both run their self-tests with it.
+pub fn run_cases<W: Write>(
+    out: &mut W,
+    cases: &[SelfTest],
+    workloads: &[Workload],
+    depth: usize,
+) -> bool {
     let mut all_passed = true;
     for c in cases {
         all_passed &= check(out, c.name, c.code, c.math, c.scale, c.expected, depth);
@@ -271,14 +295,6 @@ pub fn run_self_tests<W: Write>(
             }
         }
     }
-
-    let _ = writeln!(out, "-------------------------------------------------");
-    if all_passed {
-        let _ = writeln!(out, "ALL RISC-V 32 BAREMETAL TESTS PASSED (100%)!");
-    } else {
-        let _ = writeln!(out, "SOME RISC-V 32 BAREMETAL TESTS FAILED!");
-    }
-    let _ = writeln!(out, "=================================================");
     all_passed
 }
 
@@ -453,6 +469,23 @@ mod tests {
         assert!(!run_self_tests(&mut out, &[], &[workload], 20));
         assert!(out.contains("limit, parentheses"));
         assert!(out.contains("[FAIL]\n    at depth 17: expected \"2\", got \"1\"\n"));
+    }
+
+    #[test]
+    fn test_run_cases() {
+        let mut out = String::new();
+        assert!(run_cases(&mut out, &SELF_TESTS[..1], &WORKLOADS[..1], 20));
+        assert_eq!(
+            out.lines().filter(|l| l.ends_with("[PASS]")).count(),
+            1 + 5 + 1,
+            "{out}"
+        );
+        assert!(!out.contains("====="));
+
+        let wrong = [case("wrong", "1 + 1\n", false, 0, "3")];
+        let mut out = String::new();
+        assert!(!run_cases(&mut out, &wrong, &[], 20));
+        assert!(out.starts_with("  Running: wrong"));
     }
 
     #[test]

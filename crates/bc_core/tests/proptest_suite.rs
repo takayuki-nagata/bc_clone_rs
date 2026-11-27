@@ -6,7 +6,9 @@
 
 #![cfg(not(miri))]
 
-use bc_core::verified_kernels::verified_repl_block_completeness;
+use bc_core::verified_kernels::{
+    verified_m5stamp_stack_within_budget, verified_repl_block_completeness,
+};
 use bc_core::{BCNum, Evaluator, Lexer, Parser, STDIN_SOURCE, UnitAccumulator};
 use num_bigint::BigInt;
 use proptest::prelude::*;
@@ -150,4 +152,22 @@ proptest! {
             }
         }
     }
+}
+
+/// The M5Stamp C3's stack budget is 60%, inclusive, and does not overflow at the extremes.
+#[test]
+fn test_m5stamp_stack_budget_boundaries() {
+    assert!(verified_m5stamp_stack_within_budget(60, 100));
+    assert!(!verified_m5stamp_stack_within_budget(61, 100));
+    assert!(verified_m5stamp_stack_within_budget(0, 0));
+    assert!(!verified_m5stamp_stack_within_budget(1, 0));
+    assert!(verified_m5stamp_stack_within_budget(32_376, 185_204));
+    assert!(!verified_m5stamp_stack_within_budget(
+        usize::MAX,
+        usize::MAX
+    ));
+    assert!(verified_m5stamp_stack_within_budget(
+        usize::MAX / 2,
+        usize::MAX
+    ));
 }

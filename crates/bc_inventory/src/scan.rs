@@ -115,8 +115,8 @@ pub const CRATES: &[CrateSpec] = &[
             root("build.rs", "build"),
         ],
         role: ROLE_PRODUCT,
-        miri: false,
-        enforced: false,
+        miri: true,
+        enforced: true,
     },
     CrateSpec {
         name: "bc_wasm",

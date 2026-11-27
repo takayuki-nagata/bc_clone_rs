@@ -83,6 +83,9 @@ dual_verified! {
     pub const QEMU_TEST_PASS: u32 = 0x5555;
     pub const QEMU_TEST_FAIL: u32 = 0x0001_3333;
 
+    // The M5Stamp C3's self-tests fail if they use more than this percentage of the stack.
+    pub const M5STAMP_MAX_STACK_PERCENT: u32 = 60;
+
     /// Verified hexadecimal digit parser (`eval/` assignments to `ibase`/`obase`).
     ///
     /// Proves that any ASCII byte maps to a bounded value in $0..=15$, with exact mappings
@@ -894,6 +897,17 @@ dual_verified! {
         } else {
             QEMU_TEST_FAIL
         }
+    }
+
+    /// Verified check of the M5Stamp C3's stack budget: `used` bytes of a `size`-byte stack are
+    /// within [`M5STAMP_MAX_STACK_PERCENT`] percent of it. Computed in `u128`, so it cannot
+    /// overflow for any `usize` on any target.
+    pub fn verified_m5stamp_stack_within_budget(used: usize, size: usize) -> (res: bool)
+        ensures [
+            res == (used as int * 100 <= size as int * M5STAMP_MAX_STACK_PERCENT as int),
+        ]
+    {
+        (used as u128) * 100 <= (size as u128) * (M5STAMP_MAX_STACK_PERCENT as u128)
     }
 }
 

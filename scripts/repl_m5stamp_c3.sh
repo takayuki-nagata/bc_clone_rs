@@ -24,7 +24,7 @@ fi
 
 echo ""
 echo "=== Flashing to M5Stamp C3 on ${PORT} ==="
-espflash flash --port "${PORT}" --non-interactive "${ELF_PATH}"
+espflash flash --port "${PORT}" --before usb-reset --non-interactive "${ELF_PATH}"
 
 echo ""
 echo "=================================================================="
