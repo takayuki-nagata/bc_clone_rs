@@ -9,6 +9,21 @@ value truncated toward zero at `scale`. The lexer, the parser and the unit split
 themselves are not proved. AGENTS.md lists what the proofs assume.
 
 ### Changed
+- **The serial REPLs of Zephyr and the M5Stamp C3 start with `scale` 20.** They always load the
+  math library, but `scale` started at 0, so `4*a(1)` printed `0`; they now start as `bc -l`
+  does (`docs/COMPATIBILITY.md` §1.1).
+- **The M5Stamp C3's REPL no longer starts with a stray error.** The board's USB port is
+  enumerated again at every reset, and until a program puts the new port in raw mode the host's
+  terminal echoes what the board prints; the REPL read that echo (part of the self-tests' report)
+  as its first line and printed `illegal character`. It now discards the input that arrived
+  before it starts, until none has arrived for 100 ms.
+- **The M5Stamp C3 is built with its own settings, and reports its heap.**
+  `scripts/build_m5stamp_c3.sh` (also used by CI and the release package) ran cargo from the
+  directory it was called from, so the application's `.cargo/config.toml`
+  (`force-frame-pointers`) applied only when it was called from the application's directory;
+  it now builds there. The self-tests also print the largest heap use (esp-alloc's
+  `internal-heap-stats`): 88 640 of 131 072 bytes on the board, with 34 360 of 185 152 bytes of
+  stack.
 - **The M5Stamp C3 runs the QEMU runner's self-tests.** Its self-tests at reset are now the same
   suite as the bare-metal QEMU runner's, at the M5Stamp's nesting limit: two cases for 32-bit
   `usize` (a power with an exponent beyond `u32`, and the clamping of `scale`) and five
@@ -100,6 +115,13 @@ themselves are not proved. AGENTS.md lists what the proofs assume.
   commit is `HEAD`'s when the workspace is a git work tree; before, only its form was
   checked (and, in the release workflow, that it is neither `unknown` nor `-dirty`). `bc_qemu_riscv32`'s build script points the linker at its directory for
   `memory.x` instead of copying the file into `OUT_DIR`.
+- The M5Stamp C3's board test (`scripts/flash_and_test_m5stamp_c3.sh`) also checks that the
+  REPL received nothing before its first prompt, types into it (`scale`, `2^10`) and then
+  exhausts the heap, which must end in the panic handler with
+  nothing printed after it, so every shim of the binary is run on the board. CI's mutation
+  testing also mutates the application's library, which is outside the workspace (on its own,
+  in place, with the host target); the binary and the build script, which only the board runs,
+  are excluded.
 - Every function of the M5Stamp C3 application is in a tier. Its decisions (the self-test report,
   the stack budget and the serial REPL) moved from the binary to the application's library,
   whose unit tests run on the host and under Miri (new stage `m5stamp` of

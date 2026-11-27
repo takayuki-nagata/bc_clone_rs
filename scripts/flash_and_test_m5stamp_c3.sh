@@ -36,21 +36,84 @@ log="$(mktemp)"
 trap 'rm -f "${log}"' EXIT
 timeout 90 espflash monitor --port "${PORT}" --before usb-reset --non-interactive >"${log}" 2>&1 &
 monitor=$!
+passed=0
 for _ in $(seq 90); do
     sleep 1
-    if grep -q 'ALL M5STAMP-C3 BC_CORE TESTS PASSED (100%)!' "${log}"; then
-        kill "${monitor}" 2>/dev/null || true
-        cat "${log}"
-        echo ""
-        echo "=== M5Stamp C3 Hardware Tests PASSED 100%! ==="
-        exit 0
+    if grep -q 'ALL M5STAMP-C3 BC_CORE TESTS PASSED (100%)!' "${log}" && grep -q '^bc> ' "${log}"; then
+        passed=1
+        # Anything the REPL received before its first prompt is discarded; a diagnostic here
+        # would mean that input reached it (such as the host's terminal echoing the report).
+        sleep 2
+        break
     fi
     if grep -q -e 'SOME M5STAMP-C3 BC_CORE TESTS FAILED!' -e 'M5Stamp C3 PANIC' "${log}"; then
         break
     fi
 done
 kill "${monitor}" 2>/dev/null || true
+wait "${monitor}" 2>/dev/null || true
 cat "${log}"
+if [ "${passed}" != 1 ]; then
+    echo ""
+    echo "Error: Test success message not detected within timeout!"
+    exit 1
+fi
+if sed -n '/^Entering bc_core Interactive REPL/,$p' "${log}" | grep -q 'standard_in'; then
+    echo ""
+    echo "Error: the REPL received input before anything was typed"
+    exit 1
+fi
+
 echo ""
-echo "Error: Test success message not detected within timeout!"
-exit 1
+echo "=== Checking the REPL and the panic handler ==="
+# Types into the REPL without resetting the board (DTR and RTS stay low): the initial scale,
+# evaluator output, then a number larger than the 128 KiB heap, which must end in the panic
+# handler with nothing printed after it.
+python3 - "${PORT}" <<'PY'
+import serial, sys, time
+
+port = serial.Serial()
+port.port, port.baudrate, port.timeout = sys.argv[1], 115200, 0.2
+port.dtr = port.rts = False
+port.open()
+seen = b""
+
+def read_until(marker, seconds):
+    global seen
+    end = time.time() + seconds
+    while time.time() < end:
+        seen += port.read(4096)
+        if marker in seen:
+            return True
+    return False
+
+def fail(message):
+    sys.stdout.write(seen.decode("utf-8", "replace"))
+    print(f"\nError: {message}")
+    sys.exit(1)
+
+# The board may restart when the port is opened; wait for a prompt either way.
+port.write(b"\n")
+if not read_until(b"bc> ", 60):
+    fail("no REPL prompt")
+for line, expected in [(b"scale", b"\r\n20\r\n"), (b"2^10", b"\r\n1024\r\n")]:
+    seen = b""
+    port.write(line + b"\n")
+    if not (read_until(b"bc> ", 10) and expected in seen):
+        fail(f"{line.decode()}: expected {expected!r}")
+    print(f"  {line.decode()} -> {expected.strip().decode()} [PASS]")
+seen = b""
+port.write(b"2^(2^20)\n")
+if not read_until(b"[M5Stamp C3 PANIC]", 60) or not read_until(b"memory allocation", 5):
+    fail("running out of heap did not reach the panic handler")
+read_until(b"\0", 2)
+after = len(seen)
+read_until(b"\0", 3)
+if len(seen) != after:
+    fail("output after the panic")
+print("  2^(2^20) -> [M5Stamp C3 PANIC] memory allocation ... [PASS]")
+port.close()
+PY
+
+echo ""
+echo "=== M5Stamp C3 Hardware Tests PASSED 100%! ==="

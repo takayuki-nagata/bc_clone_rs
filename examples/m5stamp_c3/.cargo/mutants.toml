@@ -1,0 +1,8 @@
+# Configuration for cargo-mutants on the M5Stamp C3 application (outside the workspace; CI runs
+# it with `--in-place --dir examples/m5stamp_c3` and the host target).
+# https://mutants.rs/config.html
+
+# The binary and the build script are hardware shims built for the ESP32-C3 only: the host's
+# tests cannot build or run them, so every mutant there would be reported as missed. The board
+# test (`scripts/flash_and_test_m5stamp_c3.sh`) runs them.
+exclude_globs = ["src/bin/**", "build.rs"]

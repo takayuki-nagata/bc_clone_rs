@@ -82,7 +82,8 @@ cargo run --release
   Running: limit, parentheses                  ... [PASS]
   ...
   Running: limit, long output at the bottom    ... [PASS]
-[ESP32-C3] Stack high-water mark: 32184 of 185204 bytes.
+[ESP32-C3] Stack high-water mark: 34360 of 185152 bytes.
+[ESP32-C3] Heap high-water mark: 88640 of 131072 bytes.
 -------------------------------------------------
 ALL M5STAMP-C3 BC_CORE TESTS PASSED (100%)!
 =================================================

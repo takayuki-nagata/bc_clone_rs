@@ -22,7 +22,7 @@ Every production function of the workspace and the examples belongs to one tier;
 | `bc_zephyr` | product | 0 | 0 | 0 | 0 | 17 | 5 | 0 | 0 | 0 | 0 |
 | `bc_qemu_riscv32` | product | 0 | 0 | 0 | 0 | 26 | 14 | 0 | 0 | 0 | 0 |
 | `bc_build_info` | product | 0 | 0 | 0 | 0 | 4 | 4 | 0 | 0 | 0 | 0 |
-| `m5stamp_c3_bc` | product | 0 | 0 | 0 | 0 | 5 | 5 | 0 | 0 | 0 | 0 |
+| `m5stamp_c3_bc` | product | 0 | 0 | 0 | 0 | 7 | 5 | 0 | 0 | 0 | 0 |
 | `bc_wasm` | product | 0 | 0 | 0 | 0 | 0 | 0 | 13 | 0 | 0 | 0 |
 | `bc_spec` | specification | 28 | 0 | 0 | 0 | 0 | 0 | 6 | 253 | 0 | 0 |
 | `bc_inventory` | tool | 6 | 0 | 0 | 0 | 0 | 0 | 45 | 12 | 0 | 0 |
@@ -207,6 +207,8 @@ Every production function of the workspace and the examples belongs to one tier;
 | `Repl::feed` | `examples/m5stamp_c3/src/lib.rs` | Miri | `via poll` | fmt, dyn |
 | `Repl::new` | `examples/m5stamp_c3/src/lib.rs` | Miri | `test_repl_ignores_failed_and_empty_reads` | dyn |
 | `Repl::poll` | `examples/m5stamp_c3/src/lib.rs` | Miri | `test_repl_ignores_failed_and_empty_reads` | io |
+| `discard_pending_input` | `examples/m5stamp_c3/src/lib.rs` | Miri | `test_discard_pending_input` | hw |
+| `heap_high_water` | `examples/m5stamp_c3/src/lib.rs` | Miri | `test_heap_high_water` | string |
 | `repl_banner` | `examples/m5stamp_c3/src/lib.rs` | Miri | `test_repl_banner` | fmt |
 | `run_self_tests` | `examples/m5stamp_c3/src/lib.rs` | Miri | `test_self_tests_pass`, `test_self_tests_report_failures` | fmt, dyn |
 

@@ -16,7 +16,7 @@ use alloc::string::String;
 use bc_core::verified_kernels::verified_qemu_test_exit_code;
 use bc_core::verified_kernels::{
     REPL_ACTION_APPEND_CHAR, REPL_ACTION_BACKSPACE, REPL_ACTION_CTRL_C, REPL_ACTION_EVAL_LINE,
-    verified_zephyr_repl_action,
+    verified_cli_initial_scale, verified_zephyr_repl_action,
 };
 use bc_core::{BcWriter, Evaluator, STDIN_SOURCE, UnitAccumulator, UnitOutcome};
 use core::cell::RefCell;
@@ -408,6 +408,8 @@ pub fn run_repl_with<G, P, S, W>(
     let out_buf = SharedBuffer::default();
     let err_buf = SharedBuffer::default();
     let mut evaluator = Evaluator::new(true, Box::new(out_buf.clone()), Box::new(err_buf.clone()));
+    // The math library is loaded, so `scale` starts at 20, as with `bc -l`.
+    evaluator.set_scale(verified_cli_initial_scale(true));
     evaluator.max_depth = ZEPHYR_MAX_DEPTH;
     evaluator.max_eval_depth = ZEPHYR_MAX_DEPTH;
     let mut line_buf = String::new();
@@ -724,6 +726,13 @@ mod tests {
         assert!(!out.contains(&"1".repeat(REPL_MAX_LINE + 1)));
 
         assert!(run_repl_script("quit\r1\r").ends_with("\r\n"));
+    }
+
+    #[test]
+    fn test_repl_starts_at_the_scale_of_the_math_library() {
+        let out = run_repl_script("scale\r4*a(1)\r");
+        assert!(out.contains("\r\n20\n"), "{out}");
+        assert!(out.contains("3.14159265358979323844\n"), "{out}");
     }
 
     #[test]

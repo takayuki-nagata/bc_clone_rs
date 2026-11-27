@@ -287,18 +287,22 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           if [ "$EVENT" = pull_request ]; then
-            git diff "origin/${BASE_REF}...HEAD" > mutants.diff
+            range="origin/${BASE_REF}...HEAD"
           elif [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ]; then
             if [ -z "$BEFORE" ] || [ "$BEFORE" = 0000000000000000000000000000000000000000 ]; then
-              git diff HEAD~1..HEAD > mutants.diff
+              range="HEAD~1..HEAD"
             else
-              git diff "${BEFORE}..HEAD" > mutants.diff
+              range="${BEFORE}..HEAD"
             fi
           else
             # ci/** branches and manual runs: everything not yet on main.
-            git diff origin/main...HEAD > mutants.diff
+            range="origin/main...HEAD"
           fi
-          wc -l mutants.diff
+          git diff "$range" > mutants.diff
+          # The M5Stamp C3 application is outside the workspace; it is mutated on its own, with
+          # paths relative to its directory.
+          git diff --relative=examples/m5stamp_c3 "$range" -- examples/m5stamp_c3 > m5stamp.diff
+          wc -l mutants.diff m5stamp.diff
 
       - name: Run Diff-based Mutation Testing
         run: |
@@ -309,12 +313,23 @@ jobs:
           TMPDIR="$PWD/target/mutants-tmp" cargo mutants --workspace --in-diff mutants.diff --gitignore true \
             --timeout 300 -j 2 --shard ${{ matrix.shard }}/3 || [ $? -eq 3 ]
 
+      - name: Mutate the M5Stamp C3 Application's Library
+        if: matrix.shard == 0
+        run: |
+          # In place: a copy of the directory would lose its path dependencies. Its own config
+          # selects the ESP32-C3, so the host target is given; only the library runs on the host.
+          TMPDIR="$PWD/target/mutants-tmp" cargo mutants --in-place --dir examples/m5stamp_c3 \
+            --in-diff m5stamp.diff --timeout 300 --output target/mutants-m5stamp \
+            --cargo-arg=--target=x86_64-unknown-linux-gnu --cargo-arg=--lib || [ $? -eq 3 ]
+
       - name: Upload the mutants report
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: mutants-shard-${{ matrix.shard }}
-          path: mutants.out
+          path: |
+            mutants.out
+            target/mutants-m5stamp/mutants.out
 
   zephyr:
     name: Zephyr RTOS (QEMU RISC-V 32 tests, M5Stamp C3 build)

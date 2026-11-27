@@ -325,11 +325,13 @@ The gaps listed above are known and remain open. Do not describe any layer as pr
     `scripts/measure_m5stamp_stack.sh` gives 34 KB of stack and 87 KB of heap at 128 (nested
     `for`), and no heap left at 160. It measures a QEMU build with the same optimization settings
     and another allocator. The application's self-tests, which fail above 60% of the stack
-    (`verified_m5stamp_stack_within_budget`), passed on a board: 32 184 of 185 204 bytes of stack
-    (17%; 82 104 bytes, 44%, with the recursive evaluator), with the QEMU runner's whole suite. The REPL has the
-    same limit, and the self-tests take the board about 5 seconds to
-    reach the prompt. The heap use is not measured on the board. An overflow runs into `.bss`; esp-hal's watchpoint only sees a write to its one guard
-    word, so it may miss one.
+    (`verified_m5stamp_stack_within_budget`), passed on a board with the QEMU runner's whole
+    suite: 34 360 of 185 152 bytes of stack (19%; 82 104 bytes, 44%, with the recursive
+    evaluator), and 88 640 of 131 072 bytes of heap at most (esp-alloc's `internal-heap-stats`,
+    which counts the sizes requested, as the QEMU measurement does). Both agree with the QEMU
+    measurement. The REPL has the same limit, and the board reaches the prompt about 8 seconds
+    after a reset. An overflow runs into `.bss`; esp-hal's watchpoint only sees a write to its
+    one guard word, so it may miss one.
   - Wasm (`WASM_MAX_DEPTH` = 1000): the criteria are at most 50% of the 1 MiB stack in linear
     memory, and at least twice the limit before an engine failure. `nesting_limit.mjs`, which
     `scripts/build_wasm.sh` runs when `node` is available, checks the first on the built module
@@ -440,15 +442,22 @@ can work, and lift a function to a higher one when you can:
   stack-painting wrappers are shims run by `scripts/run_qemu_riscv32_tests.sh`; the binary is
   built for riscv32 only, so host checks use `--lib` (`cargo test -p bc_qemu_riscv32 --lib`).
 - In `m5stamp_c3_bc`, the library takes the hardware as arguments (the terminal, the evaluator's
-  writers, the result of each serial read, a closure measuring the stack), so the self-test
-  report, the stack budget (the kernel `verified_m5stamp_stack_within_budget`) and the REPL run
+  writers, the result of each serial read, closures measuring the stack and returning the heap's
+  statistics, a byte reader and a clock), so the self-test report, the stack budget (the kernel
+  `verified_m5stamp_stack_within_budget`), the heap report, the discarding of the input that
+  arrived before the REPL starts and the REPL run
   under Miri (stage `m5stamp`); the self-tests, the workloads and `CrlfWriter` are the QEMU
   runner's library. The binary (`main`, `put`, `stack_region`, the panic handler) is shims run on
-  a board by `scripts/flash_and_test_m5stamp_c3.sh`, by hand: without a board the script only
-  builds, so CI compiles the shims but never runs them, and no test makes the board panic. The
-  example is outside the workspace, so `cargo mutants --workspace` (CI) does not mutate it; run it
-  by hand with `--dir examples/m5stamp_c3 --cargo-arg=--target=<host> --cargo-arg=--lib`. `build.rs`, which only prints the link
-  argument, a shim run by `scripts/build_m5stamp_c3.sh`. The crate is outside the workspace and
+  a board by `scripts/flash_and_test_m5stamp_c3.sh`, by hand: it flashes the board, waits for the
+  self-tests' verdict, checks that the REPL received nothing before its first prompt, types
+  `scale` and `2^10` into it, and then a number larger than the heap, which must end in the panic
+  handler. Without a board the script only builds, so CI
+  compiles the shims but never runs them. The example is outside the workspace, so
+  `cargo mutants --workspace` does not mutate it; CI mutates its library on its own
+  (`--in-place --dir examples/m5stamp_c3`, the host target, `--lib`; the binary and `build.rs`
+  are excluded in its `.cargo/mutants.toml`). `build.rs`, which only prints the link
+  argument, is a shim run by `scripts/build_m5stamp_c3.sh`, which builds inside the example so
+  that its `.cargo/config.toml` (`force-frame-pointers`) applies. The crate is outside the workspace and
   its config selects the ESP32-C3 only inside its directory, so host checks run from the
   repository root with `--manifest-path examples/m5stamp_c3/Cargo.toml --lib`.
 - A build script (`build.rs`) is production code, a root of its crate's module tree in the

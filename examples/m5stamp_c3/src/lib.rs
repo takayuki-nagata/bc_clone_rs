@@ -12,10 +12,12 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::vec::Vec;
 use bc_core::verified_kernels::{
     M5STAMP_MAX_STACK_PERCENT, REPL_ACTION_APPEND_CHAR, REPL_ACTION_BACKSPACE, REPL_ACTION_CTRL_C,
-    REPL_ACTION_EVAL_LINE, verified_m5stamp_stack_within_budget, verified_zephyr_repl_action,
+    REPL_ACTION_EVAL_LINE, verified_cli_initial_scale, verified_m5stamp_stack_within_budget,
+    verified_zephyr_repl_action,
 };
 use bc_core::{BcWriter, Evaluator, STDIN_SOURCE, UnitAccumulator};
 use bc_qemu_riscv32::SelfTest;
@@ -25,19 +27,33 @@ use core::fmt::Write;
 /// Longest input line the serial REPL accepts (see `bc_zephyr::REPL_MAX_LINE`).
 pub const REPL_MAX_LINE: usize = 1024;
 
-/// Nesting limit (`docs/COMPATIBILITY.md` §2). At 128 levels the workloads use about 32 KB of
-/// the 185 KB stack on the board (the budget is [`M5STAMP_MAX_STACK_PERCENT`]). The heap is
-/// measured on QEMU with the same optimization settings and a 128 KiB heap
-/// (`scripts/measure_m5stamp_stack.sh`): 87 KB at 128, and none left at 160. Running out of heap
-/// is not recoverable here, so the heap decides this limit (`AGENTS.md`, "Nesting limits").
+/// Nesting limit (`docs/COMPATIBILITY.md` §2). At 128 levels the self-tests use about 34 KB of
+/// the 185 KB stack and 89 KB of the 128 KiB heap on the board (the stack budget is
+/// [`M5STAMP_MAX_STACK_PERCENT`]); on QEMU, with the same optimization settings
+/// (`scripts/measure_m5stamp_stack.sh`), no heap is left at 160. Running out of heap is not
+/// recoverable here, so the heap decides this limit (`AGENTS.md`, "Nesting limits").
 pub const M5STAMP_MAX_DEPTH: usize = 128;
+
+// coverage: miri(test_heap_high_water); why: string
+/// The largest heap use and the heap size in the statistics of esp-alloc (its `HeapStats`,
+/// printed with the feature `internal-heap-stats`): its lines `Max usage: N` and `Size: N`.
+pub fn heap_high_water(stats: &str) -> Option<(usize, usize)> {
+    let field = |name: &str| {
+        stats
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(name))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+    };
+    Some((field("Max usage:")?, field("Size:")?))
+}
 
 // coverage: miri(test_self_tests_pass, test_self_tests_report_failures); why: fmt, dyn
 /// Runs `cases`, the nesting-limit tests and `workloads` at `depth`, then checks the stack
 /// against the budget: `stack` is the stack region (bottom, top), and `high_water` returns the
-/// bytes of it used. Writes the
-/// report to `out` and returns whether every test passed. The last line before the closing rule
-/// is what `scripts/flash_and_test_m5stamp_c3.sh` waits for.
+/// bytes of it used. Then reports the largest heap use from the allocator's statistics, which
+/// `heap_stats` returns as text (no budget: running out of heap ends in the panic handler).
+/// Writes the report to `out` and returns whether every test passed. The last line before the
+/// closing rule is what `scripts/flash_and_test_m5stamp_c3.sh` waits for.
 pub fn run_self_tests<W: Write>(
     out: &mut W,
     cases: &[SelfTest],
@@ -45,6 +61,7 @@ pub fn run_self_tests<W: Write>(
     depth: usize,
     stack: (usize, usize),
     high_water: impl FnOnce() -> usize,
+    heap_stats: impl FnOnce() -> String,
 ) -> bool {
     let _ = writeln!(out, "\n=================================================");
     let _ = writeln!(out, "  bc_clone (bc_core) on M5Stamp C3 (ESP32-C3)    ");
@@ -70,6 +87,18 @@ pub fn run_self_tests<W: Write>(
         );
         all_passed = false;
     }
+    match heap_high_water(&heap_stats()) {
+        Some((used, size)) => {
+            let _ = writeln!(
+                out,
+                "[ESP32-C3] Heap high-water mark: {} of {} bytes.",
+                used, size
+            );
+        }
+        None => {
+            let _ = writeln!(out, "[ESP32-C3] Heap high-water mark: not reported.");
+        }
+    }
 
     let _ = writeln!(out, "-------------------------------------------------");
     if all_passed {
@@ -79,6 +108,37 @@ pub fn run_self_tests<W: Write>(
     }
     let _ = writeln!(out, "=================================================\n");
     all_passed
+}
+
+/// At most this many bytes are discarded before the REPL starts, so the discarding ends even if
+/// input keeps arriving.
+pub const DISCARD_MAX: usize = 4096;
+
+/// The discarding ends once no byte has arrived for this many microseconds. The port takes the
+/// host's next packet only after the previous one has been read, a millisecond or more later.
+pub const DISCARD_QUIET_US: u64 = 100_000;
+
+// coverage: miri(test_discard_pending_input); why: hw
+/// Discards the input that arrived before the REPL starts, until none has arrived for
+/// [`DISCARD_QUIET_US`] by the clock `now_us`, and returns how many bytes it read. `read_byte`
+/// returns a byte received, or `None` when none is waiting. The board's USB port is enumerated
+/// again at every reset, and the host's terminal echoes what the board prints until a program
+/// puts it in raw mode; the first prompt would otherwise take that echo as input.
+pub fn discard_pending_input(
+    mut read_byte: impl FnMut() -> Option<u8>,
+    mut now_us: impl FnMut() -> u64,
+) -> usize {
+    let mut count = 0;
+    let mut last = now_us();
+    while count < DISCARD_MAX {
+        if read_byte().is_some() {
+            count += 1;
+            last = now_us();
+        } else if now_us().saturating_sub(last) >= DISCARD_QUIET_US {
+            break;
+        }
+    }
+    count
 }
 
 // coverage: miri(test_repl_banner); why: fmt
@@ -103,10 +163,12 @@ pub struct Repl {
 
 impl Repl {
     // coverage: miri(test_repl_ignores_failed_and_empty_reads); why: dyn
-    /// A REPL with the math library, the nesting limit [`M5STAMP_MAX_DEPTH`], and `out` and
-    /// `err` as the evaluator's output and diagnostics.
+    /// A REPL with the math library and its initial `scale` of 20 (as with `bc -l`), the nesting
+    /// limit [`M5STAMP_MAX_DEPTH`], and `out` and `err` as the evaluator's output and
+    /// diagnostics.
     pub fn new(out: Box<dyn BcWriter>, err: Box<dyn BcWriter>) -> Self {
         let mut evaluator = Evaluator::new(true, out, err);
+        evaluator.set_scale(verified_cli_initial_scale(true));
         evaluator.max_depth = M5STAMP_MAX_DEPTH;
         evaluator.max_eval_depth = M5STAMP_MAX_DEPTH;
         Repl {
@@ -172,7 +234,23 @@ mod tests {
     use super::*;
     use bc_qemu_riscv32::stack_workloads::{Expect, WORKLOADS};
     use bc_qemu_riscv32::{SELF_TESTS, SharedBuffer};
-    use std::string::String;
+
+    /// The statistics of esp-alloc 0.8 with `internal-heap-stats`, as its `Display` prints them.
+    const STATS: &str = "HEAP INFO\nSize: 131072\nCurrent usage: 1024\nMax usage: 88000\n\
+                         Total freed: 5\nTotal allocated: 6\nMemory Layout: \n\
+                         Internal | Size: 131072 | Used: 1024\n";
+
+    #[test]
+    fn test_heap_high_water() {
+        assert_eq!(heap_high_water(STATS), Some((88000, 131072)));
+        // Without `internal-heap-stats` there is no peak.
+        assert_eq!(
+            heap_high_water("HEAP INFO\nSize: 131072\nCurrent usage: 1024\n"),
+            None
+        );
+        assert_eq!(heap_high_water("Max usage: x\nSize: 1\n"), None);
+        assert_eq!(heap_high_water(""), None);
+    }
 
     #[test]
     fn test_self_tests_pass() {
@@ -184,6 +262,7 @@ mod tests {
             100,
             (1000, 1100),
             || 60,
+            || String::from(STATS),
         );
         assert!(passed, "{out}");
         assert!(out.starts_with("\n=================================================\n"));
@@ -194,6 +273,7 @@ mod tests {
         assert!(!out.contains("FAIL"));
         assert!(out.ends_with(
             "[ESP32-C3] Stack high-water mark: 60 of 100 bytes.\n\
+             [ESP32-C3] Heap high-water mark: 88000 of 131072 bytes.\n\
              -------------------------------------------------\n\
              ALL M5STAMP-C3 BC_CORE TESTS PASSED (100%)!\n\
              =================================================\n\n"
@@ -210,7 +290,8 @@ mod tests {
             &[],
             20,
             (1000, 1100),
-            || 61
+            || 61,
+            || String::from(STATS),
         ));
         assert!(out.contains("  [FAIL] over 60% of the stack\n"));
         assert!(out.contains("SOME M5STAMP-C3 BC_CORE TESTS FAILED!"));
@@ -231,10 +312,12 @@ mod tests {
             &[],
             20,
             (1000, 1100),
-            || 0
+            || 0,
+            String::new,
         ));
         assert!(out.contains("[FAIL]\n    Expected: \"3\"\n    Actual  : \"2\"\n"));
         assert!(!out.contains("of the stack\n"));
+        assert!(out.contains("[ESP32-C3] Heap high-water mark: not reported.\n"));
         assert!(out.contains("SOME M5STAMP-C3 BC_CORE TESTS FAILED!"));
 
         // A failing workload.
@@ -247,7 +330,8 @@ mod tests {
             &[workload],
             20,
             (1000, 1100),
-            || 0
+            || 0,
+            || String::from(STATS),
         ));
         assert!(out.contains("limit, parentheses"));
         assert!(out.contains("SOME M5STAMP-C3 BC_CORE TESTS FAILED!"));
@@ -286,6 +370,55 @@ mod tests {
         assert!(term.contains("quit\r\nbc> 7\r\nbc> "));
         // A control character is neither echoed nor kept.
         assert!(term.ends_with("7\r\nbc> \r\nbc> "));
+    }
+
+    #[test]
+    fn test_repl_starts_at_the_scale_of_the_math_library() {
+        let (_, out) = session(b"scale\n4*a(1)\n");
+        assert_eq!(out, "20\n3.14159265358979323844\n");
+    }
+
+    /// A clock that advances `step` microseconds at each reading.
+    fn clock(step: u64) -> impl FnMut() -> u64 {
+        let mut t = 0;
+        move || {
+            t += step;
+            t
+        }
+    }
+
+    #[test]
+    fn test_discard_pending_input() {
+        // One byte at once, then a packet of 7 that arrives later, within the quiet period.
+        let mut calls = 0;
+        let mut late = b"PASS]\r\n".to_vec();
+        let read = || {
+            calls += 1;
+            if calls == 1 {
+                Some(b'[')
+            } else if calls > 30 && !late.is_empty() {
+                Some(late.remove(0))
+            } else {
+                None
+            }
+        };
+        assert_eq!(discard_pending_input(read, clock(1_000)), 8);
+        assert!(late.is_empty());
+
+        // Nothing waiting: it reads until the quiet period has passed, then ends.
+        let mut reads = 0;
+        let n = discard_pending_input(
+            || {
+                reads += 1;
+                None
+            },
+            clock(1_000),
+        );
+        assert_eq!(n, 0);
+        assert_eq!(reads as u64, DISCARD_QUIET_US / 1_000);
+
+        // Input that never stops is cut off.
+        assert_eq!(discard_pending_input(|| Some(b'x'), clock(1)), DISCARD_MAX);
     }
 
     #[test]

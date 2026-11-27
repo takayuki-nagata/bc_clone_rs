@@ -20,7 +20,7 @@ use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_println::{Printer, println};
-use m5stamp_c3_bc::{M5STAMP_MAX_DEPTH, Repl, repl_banner, run_self_tests};
+use m5stamp_c3_bc::{M5STAMP_MAX_DEPTH, Repl, discard_pending_input, repl_banner, run_self_tests};
 
 // coverage: shim(scripts/flash_and_test_m5stamp_c3.sh); why: hw, fmt
 #[panic_handler]
@@ -72,10 +72,21 @@ fn main() -> ! {
         (stack_bottom, stack_top),
         // SAFETY: the region painted above.
         || unsafe { stack_high_water(stack_bottom, stack_top) },
+        || alloc::format!("{}", esp_alloc::HEAP.stats()),
     );
 
     // 2. Start Interactive REPL CLI: one evaluator keeps variables, functions, scale, ibase and
     // obase across lines, with the math library.
+    // The input that arrived during the self-tests (often the host's terminal echoing their
+    // report back) is not meant for the REPL.
+    discard_pending_input(
+        || usb_serial.read_byte().ok(),
+        || {
+            esp_hal::time::Instant::now()
+                .duration_since_epoch()
+                .as_micros()
+        },
+    );
     repl_banner(&mut Printer);
     let mut repl = Repl::new(
         Box::new(CrlfWriter(put as fn(u8))),

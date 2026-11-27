@@ -32,7 +32,7 @@ against an expected output written by hand (not against GNU `bc`).
 | Requirement | Notes |
 |---|---|
 | `bc [-l] [file ...]` | Files are read in order, then standard input. `bc_clone` also accepts `-s`, `-w` and `-v`/`--version` (§4). Options follow the XBD 12.2 Utility Syntax Guidelines that POSIX requires: they may be grouped (`-ls`), `--` ends them, and `-` is an operand (a file named `-`). A long option (`--name`) other than `--version` is an error |
-| `-l` defines `s c a l e j` and sets `scale` to 20 | |
+| `-l` defines `s c a l e j` and sets `scale` to 20 | The serial REPLs of Zephyr and the M5Stamp C3 always have the library, so they start at 20 too |
 | An unreadable file operand produces a diagnostic (`bc: cannot open file <f>`) and terminates bc with status 1 without processing anything further | Operands before it have already been processed, as in GNU |
 | Standard error is used only for diagnostics | |
 

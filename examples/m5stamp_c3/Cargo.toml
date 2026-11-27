@@ -29,7 +29,8 @@ bc_qemu_riscv32 = { path = "../../crates/bc_qemu_riscv32", default-features = fa
 esp-hal = { version = "~1.1.0", features = ["esp32c3", "unstable"] }
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c3"] }
 esp-println = { version = "0.14.0", features = ["esp32c3", "auto"] }
-esp-alloc = "0.8.0"
+# `internal-heap-stats`: the self-tests report the largest heap use.
+esp-alloc = { version = "0.8.0", features = ["internal-heap-stats"] }
 critical-section = "1.2.0"
 embedded-io = "0.6.1"
 
