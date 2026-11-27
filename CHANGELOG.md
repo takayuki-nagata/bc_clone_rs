@@ -139,6 +139,11 @@ themselves are not proved. AGENTS.md lists what the proofs assume.
   check its formatting, and CI mutates it. The number of an extension policy, which the Wasm
   binding and `bc_session_set_extension_policy` of the C API take, is read by the verified kernel
   `verified_extension_policy` (also checked by Kani); the behavior is unchanged.
+- CI's mutation testing fails when a mutant is missed even if another one timed out:
+  cargo-mutants then exits with the status of a timeout, which the job accepted. The nesting
+  workloads' computed expectations are now checked against the evaluator at even and odd depths;
+  the deepest depth that the self-tests check had always been odd, so a wrong expectation for even
+  depths went unnoticed.
 - A shim may contain a `loop` that has no `break`: such a loop only halts (a panic handler's
   spin loop) and decides nothing. Its body is still checked for branches.
 - In bc_core, everything Verus assumes is in a file whose name starts with `trusted` and every
